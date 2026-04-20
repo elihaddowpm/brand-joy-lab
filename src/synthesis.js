@@ -14,17 +14,46 @@ THE BJL DATASET: PETERMAYER's proprietary ongoing research on the role of joy in
 
 HOW TO READ THE EVIDENCE:
 
-- **items**: Ranked joy-scale items relevant to the query. Each has a joy_index (higher = more joyful), n (sample size), and the joy_modes/occasions/functional_jobs/tensions that tagged it. Items with n >= 500 are high-confidence.
+Items come from different question types. Each type measures something different and must be described in its own language. The [question_type] tag on each item tells you which rules to follow.
+
+**[joy_scale] items** — These are the canonical Joy Index items. Respondents answered on a -3 to +5 scale, and joy_index = mean × 20 (so 0-100 range). Only these items have a real Joy Index. Describe as: "scores 78.1 on the Joy Index (n=3,183)" or "Joy Index 78.1."
+
+**[ordinal_scale/very_much_not_at_all] items** — Agreement items. Respondents chose "Very much so / Somewhat / Not at all." The top_response and top_pct tell you the dominant answer. Describe using the response pattern: "47% say coffee very much allows them to pause in their busy world" or "most respondents (top_pct=47%) somewhat agree that...". The aggregate_score shown is NOT a Joy Index, so do not cite it as one.
+
+**[ordinal_scale/agree_disagree] items** — Agreement on attitude statements. Describe as: "X% agree that..." based on top_response and top_pct.
+
+**[ordinal_scale/often_never] items** — Frequency of behavior. Describe as: "X% often do Y" or "X% always do Y."
+
+**[ordinal_scale/more_less] items** — Comparative feeling. Describe as: "X% feel more..."
+
+**[ordinal_scale/likely] items** — Likelihood framing. Describe as: "X% are likely to..."
+
+**[ordinal_scale/familiar] items** — Brand familiarity. Describe as: "X% are very familiar with..."
+
+**[ordinal_scale/important] items** — Importance. Describe as: "X% rate Y as very important."
+
+**[likelihood_scale] items** — Likelihood to visit/use/purchase. Describe as: "X% likely to visit" or "likelihood score Y."
+
+**[familiarity_trust] items** — Brand familiarity or trust. Describe as: "X% familiar with" or similar.
+
+**Critical rule: never use the phrase "Joy Index" for anything other than [joy_scale] items.** A coffee-agreement question that happens to have a stored aggregate score is NOT a Joy Index, and citing it as such misleads the strategist and the client.
+
+**Question context matters.** Each item includes its context_question. An ordinal item about coffee rituals ("What makes having coffee with loved ones special?") produced a response about pausing in a busy world. That finding lives in the coffee context, not in a generic "pause positioning" context. If you draw a strategic inference from an ordinal item, either stay within the context the question was asked in, or note the context explicitly.
+
+OTHER EVIDENCE TYPES:
+
 - **verbatims**: Consumer quotes in their own words. These are the emotional voice of the category. Only use quotes marked is_quotable=true, which is already filtered. Always attribute to the speaker's demographics where useful (e.g. "a 52-year-old Boomer woman").
 - **laws**: BJL framework laws that apply. These are derived principles, not raw data. Use them as strategic lenses, not as citations.
 - **demo_splits**: Gaps between demographic groups. gender_gap positive = female skew, negative = male skew. genz_vs_boomer positive = Gen Z skew. Gaps above 10 JI points are strategically meaningful.
+
+Items with n >= 500 are high-confidence. Items with n < 200 should be used cautiously.
 
 VOICE AND STYLE:
 
 1. Write like a smart strategist briefing a colleague before a meeting. Confident, conversational, direct.
 2. Lead with the insight, not the methodology. The team doesn't need to know what you searched for. They need to know what you found and why it matters.
 3. Be specific with numbers. "Women score anticipating vacation 8.7 points higher than men" beats "women are more excited about planning trips."
-4. Cite the question or metric when it strengthens the point. "On a joy scale of 0-100, this scores 78.1 (n=3,183)" establishes authority.
+4. Cite the question or metric in its correct language. "Joy Index 78.1 (n=3,183)" for joy_scale items. "47% of respondents very much agree that..." for ordinal items. Never mix the vocabularies.
 5. Frame findings as opportunities, not observations. "This is the territory you could own" beats "this is what we found."
 
 ABSOLUTE STYLE RULES:
@@ -102,17 +131,47 @@ export async function* synthesize({ query, evidence, strategistContext, waldoCon
 function formatEvidence(evidence) {
   const parts = [];
   
-  // Items
+  // Items - formatted by question type so the model reads each correctly
   if (evidence.items?.length) {
-    parts.push("## ITEMS (ranked joy-scale items relevant to the query)\n");
+    parts.push("## ITEMS (ranked survey items relevant to the query)\n");
+    parts.push("Each item below is labeled with its question_type. Read each type using the rules in the system prompt.\n");
     for (const item of evidence.items.slice(0, 15)) {
-      const ji = item.joy_index ? `JI ${item.joy_index}` : "no JI";
+      const qtype = item.question_type || "unknown";
+      const stype = item.scale_type ? `/${item.scale_type}` : "";
+      const typeTag = `[${qtype}${stype}]`;
       const n = item.n ? `n=${item.n}` : "";
-      const pctMax = item.pct_max ? `pct_max=${item.pct_max}%` : "";
-      const pctNeg = item.pct_negative ? `pct_neg=${item.pct_negative}%` : "";
       const modes = item.joy_modes?.length ? `modes=[${item.joy_modes.join(",")}]` : "";
       const occ = item.occasions?.length ? `occasions=[${item.occasions.join(",")}]` : "";
-      parts.push(`- "${item.item_name}" (${item.category}) | ${[ji, n, pctMax, pctNeg, modes, occ].filter(Boolean).join(" | ")}`);
+      const qContext = item.question ? `context_question="${item.question}"` : "";
+
+      // Stats formatted per question type. Only joy_scale gets a JI label.
+      let stats;
+      if (qtype === "joy_scale") {
+        const ji = item.joy_index != null ? `JI=${item.joy_index}` : "JI=null";
+        const pctMax = item.pct_max != null ? `pct_max=${item.pct_max}%` : "";
+        const pctNeg = item.pct_negative != null ? `pct_negative=${item.pct_negative}%` : "";
+        stats = [ji, pctMax, pctNeg].filter(Boolean).join(" | ");
+      } else if (qtype === "ordinal_scale") {
+        const top = item.top_response ? `top_response="${item.top_response}"` : "";
+        const topPct = item.top_pct != null ? `top_pct=${item.top_pct}%` : "";
+        const meanAgg = item.joy_index != null ? `aggregate_score=${item.joy_index} (NOT a Joy Index)` : "";
+        stats = [top, topPct, meanAgg].filter(Boolean).join(" | ");
+      } else if (qtype === "likelihood_scale") {
+        const likelihood = item.joy_index != null ? `likelihood_score=${item.joy_index} (likelihood, NOT Joy Index)` : "";
+        const top = item.top_response ? `top_response="${item.top_response}"` : "";
+        const topPct = item.top_pct != null ? `top_pct=${item.top_pct}%` : "";
+        stats = [likelihood, top, topPct].filter(Boolean).join(" | ");
+      } else if (qtype === "familiarity_trust") {
+        const score = item.joy_index != null ? `familiarity_score=${item.joy_index} (NOT Joy Index)` : "";
+        const top = item.top_response ? `top_response="${item.top_response}"` : "";
+        const topPct = item.top_pct != null ? `top_pct=${item.top_pct}%` : "";
+        stats = [score, top, topPct].filter(Boolean).join(" | ");
+      } else {
+        const score = item.joy_index != null ? `score=${item.joy_index}` : "";
+        stats = score;
+      }
+
+      parts.push(`- ${typeTag} "${item.item_name}" (${item.category}) | ${[stats, n, modes, occ, qContext].filter(Boolean).join(" | ")}`);
     }
     parts.push("");
   }

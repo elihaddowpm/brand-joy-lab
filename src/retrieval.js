@@ -49,7 +49,9 @@ function dedupeItems(items) {
 
 /**
  * Merge tag-retrieval and semantic-retrieval item results.
- * Tag hits and semantic hits get unified into a single ranked list.
+ * Ranking: joy_scale items with high JI come first (these are true joy measurements),
+ * then other scaled items (ordinal, likelihood, familiarity) by their relevance score,
+ * so the synthesis model sees canonical Joy Index items at the top of its evidence block.
  */
 function mergeItemResults(tagItems, semanticItems, fullTextItems) {
   const all = [
@@ -59,15 +61,20 @@ function mergeItemResults(tagItems, semanticItems, fullTextItems) {
   ];
   const deduped = dedupeItems(all);
   
-  // Rank by joy_index as primary, overlap/similarity as tiebreaker.
-  // Items with high JI are more strategically useful regardless of how they were retrieved.
   deduped.sort((a, b) => {
-    const aJI = parseFloat(a.joy_index) || 0;
-    const bJI = parseFloat(b.joy_index) || 0;
-    if (Math.abs(aJI - bJI) > 5) return bJI - aJI;
-    const aScore = (a.overlap_score ?? 0) + (a.similarity ?? 0);
-    const bScore = (b.overlap_score ?? 0) + (b.similarity ?? 0);
-    return bScore - aScore;
+    // Primary sort: joy_scale items first (canonical Joy Index), then ordinal/likelihood/familiarity
+    const aIsJoy = a.question_type === "joy_scale" ? 1 : 0;
+    const bIsJoy = b.question_type === "joy_scale" ? 1 : 0;
+    if (aIsJoy !== bIsJoy) return bIsJoy - aIsJoy;
+    
+    // Within each tier, sort by joy_index/score (if present), then by retrieval relevance
+    const aScore = parseFloat(a.joy_index) || 0;
+    const bScore = parseFloat(b.joy_index) || 0;
+    if (Math.abs(aScore - bScore) > 5) return bScore - aScore;
+    
+    const aRel = (a.overlap_score ?? 0) + (a.similarity ?? 0);
+    const bRel = (b.overlap_score ?? 0) + (b.similarity ?? 0);
+    return bRel - aRel;
   });
   
   return deduped.slice(0, 20);
