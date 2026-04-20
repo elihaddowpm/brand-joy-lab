@@ -371,20 +371,26 @@ function BJLTool() {
       .replace(/\n(Ryan|Eli|Shannon|Dana|Chris|Tameka|Deandra|Mauricio|Pete|Stella|Nicole|Christina|Terri|Dustin|Drew|Jen|Carol|Amy|Tim|Luis|Stephen|Jim|Nate|Hiroshi|Jessica|Dan)\s*$/, '\n[Your name]');
   };
 
+  // Strip section markers before displaying. Matches [BJL], (BJL), [CRED], (CRED)
+  // with optional surrounding whitespace / trailing newline. The model occasionally
+  // substitutes parentheses for the square brackets specified in the prompt, so we
+  // accept both forms to keep markers from leaking into delivered emails.
+  const stripMarkers = (text) => text.replace(/[\[\(]\s*(?:BJL|CRED)\s*[\]\)]\s*\n?/gi, '');
+  const CRED_MARKER_RE = /[\[\(]\s*CRED\s*[\]\)]/i;
   const validateCredentials = async (emailText, strategistCtx) => {
     if (!strategistCtx || !strategistCtx.trim()) return emailText;
-    // If the email has no [CRED] marker, Haiku can't identify the credential paragraph safely — skip validation
-    if (!emailText.includes('[CRED]')) {
-      console.log('[validateCredentials] No [CRED] marker found — skipping to avoid stripping BJL content');
-      return emailText.replace(/\[BJL\]\n?/g, '').replace(/\[CRED\]\n?/g, '');
+    // If the email has no CRED marker, Haiku can't identify the credential paragraph safely — skip validation
+    if (!CRED_MARKER_RE.test(emailText)) {
+      console.log('[validateCredentials] No CRED marker found — skipping to avoid stripping BJL content');
+      return stripMarkers(emailText);
     }
     try {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), 6000);
-      // Extract only the [CRED] section for validation
-      const credMatch = emailText.match(/\[CRED\]\n?([\s\S]*?)(?=\n\n[A-Z]|\nWould|\nWorth|\nBest|\nThanks|\[Your name\]|$)/);
+      // Extract only the CRED section for validation (accept [CRED] or (CRED))
+      const credMatch = emailText.match(/[\[\(]\s*CRED\s*[\]\)]\s*\n?([\s\S]*?)(?=\n\n[A-Z]|\nWould|\nWorth|\nBest|\nThanks|\[Your name\]|$)/i);
       if (!credMatch) {
-        return emailText.replace(/\[BJL\]\n?/g, '').replace(/\[CRED\]\n?/g, '');
+        return stripMarkers(emailText);
       }
       const credParagraph = credMatch[1].trim();
       const prompt = 'APPROVED SOURCE MATERIAL — the only text you may draw from:\n---\n' + strategistCtx + '\n---\n\nAGENCY CREDENTIAL PARAGRAPH TO REWRITE:\n---\n' + credParagraph + '\n---\n\nTask: Rewrite this paragraph so every specific claim, client name, and credential comes directly from the APPROVED SOURCE MATERIAL above. You may paraphrase but must not add, invent, or imply anything not in the source material. Keep it to two sentences maximum — this is an intro email. Return only the rewritten paragraph — no markers, no commentary, no subject line.';
@@ -401,7 +407,7 @@ function BJLTool() {
       });
       clearTimeout(timer);
       // Strip markers from the full email regardless of validation result
-      const cleanEmail = emailText.replace(/\[BJL\]\n?/g, '').replace(/\[CRED\]\n?/g, '');
+      const cleanEmail = stripMarkers(emailText);
       if (!res.ok) return cleanEmail;
       const data = await res.json();
       const rewrittenCred = (data.content?.map(b => b.type === 'text' ? b.text : '').filter(Boolean).join('\n') || '').trim();
@@ -411,7 +417,7 @@ function BJLTool() {
       return result;
     } catch(e) {
       console.error('[validateCredentials] Error:', e.name, e.message);
-      return emailText.replace(/\[BJL\]\n?/g, '').replace(/\[CRED\]\n?/g, '');
+      return stripMarkers(emailText);
     }
   };
 
@@ -757,7 +763,7 @@ function BJLTool() {
       'WALDO RULES: Do not summarize the brief back at the prospect. Reflect their situation obliquely — imply you understand it without proving it by listing facts at them.',
       'BJL RULES: One behavioral observation only. Never lead with it. Frame the data as something you have been tracking that feels relevant — not as a problem the prospect has or a critique of their situation. Never tell a prospect their venue, brand, or category scores low or underperforms. Use the data to create intrigue and signal proprietary knowledge, not to put them on the defensive. The observation should be specific to this contact\'s role and situation. CRITICAL DATA RULES: (1) Never calculate ratios or percentages by dividing one question\'s result by another question\'s result. Each question measures something different and cross-question math produces misleading statistics. For example, do not divide a Joy Index score by another Joy Index score to produce a percentage and present it as a finding — that is not what the data shows. (2) The question \'Aside from sports, which areas do you feel fandom-level passion about?\' asked respondents about passion OUTSIDE of sports — sports was not an option. You cannot use this question to claim sports ranks lower than other categories. (3) Select-all items are co-existing truths, not rankings. Never call any item a primary driver.',
       'VOICE HARD PROHIBITIONS — if any of these appear in your output, rewrite before sending: (1) Em dashes are absolutely forbidden. The character — must not appear anywhere in your output. Before returning, scan every sentence. If you find an em dash, rewrite that sentence using a period, a comma, or a full restructure. Do this before outputting anything. (2) Constructions using is/isn\'t, was/wasn\'t, are/aren\'t — rewrite to avoid them entirely. (3) leverage, unlock, synergies, actionable, in today\'s landscape — never use these words. Hi [Name] not Dear. No methodology in opener. Close as invitation not meeting request.',
-      'Output format: Subject line first, then email body. Structure the email body with these exact markers so each section can be identified: write the hook paragraph, then on its own line write [BJL], then the BJL bridge paragraph, then on its own line write [CRED], then the agency credential paragraph, then the close and sign-off. These markers will be stripped before delivery — they are for internal structure only.',
+      'Output format: Subject line first, then email body. Structure the email body with these exact markers so each section can be identified: write the hook paragraph, then on its own line write the literal text [BJL] (square brackets, not parentheses), then the BJL bridge paragraph, then on its own line write the literal text [CRED] (square brackets, not parentheses), then the agency credential paragraph, then the close and sign-off. Do not substitute parentheses or any other characters for the square brackets. These markers will be stripped before delivery — they are for internal structure only.',
     ].join('\n');    for (let ai = 0; ai < accounts.length; ai++) {
       const account = accounts[ai];
       const systemCtx = buildWaldoSystemContext(account);
@@ -880,7 +886,7 @@ function BJLTool() {
       "WALDO RULES: Do not summarize the brief back at the prospect. Reflect their situation obliquely — imply you understand it without proving it by listing facts at them.",
       "BJL RULES: One behavioral observation only. Never lead with it. Frame the data as something you have been tracking that feels relevant — not as a problem the prospect has or a critique of their situation. Never tell a prospect their venue, brand, or category scores low or underperforms. Use the data to create intrigue and signal proprietary knowledge, not to put them on the defensive. CRITICAL DATA RULES: (1) Never calculate ratios or percentages by dividing one question's result by another question's result — cross-question math produces misleading statistics. (2) Select-all items are co-existing truths, not rankings. Never call any item a primary driver.",
       "VOICE HARD PROHIBITIONS — if any of these appear in your output, rewrite before sending: (1) Em dashes are absolutely forbidden. The character — must not appear anywhere in your output. Before returning, scan every sentence. If you find an em dash, rewrite that sentence using a period, a comma, or a full restructure. Do this before outputting anything. (2) Constructions using is/isn\'t, was/wasn\'t, are/aren\'t — rewrite to avoid them entirely. (3) leverage, unlock, synergies, actionable, in today\'s landscape — never use these words. Hi [Name] not Dear. No methodology in opener. Close as invitation not meeting request.",
-      "Output format: Subject line first, then email body. Structure the email body with these exact markers so each section can be identified: write the hook paragraph, then on its own line write [BJL], then the BJL bridge paragraph, then on its own line write [CRED], then the agency credential paragraph, then the close and sign-off. These markers will be stripped before delivery — they are for internal structure only.",
+      "Output format: Subject line first, then email body. Structure the email body with these exact markers so each section can be identified: write the hook paragraph, then on its own line write the literal text [BJL] (square brackets, not parentheses), then the BJL bridge paragraph, then on its own line write the literal text [CRED] (square brackets, not parentheses), then the agency credential paragraph, then the close and sign-off. Do not substitute parentheses or any other characters for the square brackets. These markers will be stripped before delivery — they are for internal structure only.",
     ].join("\n");
     for (let i = 0; i < batchContacts.length; i++) {
       const contact = batchContacts[i];
@@ -1588,7 +1594,7 @@ const buildUserMessage = (text) => {
       'WALDO RULES: Do not summarize the brief back at the prospect. Reflect their situation obliquely — imply you understand it without proving it by listing facts at them.',
       'BJL RULES: One behavioral observation only. Never lead with it. Frame the data as something you have been tracking that feels relevant — not as a problem the prospect has or a critique of their situation. Never tell a prospect their venue, brand, or category scores low or underperforms. Use the data to create intrigue and signal proprietary knowledge, not to put them on the defensive. The observation should be specific to this contact\'s role and situation. CRITICAL DATA RULES: (1) Never calculate ratios or percentages by dividing one question\'s result by another question\'s result. Each question measures something different and cross-question math produces misleading statistics. For example, do not divide a Joy Index score by another Joy Index score to produce a percentage and present it as a finding — that is not what the data shows. (2) The question \'Aside from sports, which areas do you feel fandom-level passion about?\' asked respondents about passion OUTSIDE of sports — sports was not an option. You cannot use this question to claim sports ranks lower than other categories. (3) Select-all items are co-existing truths, not rankings. Never call any item a primary driver.',
       'VOICE HARD PROHIBITIONS — if any of these appear in your output, rewrite before sending: (1) Em dashes are absolutely forbidden. The character — must not appear anywhere in your output. Before returning, scan every sentence. If you find an em dash, rewrite that sentence using a period, a comma, or a full restructure. Do this before outputting anything. (2) Constructions using is/isn\'t, was/wasn\'t, are/aren\'t — rewrite to avoid them entirely. (3) leverage, unlock, synergies, actionable, in today\'s landscape — never use these words. Hi [Name] not Dear. No methodology in opener. Close as invitation not meeting request.',
-      'Output format: Subject line first, then email body. Structure the email body with these exact markers so each section can be identified: write the hook paragraph, then on its own line write [BJL], then the BJL bridge paragraph, then on its own line write [CRED], then the agency credential paragraph, then the close and sign-off. These markers will be stripped before delivery — they are for internal structure only.',
+      'Output format: Subject line first, then email body. Structure the email body with these exact markers so each section can be identified: write the hook paragraph, then on its own line write the literal text [BJL] (square brackets, not parentheses), then the BJL bridge paragraph, then on its own line write the literal text [CRED] (square brackets, not parentheses), then the agency credential paragraph, then the close and sign-off. Do not substitute parentheses or any other characters for the square brackets. These markers will be stripped before delivery — they are for internal structure only.',
     ].join('\n');                             const systemCtx=buildWaldoSystemContext(waldoAccount);
                               for(let i=0;i<waldoContacts.length;i++){
                                 const contact=waldoContacts[i];
