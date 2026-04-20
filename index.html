@@ -378,7 +378,7 @@ function BJLTool() {
   const stripMarkers = (text) => text.replace(/[\[\(]\s*(?:BJL|CRED)\s*[\]\)]\s*\n?/gi, '');
   const CRED_MARKER_RE = /[\[\(]\s*CRED\s*[\]\)]/i;
   const validateCredentials = async (emailText, strategistCtx) => {
-    if (!strategistCtx || !strategistCtx.trim()) return emailText;
+    if (!strategistCtx || !strategistCtx.trim()) return stripMarkers(emailText);
     // If the email has no CRED marker, Haiku can't identify the credential paragraph safely — skip validation
     if (!CRED_MARKER_RE.test(emailText)) {
       console.log('[validateCredentials] No CRED marker found — skipping to avoid stripping BJL content');
