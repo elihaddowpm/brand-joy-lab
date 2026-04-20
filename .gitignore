@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Environment variables & secrets — NEVER commit
+.env
+.env.*
+!.env.example
+
+# Netlify
+.netlify/
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+
+# Logs (backfill/embedding scripts — not needed in repo)
+*.log
+*.log.*
+
+# Local Claude Code state
+.claude/settings.local.json

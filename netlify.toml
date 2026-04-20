@@ -1,0 +1,25 @@
+[build]
+  publish = "."
+  functions = "netlify/functions"
+
+[functions]
+  node_bundler = "esbuild"
+
+[functions.claude]
+  timeout = 26
+
+[functions.bjl-query]
+  timeout = 26
+
+[context.production.environment]
+  NODE_VERSION = "18"
+
+[[redirects]]
+  from = "/api/claude"
+  to = "/.netlify/functions/claude"
+  status = 200
+
+[[redirects]]
+  from = "/api/bjl-query"
+  to = "/.netlify/functions/bjl-query"
+  status = 200
