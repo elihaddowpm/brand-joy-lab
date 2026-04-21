@@ -292,6 +292,24 @@ function BJLTool() {
   const [waldoInsightsPulling, setWaldoInsightsPulling] = useState(false);
   const [waldoInsightsReady, setWaldoInsightsReady] = useState(false);
   const [showWaldoSignals, setShowWaldoSignals] = useState(false);
+
+  // Multi-account prepare-then-generate workflow state
+  //
+  // accountInsights: { [accountId]: { text: string, ready: boolean, error: string | null } }
+  // accountInsightsPulling: boolean — is the Phase 1 pull currently running across accounts
+  // accountInsightsProgress: { current: number, total: number } — progress counter for the pull
+  // multiAccountEmailInstructions: string — the ONE Email Instructions prompt shared across all accounts
+  // multiAccountExpanded: { [accountId]: boolean } — which review blocks are open in the UI
+  // multiAccountGenerating: boolean — is Phase 3 currently running
+  // multiAccountResults: Array<{ company, contact, text, error }> — unified results across all accounts
+  const [accountInsights, setAccountInsights] = useState({});
+  const [accountInsightsPulling, setAccountInsightsPulling] = useState(false);
+  const [accountInsightsProgress, setAccountInsightsProgress] = useState({ current: 0, total: 0 });
+  const [multiAccountEmailInstructions, setMultiAccountEmailInstructions] = useState("");
+  const [multiAccountExpanded, setMultiAccountExpanded] = useState({});
+  const [multiAccountGenerating, setMultiAccountGenerating] = useState(false);
+  const [multiAccountResults, setMultiAccountResults] = useState([]);
+
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
   const textareaRef = useRef(null);
@@ -495,6 +513,79 @@ function BJLTool() {
     ].join("\n");
 
     return SAFETY_FLOOR + CASE_STUDY_LIBRARY + (hasOverride ? USER_OVERRIDE : DEFAULT_STRUCTURE);
+  };
+
+  /**
+   * Generate one outreach email for one contact at one account.
+   * Returns { text: string, error: string | null }. Never throws.
+   *
+   * This is the shared helper that every email-writing path in the tool
+   * calls. Keeps the /api/claude call shape, sanitization, and credential
+   * validation in one place so we stop maintaining four divergent copies.
+   *
+   * @param {Object} params
+   * @param {string} params.contactName — recipient's name (e.g. "Tameka Rish")
+   * @param {string} params.company — account company name
+   * @param {string} params.waldoContext — output of buildWaldoSystemContext(account)
+   * @param {string} params.insights — BJL findings for this account (may be empty string)
+   * @param {string} params.userStrategistContext — strategist context field value
+   * @param {string} params.userEmailInstructions — email instructions field value
+   * @param {string} params.audienceModeValue — "external" | "internal"
+   */
+  const generateOneEmail = async ({
+    contactName,
+    company,
+    waldoContext,
+    insights,
+    userStrategistContext,
+    userEmailInstructions,
+    audienceModeValue,
+  }) => {
+    const EMAIL_SYSTEM = buildEmailSystem(userEmailInstructions);
+
+    let userMsg = "";
+    if (insights && insights.trim()) {
+      userMsg += "[BJL INSIGHTS — choose the single most relevant]\n" + insights.trim() + "\n\n";
+    }
+    if (waldoContext) {
+      userMsg += "[WALDO INTELLIGENCE]\n" + waldoContext + "\n\n";
+    }
+    if (userStrategistContext && userStrategistContext.trim()) {
+      userMsg += "[STRATEGIST CONTEXT]\n" + userStrategistContext.trim() + "\n\n";
+    }
+    userMsg += "[Prospect] " + contactName + " at " + company + "\n";
+    userMsg += "[Audience mode] " + (audienceModeValue || "external") + "\n";
+    userMsg += "Write the outreach email for " + contactName + " at " + company + ".";
+
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 28000);
+      const res = await fetch("/api/claude", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: ctrl.signal,
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 800,
+          system: EMAIL_SYSTEM,
+          messages: [{ role: "user", content: userMsg }],
+        }),
+      });
+      clearTimeout(timer);
+      if (res.status !== 200) {
+        let errData;
+        try { errData = await res.json(); } catch { errData = null; }
+        const errMsg = errData?.error?.message
+          || (res.status === 429 ? "Rate limit hit — increase delay between calls" : "API error " + res.status);
+        return { text: "", error: errMsg };
+      }
+      const data = await res.json();
+      const rawText = data.content?.map(b => b.type === "text" ? b.text : "").filter(Boolean).join("\n") || "";
+      const validated = await validateCredentials(rawText, userStrategistContext);
+      return { text: sanitizeEmail(validated), error: null };
+    } catch (e) {
+      return { text: "", error: e.name === "AbortError" ? "Timed out" : e.message };
+    }
   };
 
   // Strip section markers before displaying. Matches [BJL], (BJL), [CRED], (CRED)
@@ -902,6 +993,186 @@ function BJLTool() {
       clearTimeout(timer);
       setWaldoInsightsPulling(false);
     }
+  };
+
+  /**
+   * Pull BJL insights for a single account via the orchestrator.
+   * Returns { text: string, error: string | null }. Never throws.
+   *
+   * Shared helper used by runMultiAccountPull and also by the per-account
+   * "retry" button so a user can re-pull insights for one account after a
+   * batch failure without re-running the whole pull.
+   */
+  const pullInsightsForAccount = async (account) => {
+    if (!account) return { text: "", error: "No account provided" };
+
+    const tension = account.creative_tension || account.top_signal?.why_it_matters || '';
+    const queryParts = [
+      `Pull BJL findings for outreach to ${account.company}`,
+      account.category ? `(${account.category})` : '',
+      tension ? `. Strategic tension: ${tension}` : '',
+    ].filter(Boolean);
+    const query = queryParts.join(' ').trim();
+
+    const waldoCtx = buildWaldoSystemContext(account);
+    const combinedContext = [strategistContext?.trim(), waldoCtx].filter(Boolean).join('\n\n');
+
+    let streamed = '';
+    let result = null;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 55000);
+
+    try {
+      await queryBJL({
+        query,
+        intentHint: 'email_findings',
+        strategistContext: combinedContext || undefined,
+        waldoContext: account,
+        signal: ctrl.signal,
+        onChunk: (t) => { streamed += t; },
+        onDone: () => { result = { ok: true }; },
+        onError: ({ message, phase } = {}) => { result = { ok: false, message, phase }; },
+      });
+    } catch (e) {
+      clearTimeout(timer);
+      return { text: streamed, error: e.name === 'AbortError' ? 'Timed out' : e.message };
+    }
+    clearTimeout(timer);
+
+    if (!result || !result.ok) {
+      return {
+        text: streamed,
+        error: result?.message || 'Stream ended unexpectedly',
+      };
+    }
+    return { text: streamed, error: null };
+  };
+
+  /**
+   * Phase 1 of the multi-account workflow. Pull BJL insights for every
+   * account in the loaded Waldo file, sequentially. Skip-on-failure: if one
+   * account fails, record the error and continue. User can retry individual
+   * accounts from the UI afterward.
+   */
+  const runMultiAccountPull = async () => {
+    const accounts = waldoData?.accounts || [];
+    if (!accounts.length) return;
+
+    setAccountInsightsPulling(true);
+    setAccountInsightsProgress({ current: 0, total: accounts.length });
+
+    // Reset any previous insight state for these accounts
+    const initialState = {};
+    accounts.forEach(a => { initialState[a.id] = { text: '', ready: false, error: null }; });
+    setAccountInsights(initialState);
+
+    for (let i = 0; i < accounts.length; i++) {
+      const account = accounts[i];
+      setAccountInsightsProgress({ current: i, total: accounts.length });
+
+      const { text, error } = await pullInsightsForAccount(account);
+
+      setAccountInsights(prev => ({
+        ...prev,
+        [account.id]: { text, ready: !error, error },
+      }));
+
+      // Small pause between accounts to be kind to rate limits
+      if (i < accounts.length - 1) await new Promise(r => setTimeout(r, 2000));
+    }
+
+    setAccountInsightsProgress({ current: accounts.length, total: accounts.length });
+    setAccountInsightsPulling(false);
+  };
+
+  /**
+   * Retry the insight pull for a single account. Used by the per-account
+   * "Retry" button that appears next to accounts that failed in Phase 1.
+   */
+  const retryAccountInsights = async (account) => {
+    if (!account) return;
+    setAccountInsights(prev => ({
+      ...prev,
+      [account.id]: { text: '', ready: false, error: null },
+    }));
+    const { text, error } = await pullInsightsForAccount(account);
+    setAccountInsights(prev => ({
+      ...prev,
+      [account.id]: { text, ready: !error, error },
+    }));
+  };
+
+  /**
+   * Phase 3 of the multi-account workflow. Generate emails for every
+   * contact at every account, using that account's insights and the shared
+   * Email Instructions. Skip any account that has no insights ready (the
+   * BJL primacy rule means we don't generate without them).
+   */
+  const runMultiAccountGenerate = async () => {
+    const accounts = waldoData?.accounts || [];
+    if (!accounts.length) return;
+
+    setMultiAccountGenerating(true);
+    setMultiAccountResults([]);
+
+    const results = [];
+
+    // Compute total contacts across accounts that have insights ready
+    const eligibleAccounts = accounts.filter(a => accountInsights[a.id]?.ready);
+    const totalContacts = eligibleAccounts.reduce((n, a) => n + (a.contacts?.length || 0), 0);
+    let completed = 0;
+
+    for (const account of eligibleAccounts) {
+      const waldoCtx = buildWaldoSystemContext(account);
+      const insights = accountInsights[account.id]?.text || '';
+      const contacts = account.contacts || [];
+
+      for (const contact of contacts) {
+        const { text, error } = await generateOneEmail({
+          contactName: contact,
+          company: account.company,
+          waldoContext: waldoCtx,
+          insights,
+          userStrategistContext: strategistContext,
+          userEmailInstructions: multiAccountEmailInstructions,
+          audienceModeValue: audienceMode,
+        });
+
+        results.push({ company: account.company, contact, text, error });
+        setMultiAccountResults([...results]);
+        completed += 1;
+        setWaldoProgress(completed); // reuse the existing progress bar state
+
+        if (completed < totalContacts) await new Promise(r => setTimeout(r, 5000));
+      }
+
+      // Extra pause between accounts
+      await new Promise(r => setTimeout(r, 3000));
+    }
+
+    setMultiAccountGenerating(false);
+  };
+
+  /**
+   * Export multi-account results to a single CSV. Same shape as the existing
+   * exportWaldoCSV but pulls from multiAccountResults.
+   */
+  const exportMultiAccountCSV = () => {
+    const rows = [["Company", "Contact", "Subject", "Body", "Error"]];
+    multiAccountResults.forEach(({ company, contact, text, error }) => {
+      const subjectMatch = text.match(/Subject(?:[\s:line]*)?:?\s*(.+)/i);
+      const subject = subjectMatch ? subjectMatch[1].replace(/^[*_]+|[*_]+$/g, "").trim() : "";
+      const body = text.replace(/Subject(?:[\s:line]*)?:?\s*.+\n?/i, "").trim();
+      rows.push([company, contact, subject, body, error || ""]);
+    });
+    const csv = rows.map(r => r.map(c => '"' + String(c).replace(/"/g, '""') + '"').join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "bjl_multi_account_outreach.csv";
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const runWaldoBatch = async () => {
@@ -1344,6 +1615,13 @@ const buildUserMessage = (text) => {
     setBatchMode(false);
     setStrategistContext('');
     setEmailInstructions('');
+    setAccountInsights({});
+    setAccountInsightsPulling(false);
+    setAccountInsightsProgress({ current: 0, total: 0 });
+    setMultiAccountEmailInstructions('');
+    setMultiAccountExpanded({});
+    setMultiAccountGenerating(false);
+    setMultiAccountResults([]);
     setShowEmailInstructions(false);
     try { await window.storage.delete(CONVERSATION_STORAGE_KEY); } catch(e) {}
   };
@@ -1585,30 +1863,153 @@ const buildUserMessage = (text) => {
                         ))}
                       </select>
                     )}
-                    {waldoData && !waldoRunning && !waldoAccount && (
-                      <button onClick={runWaldoBatch}
-                        style={{padding:"5px 12px",borderRadius:"var(--border-radius-md)",border:"1px solid var(--color-border-tertiary)",background:"var(--color-background-secondary)",color:"var(--color-text-tertiary)",fontSize:10,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap",letterSpacing:".04em"}}>
-                        Generate all {waldoData.accounts.length} accounts
+                  </div>
+
+              {waldoData && !waldoAccount && (
+                <div style={{marginTop:16,borderTop:"1px solid var(--color-border-tertiary)",paddingTop:16}}>
+
+                  {/* Section header */}
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+                    <div>
+                      <p style={{fontSize:11,letterSpacing:".1em",textTransform:"uppercase",color:"#E8C547",margin:0,fontWeight:500}}>Multi-Account Batch</p>
+                      <p style={{fontSize:11,color:"var(--color-text-tertiary)",margin:"3px 0 0"}}>Pull insights for all {waldoData.accounts.length} accounts, review, then generate emails for every contact.</p>
+                    </div>
+                  </div>
+
+                  {/* Phase 1: Pull Insights button + progress */}
+                  <div style={{marginBottom:12}}>
+                    {!accountInsightsPulling && Object.keys(accountInsights).length === 0 && (
+                      <button onClick={runMultiAccountPull}
+                        style={{padding:"7px 14px",background:"#E8C547",color:"#0c0b09",border:"none",borderRadius:"var(--border-radius-md)",fontSize:11,fontWeight:500,cursor:"pointer",fontFamily:"inherit"}}>
+                        Pull BJL Insights for all {waldoData.accounts.length} accounts
                       </button>
                     )}
-                  </div>
-                  {waldoRunning && (
-                    <div style={{marginTop:8}}>
-                      <div style={{height:3,background:"var(--color-background-tertiary)",borderRadius:2,marginBottom:5}}>
-                        <div style={{height:"100%",background:"#6DC8F0",borderRadius:2,width:(waldoProgress/Math.max(1,waldoData?.accounts?.reduce((n,a)=>n+(a.contacts?.length||0),0))*100)+"%",transition:"width .5s"}}/>
+                    {accountInsightsPulling && (
+                      <div>
+                        <div style={{height:4,background:"var(--color-background-tertiary)",borderRadius:2,marginBottom:6}}>
+                          <div style={{height:"100%",background:"#E8C547",borderRadius:2,width:(accountInsightsProgress.current/Math.max(1,accountInsightsProgress.total)*100)+"%",transition:"width .5s"}}/>
+                        </div>
+                        <p style={{fontSize:11,color:"var(--color-text-tertiary)"}}>Pulling insights… {accountInsightsProgress.current} of {accountInsightsProgress.total} accounts complete</p>
                       </div>
-                      <p style={{fontSize:10,color:"var(--color-text-tertiary)"}}>{waldoProgress} emails complete…</p>
+                    )}
+                    {!accountInsightsPulling && Object.keys(accountInsights).length > 0 && (
+                      <div style={{display:"flex",alignItems:"center",gap:8}}>
+                        <p style={{fontSize:11,color:"var(--color-text-secondary)",margin:0}}>
+                          Insights ready for {waldoData.accounts.filter(a=>accountInsights[a.id]?.ready).length} of {waldoData.accounts.length} accounts
+                        </p>
+                        <button onClick={runMultiAccountPull}
+                          style={{padding:"3px 9px",background:"none",border:"1px solid var(--color-border-tertiary)",color:"var(--color-text-tertiary)",fontSize:10,cursor:"pointer",fontFamily:"inherit",borderRadius:"var(--border-radius-sm)"}}>
+                          Re-pull all
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Phase 2a: Per-account insight review (collapsible) */}
+                  {Object.keys(accountInsights).length > 0 && (
+                    <div style={{marginBottom:14}}>
+                      {waldoData.accounts.map(a => {
+                        const state = accountInsights[a.id] || { text: '', ready: false, error: null };
+                        const expanded = !!multiAccountExpanded[a.id];
+                        return (
+                          <div key={a.id} style={{marginBottom:6,border:"1px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",overflow:"hidden"}}>
+                            <button onClick={()=>setMultiAccountExpanded(prev=>({...prev,[a.id]:!prev[a.id]}))}
+                              style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",padding:"9px 12px",background:"var(--color-background-tertiary)",border:"none",cursor:"pointer",fontFamily:"inherit",color:"var(--color-text-primary)"}}>
+                              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                                <span style={{fontSize:10,color:state.ready?"#8BC34A":(state.error?"#E87070":"var(--color-text-tertiary)")}}>
+                                  {state.ready?"✓":(state.error?"⚠":"…")}
+                                </span>
+                                <span style={{fontSize:12,fontWeight:500}}>{a.company}</span>
+                                <span style={{fontSize:10,color:"var(--color-text-tertiary)"}}>{(a.contacts||[]).length} contacts</span>
+                              </div>
+                              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                                {state.error && (
+                                  <span onClick={(e)=>{e.stopPropagation();retryAccountInsights(a);}}
+                                    style={{fontSize:10,padding:"2px 8px",borderRadius:"var(--border-radius-sm)",background:"var(--color-background-secondary)",border:"1px solid var(--color-border-tertiary)",color:"var(--color-text-secondary)",cursor:"pointer"}}>
+                                    Retry
+                                  </span>
+                                )}
+                                <span style={{fontSize:10,transform:expanded?"rotate(180deg)":"none",transition:"transform .15s",color:"var(--color-text-tertiary)"}}>▼</span>
+                              </div>
+                            </button>
+                            {expanded && (
+                              <div style={{padding:"10px 12px",background:"var(--color-background-secondary)"}}>
+                                {state.error ? (
+                                  <p style={{fontSize:11,color:"#E87070",margin:0}}>Pull failed: {state.error}</p>
+                                ) : (
+                                  <textarea value={state.text}
+                                    onChange={e=>setAccountInsights(prev=>({...prev,[a.id]:{...state,text:e.target.value}}))}
+                                    style={{width:"100%",minHeight:140,background:"var(--color-background-tertiary)",border:"1px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",color:"var(--color-text-secondary)",padding:"10px 12px",fontSize:11,fontFamily:"var(--font-sans)",lineHeight:1.6,resize:"vertical",boxSizing:"border-box"}}/>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
-                  {waldoResults.length>0&&!waldoRunning&&!waldoAccount&&(
-                    <div style={{marginTop:8,display:"flex",alignItems:"center",gap:8}}>
-                      <p style={{fontSize:11,color:"var(--color-text-secondary)",margin:0}}>{waldoResults.filter(r=>!r.error).length}/{waldoResults.length} emails generated</p>
-                      <button onClick={exportWaldoCSV}
-                        style={{padding:"4px 10px",borderRadius:"var(--border-radius-md)",border:"1px solid var(--color-border-tertiary)",background:"var(--color-background-secondary)",color:"var(--color-text-secondary)",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>
-                        Export CSV
-                      </button>
+
+                  {/* Phase 2b: Shared Email Instructions */}
+                  {Object.values(accountInsights).some(s => s?.ready) && (
+                    <div style={{marginBottom:12}}>
+                      <label style={lbl}>Email instructions — applies to every email in the batch</label>
+                      <textarea value={multiAccountEmailInstructions}
+                        onChange={e=>setMultiAccountEmailInstructions(e.target.value)}
+                        placeholder="Paste your email instructions here. These apply across all accounts — the BJL insights and Waldo intelligence are per-account, the cadence/structure/tone instructions are shared."
+                        style={{width:"100%",minHeight:120,background:"var(--color-background-tertiary)",border:"1px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",color:"var(--color-text-primary)",padding:"10px 12px",fontSize:12,fontFamily:"var(--font-sans)",lineHeight:1.6,resize:"vertical",boxSizing:"border-box",marginTop:4}}/>
                     </div>
                   )}
+
+                  {/* Phase 3: Generate all emails */}
+                  {Object.values(accountInsights).some(s => s?.ready) && (
+                    <div>
+                      {!multiAccountGenerating ? (
+                        <div style={{display:"flex",gap:8}}>
+                          <button onClick={runMultiAccountGenerate}
+                            style={{flex:1,padding:"8px",background:"#E8C547",color:"#0c0b09",border:"none",borderRadius:"var(--border-radius-md)",fontSize:12,fontWeight:500,cursor:"pointer",fontFamily:"inherit"}}>
+                            Generate emails for {waldoData.accounts.filter(a=>accountInsights[a.id]?.ready).reduce((n,a)=>n+(a.contacts?.length||0),0)} contacts across {waldoData.accounts.filter(a=>accountInsights[a.id]?.ready).length} accounts
+                          </button>
+                          {multiAccountResults.length > 0 && (
+                            <button onClick={exportMultiAccountCSV}
+                              style={{padding:"8px 14px",background:"var(--color-background-secondary)",color:"var(--color-text-secondary)",border:"1px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>
+                              Export CSV
+                            </button>
+                          )}
+                        </div>
+                      ) : (
+                        <div>
+                          <div style={{height:4,background:"var(--color-background-tertiary)",borderRadius:2,marginBottom:8}}>
+                            <div style={{height:"100%",background:"#E8C547",borderRadius:2,width:(waldoProgress/Math.max(1,waldoData.accounts.filter(a=>accountInsights[a.id]?.ready).reduce((n,a)=>n+(a.contacts?.length||0),0))*100)+"%",transition:"width .3s"}}/>
+                          </div>
+                          <p style={{fontSize:11,color:"var(--color-text-tertiary)",textAlign:"center"}}>{multiAccountResults.length} emails complete…</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Results table */}
+                  {multiAccountResults.length > 0 && !multiAccountGenerating && (
+                    <div style={{marginTop:14}}>
+                      <p style={{fontSize:10,color:"var(--color-text-tertiary)",letterSpacing:".07em",textTransform:"uppercase",marginBottom:8}}>
+                        Results — {multiAccountResults.filter(r=>!r.error).length}/{multiAccountResults.length} succeeded
+                      </p>
+                      {multiAccountResults.map((r,i) => (
+                        <div key={i} style={{marginBottom:8,border:"1px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",padding:"10px 12px"}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                            <span style={{fontSize:11,fontWeight:500,color:"var(--color-text-primary)"}}>{r.contact} <span style={{color:"var(--color-text-tertiary)",fontWeight:400}}>· {r.company}</span></span>
+                            {r.error
+                              ? <span style={{fontSize:10,color:"#E87070"}}>Failed: {r.error}</span>
+                              : <button onClick={()=>navigator.clipboard.writeText(r.text)} style={{background:"none",border:"1px solid var(--color-border-tertiary)",borderRadius:4,color:"var(--color-text-tertiary)",fontSize:10,cursor:"pointer",padding:"2px 8px",fontFamily:"inherit"}}>Copy</button>
+                            }
+                          </div>
+                          {!r.error && <pre style={{fontSize:11,color:"var(--color-text-secondary)",whiteSpace:"pre-wrap",lineHeight:1.6,margin:0,fontFamily:"var(--font-sans)"}}>{r.text}</pre>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                </div>
+              )}
                 </div>
 
                 {/* Batch toggle — hidden when a Waldo account is active */}
