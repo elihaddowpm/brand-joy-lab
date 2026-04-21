@@ -260,6 +260,8 @@ function BJLTool() {
   const [queryType, setQueryType] = useState("brand_lookup");
   const [strategistContext, setStrategistContext] = useState("");
   const [showContext, setShowContext] = useState(false);
+  const [emailInstructions, setEmailInstructions] = useState("");
+  const [showEmailInstructions, setShowEmailInstructions] = useState(false);
   const [category, setCategory] = useState("");
   const [generation, setGeneration] = useState("");
   const [gender, setGender] = useState("");
@@ -369,6 +371,66 @@ function BJLTool() {
       .replace(/The high on the joy scale/gi, 'This high joy score')
       // Normalize sign-off — model sometimes signs with a real name from Waldo context
       .replace(/\n(Ryan|Eli|Shannon|Dana|Chris|Tameka|Deandra|Mauricio|Pete|Stella|Nicole|Christina|Terri|Dustin|Drew|Jen|Carol|Amy|Tim|Luis|Stephen|Jim|Nate|Hiroshi|Jessica|Dan)\s*$/, '\n[Your name]');
+  };
+
+  const buildEmailSystem = (userInstructions) => {
+    const hasOverride = userInstructions && userInstructions.trim().length > 0;
+
+    // SAFETY FLOOR — always enforced regardless of user instructions.
+    // These are the rules that prevent malformed or unsafe output.
+    const SAFETY_FLOOR = [
+      "You are an outreach email writer for PETERMAYER, an independent advertising agency in New Orleans.",
+      "",
+      "ABSOLUTE RULES — these apply to every email regardless of any other instructions:",
+      "",
+      "1. AGENCY CREDIBILITY — Use ONLY the exact client names and credentials explicitly provided in the strategist context field. Do not add, infer, or invent any client names beyond what is explicitly listed. Do not reach into general knowledge for sports leagues, brands, or properties that sound plausible. If a client name does not appear word-for-word in the strategist context, it cannot appear in the email. No exceptions.",
+      "",
+      "2. BJL DATA RULES:",
+      "(a) Never calculate ratios or percentages by dividing one question's result by another question's result. Cross-question math produces misleading statistics.",
+      "(b) The question 'Aside from sports, which areas do you feel fandom-level passion about?' asked respondents about passion OUTSIDE of sports. You cannot use this question to claim sports ranks lower than other categories.",
+      "(c) Select-all items are co-existing truths, not rankings. Never call any item a primary driver.",
+      "(d) Never tell a prospect their venue, brand, or category scores low or underperforms. Use BJL data to create intrigue, not to put them on the defensive.",
+      "",
+      "3. WALDO RULES — Do not summarize the brief back at the prospect. Reflect their situation obliquely. Imply you understand it without proving it by listing facts at them.",
+      "",
+      "4. VOICE PROHIBITIONS — these characters and phrases must not appear in your output:",
+      "(a) Em dashes are absolutely forbidden. The character — must not appear anywhere. Use commas, periods, or restructure the sentence.",
+      "(b) Constructions using is/isn't, was/wasn't, are/aren't — rewrite to avoid them entirely.",
+      "(c) Banned words: leverage, unlock, synergies, actionable, in today's landscape, touch base, circle back.",
+      "(d) Never start with 'I hope this email finds you well' or any variant.",
+      "(e) No exclamation points.",
+      "(f) Open with 'Hi [Name]' not 'Dear'.",
+      "",
+      "5. NEVER fabricate facts about the prospect or their company. If the Waldo intelligence does not say something, do not invent it.",
+    ].join("\n");
+
+    // DEFAULT STRUCTURE — used only when the user has not provided email instructions.
+    // This is the original three-part architecture for first-touch outreach.
+    const DEFAULT_STRUCTURE = [
+      "",
+      "STRUCTURE — use this default unless the user provides specific email instructions:",
+      "",
+      "THE THREE-PART ARCHITECTURE OF EVERY EMAIL:",
+      "1. HOOK — Lead with the prospect's specific situation, sourced from the Waldo intelligence. Specific enough that only someone paying close attention would know it. Do not open with data. Do not open with a compliment. Open with an observation about their world that makes them think: someone has been paying attention. Read across ALL deep signals for the implication. The most useful hook is often the combination of two signals, not either one alone. An exact quote from the prospect or their leadership is your strongest possible opening.",
+      "2. BJL BRIDGE — One behavioral observation from the consumer research. Express it as something you have been tracking that feels relevant to where they sit right now, not a statistic, not a finding, a behavioral truth. Keep it short. Let it raise a question in their mind, not answer one. It follows the hook. It supports the hook. It never replaces it.",
+      "3. AGENCY CREDIBILITY — Brief credential paragraph using only client names from the strategist context.",
+      "",
+      "Output format: Subject line first, then email body. Structure the email body with these exact markers so each section can be identified: write the hook paragraph, then on its own line write the literal text [BJL] (square brackets), then the BJL bridge paragraph, then on its own line write the literal text [CRED] (square brackets), then the agency credential paragraph, then the close and sign-off. These markers will be stripped before delivery.",
+    ].join("\n");
+
+    // USER OVERRIDE — when present, replaces DEFAULT_STRUCTURE entirely.
+    // The safety floor still applies. The user controls everything else.
+    const USER_OVERRIDE = [
+      "",
+      "STRUCTURE — the strategist has provided specific instructions for this email. Follow them as the structural guide. The absolute rules above still apply.",
+      "",
+      "STRATEGIST INSTRUCTIONS:",
+      userInstructions.trim(),
+      "",
+      "Note: the [BJL] and [CRED] section markers from the default structure are NOT required when following strategist instructions. Output the email in whatever structure the instructions specify.",
+    ].join("\n");
+
+    return SAFETY_FLOOR + (hasOverride ? USER_OVERRIDE : DEFAULT_STRUCTURE);
   };
 
   // Strip section markers before displaying. Matches [BJL], (BJL), [CRED], (CRED)
@@ -785,17 +847,8 @@ function BJLTool() {
     setWaldoResults([]);
     setWaldoProgress(0);
     const allResults = [];
-    const EMAIL_SYSTEM = [
-      'You are an expert outreach email writer for PETERMAYER, an independent advertising agency in New Orleans.',
-      'THE THREE-PART ARCHITECTURE OF EVERY EMAIL:',
-      '1. HOOK — Lead with the prospect\'s specific situation, sourced from the Waldo intelligence. Specific enough that only someone paying close attention would know it. Do not open with data. Do not open with a compliment. Open with an observation about their world that makes them think: someone has been paying attention. Read across ALL deep signals for the implication — the most useful hook is often the combination of two signals, not either one alone. An exact quote from the prospect or their leadership is your strongest possible opening — use it verbatim or write toward it so they recognize their own thinking.',
-      '2. BJL BRIDGE — One behavioral observation from the consumer research. This is the tantalizing signal that PETERMAYER has proprietary knowledge about their audience worth a conversation. Express it as something you have been tracking that feels relevant to where they sit right now — not a statistic, not a finding, a behavioral truth. Keep it short. Let it raise a question in their mind, not answer one. It follows the hook. It supports the hook. It never replaces it.',
-      '3. AGENCY CREDIBILITY — Use ONLY the exact client names and credentials explicitly provided in the strategist context field. Do not add, infer, or invent any client names beyond what is explicitly listed. Do not reach into general knowledge for sports leagues, brands, or properties that sound plausible. Do not bridge a category mismatch by inventing credentials that fit the prospect better than the ones provided. If the provided context describes a travel and tourism agency but the prospect is in sports, do not add sports credentials to compensate. Use only what is explicitly listed, or describe capability in general terms. The rule is absolute: if a client name does not appear word-for-word in the strategist context, it cannot appear in the email. No exceptions.',
-      'WALDO RULES: Do not summarize the brief back at the prospect. Reflect their situation obliquely — imply you understand it without proving it by listing facts at them.',
-      'BJL RULES: One behavioral observation only. Never lead with it. Frame the data as something you have been tracking that feels relevant — not as a problem the prospect has or a critique of their situation. Never tell a prospect their venue, brand, or category scores low or underperforms. Use the data to create intrigue and signal proprietary knowledge, not to put them on the defensive. The observation should be specific to this contact\'s role and situation. CRITICAL DATA RULES: (1) Never calculate ratios or percentages by dividing one question\'s result by another question\'s result. Each question measures something different and cross-question math produces misleading statistics. For example, do not divide a Joy Index score by another Joy Index score to produce a percentage and present it as a finding — that is not what the data shows. (2) The question \'Aside from sports, which areas do you feel fandom-level passion about?\' asked respondents about passion OUTSIDE of sports — sports was not an option. You cannot use this question to claim sports ranks lower than other categories. (3) Select-all items are co-existing truths, not rankings. Never call any item a primary driver.',
-      'VOICE HARD PROHIBITIONS — if any of these appear in your output, rewrite before sending: (1) Em dashes are absolutely forbidden. The character — must not appear anywhere in your output. Before returning, scan every sentence. If you find an em dash, rewrite that sentence using a period, a comma, or a full restructure. Do this before outputting anything. (2) Constructions using is/isn\'t, was/wasn\'t, are/aren\'t — rewrite to avoid them entirely. (3) leverage, unlock, synergies, actionable, in today\'s landscape — never use these words. Hi [Name] not Dear. No methodology in opener. Close as invitation not meeting request.',
-      'Output format: Subject line first, then email body. Structure the email body with these exact markers so each section can be identified: write the hook paragraph, then on its own line write the literal text [BJL] (square brackets, not parentheses), then the BJL bridge paragraph, then on its own line write the literal text [CRED] (square brackets, not parentheses), then the agency credential paragraph, then the close and sign-off. Do not substitute parentheses or any other characters for the square brackets. These markers will be stripped before delivery — they are for internal structure only.',
-    ].join('\n');    for (let ai = 0; ai < accounts.length; ai++) {
+    const EMAIL_SYSTEM = buildEmailSystem(emailInstructions);
+    for (let ai = 0; ai < accounts.length; ai++) {
       const account = accounts[ai];
       const systemCtx = buildWaldoSystemContext(account);
       // Pull insights for this account
@@ -940,17 +993,7 @@ function BJLTool() {
     const results = [];
 
     // Lean system prompt for per-email calls — just the outreach rules, no data
-    const EMAIL_SYSTEM = [
-      "You are an expert outreach email writer for PETERMAYER, an independent advertising agency in New Orleans.",
-      "THE THREE-PART ARCHITECTURE OF EVERY EMAIL:",
-      "1. HOOK — Lead with the prospect\'s specific situation, sourced from the Waldo intelligence. Specific enough that only someone paying close attention would know it. Do not open with data. Do not open with a compliment. Open with an observation about their world that makes them think: someone has been paying attention. Read across ALL deep signals for the implication — the most useful hook is often the combination of two signals, not either one alone. An exact quote from the prospect or their leadership is your strongest possible opening — use it verbatim or write toward it so they recognize their own thinking.",
-      "2. BJL BRIDGE — One behavioral observation from the consumer research. This is the tantalizing signal that PETERMAYER has proprietary knowledge about their audience worth a conversation. Express it as something you have been tracking that feels relevant to where they sit right now — not a statistic, not a finding, a behavioral truth. Keep it short. Let it raise a question in their mind, not answer one. It follows the hook. It supports the hook. It never replaces it.",
-      "3. AGENCY CREDIBILITY — Use ONLY the exact client names and credentials explicitly provided in the strategist context field. Do not add, infer, or invent any client names beyond what is explicitly listed. Do not reach into general knowledge for sports leagues, brands, or properties that sound plausible. Do not bridge a category mismatch by inventing credentials that fit the prospect better than the ones provided. If the provided context describes a travel and tourism agency but the prospect is in sports, do not add sports credentials to compensate. Use only what is explicitly listed, or describe capability in general terms. The rule is absolute: if a client name does not appear word-for-word in the strategist context, it cannot appear in the email. No exceptions.",
-      "WALDO RULES: Do not summarize the brief back at the prospect. Reflect their situation obliquely — imply you understand it without proving it by listing facts at them.",
-      "BJL RULES: One behavioral observation only. Never lead with it. Frame the data as something you have been tracking that feels relevant — not as a problem the prospect has or a critique of their situation. Never tell a prospect their venue, brand, or category scores low or underperforms. Use the data to create intrigue and signal proprietary knowledge, not to put them on the defensive. CRITICAL DATA RULES: (1) Never calculate ratios or percentages by dividing one question's result by another question's result — cross-question math produces misleading statistics. (2) Select-all items are co-existing truths, not rankings. Never call any item a primary driver.",
-      "VOICE HARD PROHIBITIONS — if any of these appear in your output, rewrite before sending: (1) Em dashes are absolutely forbidden. The character — must not appear anywhere in your output. Before returning, scan every sentence. If you find an em dash, rewrite that sentence using a period, a comma, or a full restructure. Do this before outputting anything. (2) Constructions using is/isn\'t, was/wasn\'t, are/aren\'t — rewrite to avoid them entirely. (3) leverage, unlock, synergies, actionable, in today\'s landscape — never use these words. Hi [Name] not Dear. No methodology in opener. Close as invitation not meeting request.",
-      "Output format: Subject line first, then email body. Structure the email body with these exact markers so each section can be identified: write the hook paragraph, then on its own line write the literal text [BJL] (square brackets, not parentheses), then the BJL bridge paragraph, then on its own line write the literal text [CRED] (square brackets, not parentheses), then the agency credential paragraph, then the close and sign-off. Do not substitute parentheses or any other characters for the square brackets. These markers will be stripped before delivery — they are for internal structure only.",
-    ].join("\n");
+    const EMAIL_SYSTEM = buildEmailSystem(emailInstructions);
     for (let i = 0; i < batchContacts.length; i++) {
       const contact = batchContacts[i];
       setBatchProgress(i);
@@ -1236,6 +1279,8 @@ const buildUserMessage = (text) => {
     setBatchInsightsReady(false);
     setBatchMode(false);
     setStrategistContext('');
+    setEmailInstructions('');
+    setShowEmailInstructions(false);
     try { await window.storage.delete(CONVERSATION_STORAGE_KEY); } catch(e) {}
   };
 
@@ -1648,17 +1693,8 @@ const buildUserMessage = (text) => {
                               setWaldoResults([]);
                               setWaldoProgress(0);
                               const results=[];
-                              const EMAIL_SYSTEM = [
-      'You are an expert outreach email writer for PETERMAYER, an independent advertising agency in New Orleans.',
-      'THE THREE-PART ARCHITECTURE OF EVERY EMAIL:',
-      '1. HOOK — Lead with the prospect\'s specific situation, sourced from the Waldo intelligence. Specific enough that only someone paying close attention would know it. Do not open with data. Do not open with a compliment. Open with an observation about their world that makes them think: someone has been paying attention. Read across ALL deep signals for the implication — the most useful hook is often the combination of two signals, not either one alone. An exact quote from the prospect or their leadership is your strongest possible opening — use it verbatim or write toward it so they recognize their own thinking.',
-      '2. BJL BRIDGE — One behavioral observation from the consumer research. This is the tantalizing signal that PETERMAYER has proprietary knowledge about their audience worth a conversation. Express it as something you have been tracking that feels relevant to where they sit right now — not a statistic, not a finding, a behavioral truth. Keep it short. Let it raise a question in their mind, not answer one. It follows the hook. It supports the hook. It never replaces it.',
-      '3. AGENCY CREDIBILITY — Use ONLY the exact client names and credentials explicitly provided in the strategist context field. Do not add, infer, or invent any client names beyond what is explicitly listed. Do not reach into general knowledge for sports leagues, brands, or properties that sound plausible. Do not bridge a category mismatch by inventing credentials that fit the prospect better than the ones provided. If the provided context describes a travel and tourism agency but the prospect is in sports, do not add sports credentials to compensate. Use only what is explicitly listed, or describe capability in general terms. The rule is absolute: if a client name does not appear word-for-word in the strategist context, it cannot appear in the email. No exceptions.',
-      'WALDO RULES: Do not summarize the brief back at the prospect. Reflect their situation obliquely — imply you understand it without proving it by listing facts at them.',
-      'BJL RULES: One behavioral observation only. Never lead with it. Frame the data as something you have been tracking that feels relevant — not as a problem the prospect has or a critique of their situation. Never tell a prospect their venue, brand, or category scores low or underperforms. Use the data to create intrigue and signal proprietary knowledge, not to put them on the defensive. The observation should be specific to this contact\'s role and situation. CRITICAL DATA RULES: (1) Never calculate ratios or percentages by dividing one question\'s result by another question\'s result. Each question measures something different and cross-question math produces misleading statistics. For example, do not divide a Joy Index score by another Joy Index score to produce a percentage and present it as a finding — that is not what the data shows. (2) The question \'Aside from sports, which areas do you feel fandom-level passion about?\' asked respondents about passion OUTSIDE of sports — sports was not an option. You cannot use this question to claim sports ranks lower than other categories. (3) Select-all items are co-existing truths, not rankings. Never call any item a primary driver.',
-      'VOICE HARD PROHIBITIONS — if any of these appear in your output, rewrite before sending: (1) Em dashes are absolutely forbidden. The character — must not appear anywhere in your output. Before returning, scan every sentence. If you find an em dash, rewrite that sentence using a period, a comma, or a full restructure. Do this before outputting anything. (2) Constructions using is/isn\'t, was/wasn\'t, are/aren\'t — rewrite to avoid them entirely. (3) leverage, unlock, synergies, actionable, in today\'s landscape — never use these words. Hi [Name] not Dear. No methodology in opener. Close as invitation not meeting request.',
-      'Output format: Subject line first, then email body. Structure the email body with these exact markers so each section can be identified: write the hook paragraph, then on its own line write the literal text [BJL] (square brackets, not parentheses), then the BJL bridge paragraph, then on its own line write the literal text [CRED] (square brackets, not parentheses), then the agency credential paragraph, then the close and sign-off. Do not substitute parentheses or any other characters for the square brackets. These markers will be stripped before delivery — they are for internal structure only.',
-    ].join('\n');                             const systemCtx=buildWaldoSystemContext(waldoAccount);
+                              const EMAIL_SYSTEM = buildEmailSystem(emailInstructions);
+                              const systemCtx=buildWaldoSystemContext(waldoAccount);
                               for(let i=0;i<waldoContacts.length;i++){
                                 const contact=waldoContacts[i];
                                 setWaldoProgress(i);
@@ -1906,8 +1942,8 @@ const buildUserMessage = (text) => {
                     value={strategistContext}
                     onChange={e => setStrategistContext(e.target.value)}
                     placeholder={queryType === "outreach_draft"
-                      ? "Recent news, agency review status, known challenges, past conversations, mutual connections — anything that helps personalize the email."
-                      : "Paste store visit journals, MRI findings, competitive audits, or any other first-party intelligence here. The tool will use this to sharpen which BJL data is most relevant.\n\nExamples:\n— MRI: Target over-indexes on home improvement content (+180), HHI $50-100K, shops 2.3x/year\n— Store visit: Staff warmth strong, floor navigation confusing, financing felt transactional not relational\n— Brief context: Mid-market furniture retailer, value-conscious buyer, losing to Ashley on price perception"}
+                      ? "What you know about this account: recent news, agency review status, mutual connections, the agency credentials you want surfaced. This is intel, not instructions."
+                      : "Paste store visit journals, MRI findings, competitive audits, or any other first-party intelligence. The tool uses this to sharpen which BJL data is most relevant."}
                     style={{ width:"100%",minHeight:100,background:"var(--color-background-tertiary)",border:"1px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",color:"var(--color-text-primary)",padding:"10px 12px",fontSize:12,fontFamily:"var(--font-sans)",lineHeight:1.6,resize:"vertical",boxSizing:"border-box",marginTop:6 }}
                   />
                   {strategistContext.trim() && (
@@ -1919,6 +1955,34 @@ const buildUserMessage = (text) => {
                 </div>
               )}
             </div>
+
+            {/* Email Instructions — only shown for outreach_draft */}
+            {queryType === "outreach_draft" && (
+              <div style={{ marginTop:10 }}>
+                <button onClick={() => setShowEmailInstructions(v => !v)}
+                  style={{ background:"none",border:"none",color:emailInstructions.trim()?"#E8C547":"var(--color-text-tertiary)",fontSize:11,letterSpacing:".07em",textTransform:"uppercase",cursor:"pointer",fontFamily:"inherit",padding:"0 0 6px",display:"flex",alignItems:"center",gap:6 }}>
+                  <span>✎</span>
+                  {emailInstructions.trim() ? "Email instructions set" : "Add email instructions (cadence, structure, links)"}
+                  <span style={{ fontSize:9,display:"inline-block",transform:showEmailInstructions?"rotate(180deg)":"none",transition:"transform .2s" }}>▼</span>
+                </button>
+                {showEmailInstructions && (
+                  <div>
+                    <textarea
+                      value={emailInstructions}
+                      onChange={e => setEmailInstructions(e.target.value)}
+                      placeholder={"How should this email be structured? What stage of the cadence? What links should it include?\n\nExamples:\n— Email 2 of 3: brief callback to prior note, then a relevant case study link, then a soft close. 4-6 sentences in the body.\n— Post-meeting follow-up: thank them, recap one thing they said, offer a next step.\n— Re-engagement: acknowledge time has passed, share something new since we last spoke.\n\nIf left blank, the default three-part structure (HOOK → BJL BRIDGE → CRED) will be used."}
+                      style={{ width:"100%",minHeight:120,background:"var(--color-background-tertiary)",border:"1px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",color:"var(--color-text-primary)",padding:"10px 12px",fontSize:12,fontFamily:"var(--font-sans)",lineHeight:1.6,resize:"vertical",boxSizing:"border-box",marginTop:6 }}
+                    />
+                    {emailInstructions.trim() && (
+                      <button onClick={() => setEmailInstructions("")}
+                        style={{ background:"none",border:"none",color:"var(--color-text-tertiary)",fontSize:10,cursor:"pointer",fontFamily:"inherit",padding:"4px 0",letterSpacing:".05em" }}>
+                        Clear instructions
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 
