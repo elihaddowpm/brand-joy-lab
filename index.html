@@ -362,6 +362,14 @@ function BJLTool() {
       .replace(/\. ([a-z])/g, (m, c) => '. ' + c.toUpperCase())
       .replace(/\.\s*,/g, '.')
       .replace(/\.\./g, '.')
+      // Lop off https:// or http:// when followed by www. The www-prefixed URL renders
+      // as a link in every modern email client and we avoid the model's habit of
+      // autocapitalizing the protocol to "Https://" after a sentence-ending period.
+      .replace(/\b[Hh]ttps?:\/\/(?=www\.)/g, '')
+      // For the rare URL that uses https:// without a www. prefix, lowercase the
+      // protocol so it stays a valid clickable link.
+      .replace(/\bHttps:\/\//g, 'https://')
+      .replace(/\bHttp:\/\//g, 'http://')
       // Strip raw Joy Index scores — these need methodology context to be meaningful in cold email
       .replace(/\bJI=\d+\.?\d*/g, '')
       .replace(/a Joy Index of \d+\.?\d*/gi, 'a high joy score')
