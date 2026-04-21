@@ -712,39 +712,70 @@ function BJLTool() {
     setWaldoInsightsPulling(true);
     setWaldoInsightsReady(false);
     setWaldoInsights('');
+
+    // Build the query the orchestrator will decompose. Mention the company,
+    // category, and strategic tension so retrieval pulls evidence relevant to
+    // this specific outreach. The orchestrator does the rest.
+    const tension = account.creative_tension || account.top_signal?.why_it_matters || '';
+    const queryParts = [
+      `Pull BJL findings for outreach to ${account.company}`,
+      account.category ? `(${account.category})` : '',
+      tension ? `. Strategic tension: ${tension}` : '',
+    ].filter(Boolean);
+    const query = queryParts.join(' ').trim();
+
+    // Stash the Waldo intel on strategistContext so the synthesis prompt sees
+    // the prospect's situation when picking which findings to surface.
+    const waldoCtx = buildWaldoSystemContext(account);
+    const combinedContext = [strategistContext?.trim(), waldoCtx].filter(Boolean).join('\n\n');
+
+    let streamedText = '';
+    let result = null;
+
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 55000);
+
     try {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 25000);
-      const systemCtx = buildWaldoSystemContext(account);
-      const prompt = '[Data Pull] ' + systemCtx + '\n\nFor each finding you must state: (1) the exact question asked, (2) the question type [Joy Scale / Select-All / Ordinal], (3) an interpretation check — for Select-All, confirm you are treating co-selected items as co-existing truths not a ranking; for Joy Scale, confirm you are comparing within the same question block only. CRITICAL: Never divide one question\'s result by another question\'s result to produce a percentage or ratio. Each question measures something different. Cross-question math is not valid and must not appear in any finding. Only then write the behavioral observation and one-sentence outreach implication for ' + account.company + '. Pull 4-5 findings that speak to the strategic tension. Prioritize Consumer and Category signals. If the data does not cleanly support a finding, say so — do not force a connection.';
-      const bjlData = await fetchBJLData(
-        account?.category || '',
-        (account?.deep_signals || []).slice(0,3).map(s => s.sharpened_hook || s.why_it_matters || ''),
-        account?.company || ''
-      );
-      const res = await fetch('/api/claude', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctrl.signal,
-        body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 1400, system: buildSystemPrompt(bjlData), messages: [{ role: 'user', content: prompt }] })
+      await queryBJL({
+        query,
+        intentHint: 'email_findings',
+        strategistContext: combinedContext || undefined,
+        waldoContext: account,
+        signal: ctrl.signal,
+        onChunk: (text) => {
+          streamedText += text;
+          setWaldoInsights(streamedText);
+        },
+        onDone: ({ evidence_counts } = {}) => {
+          result = { ok: true, evidence_counts };
+        },
+        onError: ({ message, phase } = {}) => {
+          result = { ok: false, message, phase };
+        },
       });
-      clearTimeout(timer);
-      const data = await res.json();
-      if (res.status === 429) {
-        setWaldoInsights('Rate limit hit — wait 30 seconds and try again, or proceed without BJL insights.');
-        setWaldoInsightsReady(true);
-      } else if (res.status !== 200) {
-        setWaldoInsights('API error ' + res.status + ': ' + (data?.error?.message || 'Unknown error') + ' — you can still generate emails without pre-pulled insights.');
-        setWaldoInsightsReady(true);
-      } else {
-        const text = data.content?.map(b => b.type === 'text' ? b.text : '').filter(Boolean).join('\n') || '';
-        setWaldoInsights(text);
-        setWaldoInsightsReady(true);
+
+      if (!result || !result.ok) {
+        const msg = result?.message || 'Stream ended unexpectedly';
+        const phase = result?.phase ? ` [${result.phase}]` : '';
+        setWaldoInsights(
+          (streamedText ? streamedText + '\n\n' : '') +
+          `(Insights pull failed${phase}: ${msg}. You can still generate emails without pre-pulled insights, but they will lack BJL grounding.)`
+        );
       }
-    } catch(e) {
-      const msg = e.name === 'AbortError' ? 'Request timed out — try again.' : 'Connection error: ' + e.message;
-      setWaldoInsights(msg + ' You can still generate emails without pre-pulled insights.');
       setWaldoInsightsReady(true);
+    } catch (e) {
+      const isTimeout = e?.name === 'AbortError';
+      setWaldoInsights(
+        (streamedText ? streamedText + '\n\n' : '') +
+        (isTimeout
+          ? '(Request timed out. Try again, or proceed without pre-pulled insights.)'
+          : `(Connection error: ${e.message}. You can still generate emails without pre-pulled insights.)`)
+      );
+      setWaldoInsightsReady(true);
+    } finally {
+      clearTimeout(timer);
+      setWaldoInsightsPulling(false);
     }
-    setWaldoInsightsPulling(false);
   };
 
   const runWaldoBatch = async () => {
@@ -768,18 +799,37 @@ function BJLTool() {
       const account = accounts[ai];
       const systemCtx = buildWaldoSystemContext(account);
       // Pull insights for this account
+      // Pull insights for this account via the orchestrator (email_findings intent)
       let insights = '';
       try {
-        const ctrl = new AbortController();
-        setTimeout(() => ctrl.abort(), 25000);
-        const insightPrompt = '[Data Pull] ' + systemCtx + '\n\nPull 5 BJL findings for outreach to ' + account.company + '. Each as a behavioral observation with joy mode and one-sentence implication.';
-        const ir = await fetch('/api/claude', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 800, system: buildSystemPrompt(bjlData), messages: [{ role: 'user', content: insightPrompt }] })
+        const acctTension = account.creative_tension || account.top_signal?.why_it_matters || '';
+        const acctQuery = [
+          `Pull BJL findings for outreach to ${account.company}`,
+          account.category ? `(${account.category})` : '',
+          acctTension ? `. Strategic tension: ${acctTension}` : '',
+        ].filter(Boolean).join(' ').trim();
+
+        const acctCombinedCtx = [strategistContext?.trim(), systemCtx].filter(Boolean).join('\n\n');
+
+        let streamed = '';
+        let acctResult = null;
+        const acctCtrl = new AbortController();
+        const acctTimer = setTimeout(() => acctCtrl.abort(), 55000);
+        await queryBJL({
+          query: acctQuery,
+          intentHint: 'email_findings',
+          strategistContext: acctCombinedCtx || undefined,
+          waldoContext: account,
+          signal: acctCtrl.signal,
+          onChunk: (t) => { streamed += t; },
+          onDone: () => { acctResult = { ok: true }; },
+          onError: ({ message } = {}) => { acctResult = { ok: false, message }; },
         });
-        const id = await ir.json();
-        insights = id.content?.map(b => b.type === 'text' ? b.text : '').join('\n') || '';
-      } catch(e) { insights = ''; }
+        clearTimeout(acctTimer);
+        insights = (acctResult && acctResult.ok) ? streamed : '';
+      } catch (e) {
+        insights = '';
+      }
 
       const accountResults = [];
       for (let ci = 0; ci < account.contacts.length; ci++) {
@@ -836,36 +886,49 @@ function BJLTool() {
     if (!batchIndustry.trim()) return;
     setBatchInsightsPulling(true);
     setBatchInsightsReady(false);
-    setBatchInsights("");
+    setBatchInsights('');
+    setBatchError(null);
+
+    const query = `Pull BJL findings for outreach to brands in this category: ${batchIndustry.trim()}. These findings will be used as the shared data layer for a batch of personalized outreach emails.`;
+
+    let streamedText = '';
+    let result = null;
+
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 55000);
+
     try {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 25000);
-      const prompt = "[Data Pull] Industry context: " + batchIndustry.trim() + "\n\nPull the 5 most strategically useful BJL findings for outreach to brands in this category. For each finding: state it as a behavioral observation (not a statistic), note the joy mode it maps to, and include one sentence on the outreach implication. These findings will be used as the shared data layer for a batch of personalized outreach emails. Be specific and concrete — these need to work as persuasive hooks in cold outreach.";
-      const res = await fetch("/api/claude", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+      await queryBJL({
+        query,
+        intentHint: 'email_findings',
+        strategistContext: strategistContext?.trim() || undefined,
         signal: ctrl.signal,
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 1200,
-          system: buildSystemPrompt(await fetchBJLData(batchIndustry || '', [], '')),
-          messages: [{ role: "user", content: prompt }]
-        })
+        onChunk: (text) => {
+          streamedText += text;
+          setBatchInsights(streamedText);
+        },
+        onDone: ({ evidence_counts } = {}) => {
+          result = { ok: true, evidence_counts };
+        },
+        onError: ({ message, phase } = {}) => {
+          result = { ok: false, message, phase };
+        },
       });
-      clearTimeout(timer);
-      const data = await res.json();
-      if (res.status !== 200) {
-        setBatchError("Insights pull failed: " + (data?.error?.message || res.status));
+
+      if (!result || !result.ok) {
+        const msg = result?.message || 'Stream ended unexpectedly';
+        const phase = result?.phase ? ` [${result.phase}]` : '';
+        setBatchError(`Insights pull failed${phase}: ${msg}`);
         setBatchInsightsPulling(false);
         return;
       }
-      const text = data.content?.map(b => b.type === "text" ? b.text : "").filter(Boolean).join("\n") || "";
-      setBatchInsights(text);
       setBatchInsightsReady(true);
-    } catch(e) {
-      setBatchError(e.name === "AbortError" ? "Timed out pulling insights — try again" : e.message);
+    } catch (e) {
+      setBatchError(e.name === 'AbortError' ? 'Timed out pulling insights — try again' : e.message);
+    } finally {
+      clearTimeout(timer);
+      setBatchInsightsPulling(false);
     }
-    setBatchInsightsPulling(false);
   };
 
   const runBatch = async () => {

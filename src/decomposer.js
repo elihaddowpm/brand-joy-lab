@@ -78,7 +78,7 @@ DEMOGRAPHICS (for verbatim filtering):
 
 OUTPUT SCHEMA:
 {
-  "intent": "outreach_angle" | "brand_lookup" | "audience_deep_dive" | "data_pull" | "general",
+  "intent": "outreach_angle" | "brand_lookup" | "audience_deep_dive" | "data_pull" | "email_findings" | "general",
   "category_keys": ["..."],
   "joy_modes": ["..."],
   "occasions": ["..."],
