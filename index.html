@@ -391,7 +391,7 @@ function BJLTool() {
       "(c) Select-all items are co-existing truths, not rankings. Never call any item a primary driver.",
       "(d) Never tell a prospect their venue, brand, or category scores low or underperforms. Use BJL data to create intrigue, not to put them on the defensive.",
       "",
-      "3. WALDO RULES — Do not summarize the brief back at the prospect. Reflect their situation obliquely. Imply you understand it without proving it by listing facts at them.",
+      "3. WALDO RULES — Treat Waldo intelligence as background context that explains why you noticed this prospect, not as a problem they need solved. The signal is your reason for reaching out, not a brief you have been put on. Do not assume the surfaced trigger is their most pressing concern. It may be one of many things on their plate. Do not write the email in a way that implies you know what they are working on or what they need. Curiosity beats assumption. A prospective partner asking thoughtful questions reads better than an outside expert diagnosing the situation.",
       "",
       "4. VOICE PROHIBITIONS — these characters and phrases must not appear in your output:",
       "(a) Em dashes are absolutely forbidden. The character — must not appear anywhere. Use commas, periods, or restructure the sentence.",
@@ -402,6 +402,50 @@ function BJLTool() {
       "(f) Open with 'Hi [Name]' not 'Dear'.",
       "",
       "5. NEVER fabricate facts about the prospect or their company. If the Waldo intelligence does not say something, do not invent it.",
+      "",
+      "6. CASE STUDY REFERENCES — When email instructions name a case study (by URL, title, or short identifier like 'Pelicans' or 'Kennedy'), draw your reference from the CASE STUDY LIBRARY below. Use the actual content of the case study, not generic language about the brand. Numbers from the library are defensible and can be cited. Do not cite numbers or claim results that are not in the library. If the email instructions name a case study, always include the URL exactly as provided by the user — do not modify, shorten, or substitute the link.",
+    ].join("\n");
+
+    const CASE_STUDY_LIBRARY = [
+      "",
+      "═══════════════════════════════════════════════════════════════════════════",
+      "CASE STUDY LIBRARY — PETERMAYER WORK",
+      "═══════════════════════════════════════════════════════════════════════════",
+      "",
+      "Use these summaries when the email instructions reference a case study.",
+      "Quote specifics from these summaries rather than writing generic credentials.",
+      "",
+      "─── NEW ORLEANS PELICANS ───",
+      "URL: https://www.peteramayer.com/work/new-olreans-pelicans/brand-awareness-campaign",
+      "Identifier: Pelicans",
+      "",
+      "The situation: New Orleans is a football town. The Pelicans were the less-beloved kid brother to the Saints. Thin crowds led to fewer advertisers, less TV coverage, and a paradise for ticket scalpers. PETERMAYER's brief was to make the team as valuable to the community as its NFL counterpart.",
+      "",
+      "The strategic move: The Pelicans' problem was not the team. It was the relationship between the team and the city. PETERMAYER did not try to make people love the team. They made loving the team a way of loving the city. The cultural insight: defiance is the city's defining trait. Disrespect New Orleans and even our biggest naysayers come after you. Civic pride became the route to fan affinity.",
+      "",
+      "The work: WON'T BOW DOWN, a campaign built on a lyric from an old Mardi Gras Indian song that New Orleanians instantly recognized. The launch teased the meaning before revealing it. Mysterious 'WBD' letters appeared everywhere from player hats to bat signal projections, getting the city guessing. The reveal landed right before the season. The campaign extended into the locker room itself and into anthemic murals throughout the city.",
+      "",
+      "The results: 78M organic reach. 12,000 season tickets sold (filling two-thirds of Smoothie King Arena after a 33-49 season). 424K interactions. 360K likes in weeks. Coverage from regional media and the rest of the NBA. Tripadvisor and iSpot praise.",
+      "",
+      "Use this case study for: Sports teams of any level. Regional brands fighting for civic mindshare. Brands with an awareness or affinity gap. Underdog brands. Any brand that would benefit from being reframed as a civic icon rather than a commercial product. Brands looking to draft off cultural capital they don't currently own. Less obviously: visitor attractions wanting to convert from tourist destination to local civic asset, financial brands looking to anchor in regional identity, university or institutional brands where the audience is emotional but the brand is institutional.",
+      "",
+      "─── KENNEDY SPACE CENTER VISITOR COMPLEX ───",
+      "URL: https://www.peteramayer.com/work/kennedy-space-center/kennedy-space-center-visitor-complex",
+      "Identifier: Kennedy",
+      "",
+      "The situation: With the Space Shuttle grounded, Kennedy Space Center went from a launchpad to another Florida attraction overnight. The Visitor Complex needed to make space travel as compelling as Disney World and Universal Studios.",
+      "",
+      "The strategic move: Kennedy's problem was not that people had stopped caring about space. It was that they had started experiencing space through screens. The Visitor Complex was selling proximity to a thing people thought they had already consumed. PETERMAYER's reframe: you can watch a launch on YouTube, but you cannot feel the ground shake. The campaign hinges on the difference between mediated experience and embodied experience.",
+      "",
+      "The work: LOOK UP, a campaign that pulled the screens away and compelled people to touch, feel, and experience space exploration firsthand. The name works on two levels: the literal physical action a visitor takes at the Complex, and a metaphorical posture about wonder.",
+      "",
+      "The results: $5.7MM campaign-attributed revenue. 121MM organic impressions. 49% new visitors. Ranked the #1 Attraction in the U.S. on Tripadvisor.",
+      "",
+      "Use this case study for: Visitor attractions of any kind. Theme parks. Zoos. Aquariums. Science centers. Museums. National park gateways and visitor complexes. Family destination brands competing against entertainment alternatives. Any brand whose subject matter consumers experience through media but whose business model depends on selling the embodied version. Less obviously: live sports properties whose problem is 'people watch on TV, why come to the stadium,' retail brands where Instagram has displaced the store visit, restaurant brands competing with delivery for the dine-in occasion.",
+      "",
+      "═══════════════════════════════════════════════════════════════════════════",
+      "END CASE STUDY LIBRARY",
+      "═══════════════════════════════════════════════════════════════════════════",
     ].join("\n");
 
     // DEFAULT STRUCTURE — used only when the user has not provided email instructions.
@@ -411,7 +455,7 @@ function BJLTool() {
       "STRUCTURE — use this default unless the user provides specific email instructions:",
       "",
       "THE THREE-PART ARCHITECTURE OF EVERY EMAIL:",
-      "1. HOOK — Lead with the prospect's specific situation, sourced from the Waldo intelligence. Specific enough that only someone paying close attention would know it. Do not open with data. Do not open with a compliment. Open with an observation about their world that makes them think: someone has been paying attention. Read across ALL deep signals for the implication. The most useful hook is often the combination of two signals, not either one alone. An exact quote from the prospect or their leadership is your strongest possible opening.",
+      "1. HOOK — Open with something specific enough that the prospect knows you actually paid attention to their world. The Waldo signal is one possible source, but the goal is to demonstrate genuine curiosity about their work, not to surface a problem you assume they have. Avoid framing the hook as 'you must be dealing with X' or 'the brief on your desk is Y'. Lead instead with what is true and observable about their situation, paired with a question or an observation that invites conversation rather than offering a diagnosis. The hook earns the next sentence. It does not deliver a verdict.",
       "2. BJL BRIDGE — One behavioral observation from the consumer research. Express it as something you have been tracking that feels relevant to where they sit right now, not a statistic, not a finding, a behavioral truth. Keep it short. Let it raise a question in their mind, not answer one. It follows the hook. It supports the hook. It never replaces it.",
       "3. AGENCY CREDIBILITY — Brief credential paragraph using only client names from the strategist context.",
       "",
@@ -430,7 +474,7 @@ function BJLTool() {
       "Note: the [BJL] and [CRED] section markers from the default structure are NOT required when following strategist instructions. Output the email in whatever structure the instructions specify.",
     ].join("\n");
 
-    return SAFETY_FLOOR + (hasOverride ? USER_OVERRIDE : DEFAULT_STRUCTURE);
+    return SAFETY_FLOOR + CASE_STUDY_LIBRARY + (hasOverride ? USER_OVERRIDE : DEFAULT_STRUCTURE);
   };
 
   // Strip section markers before displaying. Matches [BJL], (BJL), [CRED], (CRED)
