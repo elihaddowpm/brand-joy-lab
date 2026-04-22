@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Brand Joy Lab · Intelligence Engine</title>
-  <link rel="stylesheet" href="styles_v2.css?v=2" />
+  <link rel="stylesheet" href="styles_v2.css?v=3" />
 </head>
 <body data-display="on">
   <div id="root"></div>
@@ -1837,7 +1837,9 @@ const App = () => {
           }
         />
         <div className={`body ${showDrawer ? "" : "no-drawer"}`}>
-          <div style={{overflow: "hidden", minHeight: 0, display: "flex", flexDirection: "column"}}>
+          <div style={mode === "batch"
+            ? {minHeight: 0, display: "flex", flexDirection: "column", overflow: "auto"}
+            : {overflow: "hidden", minHeight: 0, display: "flex", flexDirection: "column"}}>
             {mode === "intelligence" && <IntelligenceMode
               setEvidenceRows={setEvidenceRows}
               strategistContext={strategistContext}
