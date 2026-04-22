@@ -32,6 +32,13 @@ const { useState, useEffect, useRef, useCallback, useMemo } = React;
 
 const sanitizeEmail = (text) => {
   return text
+    // Strip https:// or http:// when followed by www. — the www-prefixed URL renders
+    // as a clickable link in every email client and we avoid the model's habit of
+    // autocapitalizing the protocol after a sentence-ending period.
+    .replace(/\b[Hh]ttps?:\/\/(?=www\.)/g, '')
+    // For the rare URL with https:// but no www. prefix, lowercase the protocol.
+    .replace(/\bHttps:\/\//g, 'https://')
+    .replace(/\bHttp:\/\//g, 'http://')
     .replace(/Won'tBow/g, "Won't Bow")
     .replace(/Won\u2019tBow/g, "Won\u2019t Bow")
     .replace(/^\*{1,2}\n/, '')
@@ -1617,6 +1624,7 @@ const BatchMode = ({ strategistContext, setStrategistContext }) => {
               open={open} onToggle={() => toggleExpand(a.id)}
               findings={findings}
               rawInsight={accountInsights[a.id] || ""}
+              onInsightEdit={(text) => setAccountInsights(prev => ({ ...prev, [a.id]: text }))}
               onRetry={() => retry(a)}
               results={accResults} />
           );
@@ -1626,7 +1634,7 @@ const BatchMode = ({ strategistContext, setStrategistContext }) => {
   );
 };
 
-const BatchRow = ({ account, index, status, open, onToggle, findings, rawInsight, onRetry, results }) => {
+const BatchRow = ({ account, index, status, open, onToggle, findings, rawInsight, onInsightEdit, onRetry, results }) => {
   const [showRaw, setShowRaw] = useState(false);
   const [insightExpanded, setInsightExpanded] = useState(false);
   const contactCount = (account.contacts || []).length;
@@ -1698,7 +1706,9 @@ const BatchRow = ({ account, index, status, open, onToggle, findings, rawInsight
             )}
             {status === "ready" && showRaw && (
               <>
-                <textarea className="insight-raw" defaultValue={rawInsight} />
+                <textarea className="insight-raw"
+                  value={rawInsight}
+                  onChange={(e) => onInsightEdit && onInsightEdit(e.target.value)} />
                 <div className="insight-scroll-foot">
                   <button className="insight-raw-toggle" onClick={() => setShowRaw(false)}>View structured</button>
                 </div>

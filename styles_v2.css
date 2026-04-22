@@ -1588,14 +1588,12 @@ textarea { font-family: var(--font-text); }
 .row-retry:hover { background: var(--red); color: var(--cloud); }
 
 .insight-scroll {
-  max-height: 320px;
-  overflow-y: auto;
   border: 1px solid var(--hairline);
   border-radius: var(--radius);
   background: var(--cloud);
   padding: 12px 14px;
 }
-.insight-scroll.expanded { max-height: 640px; }
+.insight-scroll.expanded { }
 .insight-finding {
   padding: 10px 0;
   border-bottom: 1px dashed var(--hairline);
@@ -1653,7 +1651,7 @@ textarea { font-family: var(--font-text); }
 .insight-raw-toggle:hover { background: var(--wash); }
 .insight-raw {
   width: 100%;
-  min-height: 140px;
+  min-height: 600px;
   background: var(--cloud);
   border: 1px solid var(--hairline);
   padding: 10px 12px;
@@ -1694,8 +1692,6 @@ textarea { font-family: var(--font-text); }
   gap: 2px;
 }
 .row-email.v2 .re-body {
-  max-height: 180px;
-  overflow-y: auto;
   font-size: 12px;
   line-height: 1.55;
   color: var(--grey-3);
@@ -1704,7 +1700,7 @@ textarea { font-family: var(--font-text); }
   white-space: pre-wrap;
   font-family: var(--font-text);
 }
-.row-email.v2.expanded .re-body { max-height: none; }
+.row-email.v2.expanded .re-body { }
 .row-email.v2 .re-expand {
   font-family: var(--font-mono);
   font-size: 10px;
