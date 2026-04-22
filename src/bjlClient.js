@@ -16,6 +16,9 @@
  * @param {Function} params.onDone - Called when synthesis completes, with {evidence_counts}
  * @param {Function} params.onError - Called if anything fails
  * @param {Function} [params.onDebug] - Optional debug-event handler
+ * @param {Function} [params.onEvidence] - Optional handler for compact evidence rows
+ *   emitted between retrieval and synthesis. Payload: {rows: [{id, kind, body, meta}]}.
+ *   Callers that omit this keep working unchanged — the event is silently dropped.
  * @param {string} [params.endpoint] - API endpoint path (default: /api/bjl-query)
  */
 export async function queryBJL({
@@ -29,6 +32,7 @@ export async function queryBJL({
   onDone = () => {},
   onError = () => {},
   onDebug = () => {},
+  onEvidence = () => {},
   endpoint = "/api/bjl-query",
 }) {
   let response;
@@ -92,6 +96,7 @@ export async function queryBJL({
           case "done": onDone(parsed); break;
           case "error": onError(parsed); break;
           case "debug": onDebug(parsed); break;
+          case "evidence": onEvidence(parsed); break;
         }
       }
     }
