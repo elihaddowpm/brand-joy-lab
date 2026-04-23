@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Brand Joy Lab · Intelligence Engine</title>
-  <link rel="stylesheet" href="styles_v2.css?v=4" />
+  <link rel="stylesheet" href="styles_v2.css?v=5" />
 </head>
 <body data-display="on">
   <div id="root"></div>
@@ -627,8 +627,8 @@ const Icon = ({ name, size = 16 }) => {
  * ========================================================================= */
 const Rail = ({ mode, setMode }) => {
   const items = [
-    { k: "intelligence", label: "Intelligence", hint: "⌘1", num: "01" },
-    { k: "outreach",     label: "Outreach",     hint: "⌘2", num: "02" },
+    { k: "intelligence", label: "Intelligence", num: "01" },
+    { k: "outreach",     label: "Outreach",     num: "02" },
   ];
   return (
     <aside className="rail">
@@ -645,7 +645,6 @@ const Rail = ({ mode, setMode }) => {
             onClick={() => setMode(i.k)}>
             <span className="rail-num">{i.num}</span>
             <span className="rail-label">{i.label}</span>
-            <span className="rail-hint">{i.hint}</span>
           </button>
         ))}
       </div>
@@ -868,15 +867,6 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
     runQuery(text, true);
   }, [followupText, runQuery]);
 
-  // ⌘↵ submit shortcut
-  useEffect(() => {
-    const h = (e) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); run(); }
-    };
-    window.addEventListener("keydown", h);
-    return () => window.removeEventListener("keydown", h);
-  }, [run]);
-
   const docOpen = running || streamed || error;
 
   return (
@@ -978,7 +968,7 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
             </div>
             <div style={{display: "flex", gap: 8}}>
               <button className="btn primary" onClick={run} disabled={running || !prompt.trim()}>
-                {running ? "Finding insights…" : <>Go <span className="kbd">⌘↵</span></>}
+                {running ? "Finding insights…" : "Go"}
               </button>
             </div>
           </div>
@@ -1870,24 +1860,13 @@ const App = () => {
   const [drawerFilter, setDrawerFilter] = useState("all");
   const [evidenceRows, setEvidenceRows] = useState([]);
   const [strategistContext, setStrategistContext] = useState("");
-  const [showWelcome, setShowWelcome] = useState(() => !localStorage.getItem("bjl_welcome_dismissed"));
-
-  const dismissWelcome = () => {
-    localStorage.setItem("bjl_welcome_dismissed", "1");
-    setShowWelcome(false);
-  };
+  // Welcome modal shows on every page load (refresh / new tab). It is NOT
+  // shown when the user clicks "New session" — that button is an in-tool
+  // soft reset and doesn't trigger a reload, so no persistence is needed.
+  const [showWelcome, setShowWelcome] = useState(true);
+  const dismissWelcome = () => setShowWelcome(false);
 
   useEffect(() => { localStorage.setItem("bjl_mode_v2", mode); }, [mode]);
-
-  // Keyboard shortcuts: ⌘1/⌘2
-  useEffect(() => {
-    const h = (e) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "1") { e.preventDefault(); setMode("intelligence"); }
-      if ((e.metaKey || e.ctrlKey) && e.key === "2") { e.preventDefault(); setMode("outreach"); }
-    };
-    window.addEventListener("keydown", h);
-    return () => window.removeEventListener("keydown", h);
-  }, []);
 
   // Migrate legacy "batch" mode value to "outreach" — Batch has been folded
   // into Outreach. Also guards against stale localStorage after this change.
