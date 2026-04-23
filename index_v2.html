@@ -154,31 +154,40 @@ const filterCaseStudies = async (prospectContext, maxCases = 3) => {
   return topN.map(s => s.case_study);
 };
 
+const formatSingleCaseStudy = (cs) => {
+  const lines = [];
+  lines.push("─── " + cs.client.toUpperCase() + " / " + cs.campaign.toUpperCase() + " ───");
+  if (cs.url) lines.push("URL: " + cs.url);
+  lines.push("Identifier: " + cs.identifier);
+  lines.push("When: " + cs.when);
+  lines.push("Situation: " + cs.situation);
+  lines.push("Strategic move: " + cs.strategic_move);
+  lines.push("Work: " + cs.work);
+  lines.push("Results: " + cs.results);
+  lines.push("Parallel type: " + cs.parallel_type + " (" + (cs.parallel_type === "process" ? "connect via process/discipline parallel, not insight parallel" : "connect via strategic insight parallel") + ")");
+  if (cs.results_type === "descriptive_only") {
+    lines.push("Results type: descriptive_only — do not cite numerical outcomes for this case; use strategic thinking and campaign name only.");
+  }
+  lines.push("Use for: " + cs.use_for_narrative);
+  if (cs.relative_positioning) lines.push("Relative positioning: " + cs.relative_positioning);
+  if (cs.email_usage_note) lines.push("EMAIL USAGE NOTE: " + cs.email_usage_note);
+  if (cs.relationship_credential) lines.push("Relationship credential: " + cs.relationship_credential);
+  return lines.join("\n");
+};
+
 const formatCaseStudiesForPrompt = (caseStudies) => {
   if (!caseStudies || caseStudies.length === 0) {
     return "No case studies pre-selected for this prospect. Use agency credentials only; do not fabricate case study references.";
   }
-  const blocks = caseStudies.map(cs => {
-    const lines = [];
-    lines.push("─── " + cs.client.toUpperCase() + " / " + cs.campaign.toUpperCase() + " ───");
-    if (cs.url) lines.push("URL: " + cs.url);
-    lines.push("Identifier: " + cs.identifier);
-    lines.push("When: " + cs.when);
-    lines.push("Situation: " + cs.situation);
-    lines.push("Strategic move: " + cs.strategic_move);
-    lines.push("Work: " + cs.work);
-    lines.push("Results: " + cs.results);
-    lines.push("Parallel type: " + cs.parallel_type + " (" + (cs.parallel_type === "process" ? "connect via process/discipline parallel, not insight parallel" : "connect via strategic insight parallel") + ")");
-    if (cs.results_type === "descriptive_only") {
-      lines.push("Results type: descriptive_only — do not cite numerical outcomes for this case; use strategic thinking and campaign name only.");
-    }
-    lines.push("Use for: " + cs.use_for_narrative);
-    if (cs.relative_positioning) lines.push("Relative positioning: " + cs.relative_positioning);
-    if (cs.email_usage_note) lines.push("EMAIL USAGE NOTE: " + cs.email_usage_note);
-    if (cs.relationship_credential) lines.push("Relationship credential: " + cs.relationship_credential);
-    return lines.join("\n");
-  });
-  return blocks.join("\n\n");
+  const primary = caseStudies[0];
+  const alternatives = caseStudies.slice(1);
+  let output = "PRIMARY CASE STUDY (cite this one as the parallel reference in the email):\n\n";
+  output += formatSingleCaseStudy(primary);
+  if (alternatives.length > 0) {
+    output += "\n\nOTHER CASE STUDIES THE FILTER CONSIDERED (do not cite these; shown only so you understand what was ranked below the primary and why):\n\n";
+    output += alternatives.map(formatSingleCaseStudy).join("\n\n");
+  }
+  return output;
 };
 
 const extractProspectContext = ({ waldo, bjlInsights, strategistContext, prospectCategory }) => {
@@ -248,7 +257,7 @@ const buildEmailSystem = (userInstructions, formattedCaseStudies) => {
     "",
     "4. VOICE PROHIBITIONS — these characters and phrases must not appear in your output:",
     "(a) NEVER use em dashes (—) or en dashes (–). Use commas for parenthetical asides, periods to end sentences, and colons to introduce lists or examples. If you want to interrupt a sentence with an aside, use commas on both sides of the aside — do not reach for a dash. This rule has no exceptions. Do not use em dashes even in quoted verbatims, even in campaign names, even to break rhythm. If you catch yourself typing a dash, back up and rewrite the sentence.",
-    "(b) Constructions using is/isn't, was/wasn't, are/aren't — rewrite to avoid them entirely.",
+    "(b) NEVER use the contrast-and-correct rhetorical structure. This structure sets up a negation and follows with a correction. It is banned in all variants, not just the literal \"isn't\" contraction. Banned constructions include: \"X is not Y, it is Z\" / \"X isn't Y, it's Z\" / \"not X but Y\" / \"not just X, Y\" / \"not only X, Y\" / \"less about X, more about Y\" / \"X, not Y\" as a standalone clause / any version where you state what something is NOT before stating what it IS. The structure reads as formulaic in email, even when the individual words are acceptable. Restructure to state what the thing IS directly, without first stating what it is not. Instead of \"The global story is not about the artists or the venues, it is about the collective state,\" write \"The global story is the collective state those venues create.\" Direct is sharper than corrective. This rule has no exceptions. The fact that individual words in a banned construction are grammatically fine does not make the construction acceptable.",
     "(c) Banned words: leverage, unlock, synergies, actionable, in today's landscape, touch base, circle back.",
     "(d) Never start with 'I hope this email finds you well' or any variant.",
     "(e) No exclamation points.",
@@ -271,6 +280,8 @@ const buildEmailSystem = (userInstructions, formattedCaseStudies) => {
     "12. BJL FINDINGS ARE THE SETUP. THE INTERPRETATION IS THE PAYOFF. After presenting the BJL substance (finding, stat, or verbatim), say what it means for the prospect's specific situation. Do not leave the finding hanging as raw data or abstract pattern. A finding like '40% of fans feel belonging to other fans they don't know' should be followed by what that means for this prospect — how it reframes their challenge, what it implies they should approach differently, what the competitive implication is. The strategist reading the email knows how to interpret data. The CMO needs to hear what the data means for their brand. The email delivers both. If the email presents BJL substance without translating it into a prospect-specific implication, the proprietary value of the data has not been delivered. The implication sentence should be concrete, not abstract. Prefer 'you are not trying to reach NASCAR fans, you are trying to earn a place in a community' over 'this suggests opportunities for community-oriented positioning.'",
     "",
     "13. ONE STAT. If you find yourself listing multiple percentages in a row to support the same point, you are proving the same thing twice. Pick the strongest number and cut the others. Stacking stats makes the email read as research, not strategy. The email has room for one quantified BJL finding and one quantified case study result. That is enough proof. Additional numbers do not strengthen the argument. They dilute it by shifting the reader's attention from the implication to the evidence.",
+    "",
+    "14. OPENINGS ARE SPECIFIC, NOT TEMPLATED. The phrase \"the creative challenge of\" is filler reached for when the writer cannot name what is specifically creative about the challenge. It is banned as a generic opening construction. Replace with what the challenge actually is. Instead of \"the creative challenge of taking the Opry brand global\" write \"the question of how Opry's authenticity exports\" or \"the work of making Nashville's voice travel.\" If you cannot name what is creative about the challenge, call it something else (the expansion strategy, the identity question, the brand travel problem, the audience shift). The opening must feel written FOR this specific recipient, not lifted from a template. Across a batch of emails to the same company, the opening construction must vary between contacts. If every email in a batch starts with \"Following up from my last note about...\" the recipients may compare and notice the pattern. Acceptable opening alternatives: naming a specific Waldo signal (\"Your team's recent talk about X caught my attention\"), starting with the BJL finding itself (\"Something we have been tracking in the Brand Joy Lab...\"), referencing a specific public moment (\"Your Executive Chairman's earnings call comment about X...\"), or opening with the strategic implication (\"The 20+ venue expansion raises an interesting question about Y...\"). Select an alternative that fits THIS contact at THIS company, not a formula that works for everyone.",
   ].join("\n");
 
   const caseStudyBody = formattedCaseStudies && formattedCaseStudies.trim()
@@ -561,7 +572,7 @@ const queryBJL = async ({
 const generateOneEmail = async ({
   contactName, company, waldoContext, insights,
   userStrategistContext, userEmailInstructions, audienceModeValue,
-  waldoAccount, prospectCategory,
+  waldoAccount, prospectCategory, batchIndex,
 }) => {
   // Pick the 2-3 most relevant case studies for this prospect.
   let formattedCaseStudies = "";
@@ -573,7 +584,17 @@ const generateOneEmail = async ({
       prospectCategory: prospectCategory || null,
     });
     const relevantCases = await filterCaseStudies(prospectContext, 3);
-    formattedCaseStudies = formatCaseStudiesForPrompt(relevantCases);
+    // BATCH ROTATION: which case study is primary depends on contact index
+    // within the account. Ensures multiple contacts at the same account don't
+    // all cite the same case study. Single-contact mode (batchIndex=0) is a
+    // no-op: the top-ranked case study stays primary.
+    const rotateBy = relevantCases.length > 0
+      ? ((Number.isFinite(batchIndex) ? batchIndex : 0) % relevantCases.length + relevantCases.length) % relevantCases.length
+      : 0;
+    const rotatedCases = rotateBy === 0
+      ? relevantCases
+      : [...relevantCases.slice(rotateBy), ...relevantCases.slice(0, rotateBy)];
+    formattedCaseStudies = formatCaseStudiesForPrompt(rotatedCases);
   } catch (e) {
     // On failure (e.g., library.json fetch error), fall through with empty case
     // studies; buildEmailSystem will instruct the model to use credentials only.
@@ -1405,6 +1426,7 @@ const OutreachMode = ({ setEvidenceRows, strategistContext, setStrategistContext
         audienceModeValue: "external",
         waldoAccount: account,
         prospectCategory: account.category || null,
+        batchIndex: i,
       });
       out.push({ contact: c, text, error });
       setResults([...out]);
@@ -1754,6 +1776,7 @@ const BatchMode = ({ strategistContext, setStrategistContext }) => {
           audienceModeValue: "external",
           waldoAccount: account,
           prospectCategory: account.category || null,
+          batchIndex: j,
         });
         out[account.id].push({ contact: c, text, error });
         setResults({ ...out });

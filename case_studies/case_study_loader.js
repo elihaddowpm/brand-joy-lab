@@ -149,24 +149,35 @@ export function formatCaseStudiesForPrompt(caseStudies) {
     return "No case studies pre-selected for this prospect. Use agency credentials only; do not fabricate case study references.";
   }
 
-  const blocks = caseStudies.map(cs => {
-    const lines = [];
-    lines.push(`─── ${cs.client.toUpperCase()} / ${cs.campaign.toUpperCase()} ───`);
-    if (cs.url) lines.push(`URL: ${cs.url}`);
-    lines.push(`When: ${cs.when}`);
-    lines.push(`Situation: ${cs.situation}`);
-    lines.push(`Strategic move: ${cs.strategic_move}`);
-    lines.push(`Work: ${cs.work}`);
-    lines.push(`Results: ${cs.results}`);
-    lines.push(`Parallel type: ${cs.parallel_type} (${cs.parallel_type === "process" ? "connect via process/discipline parallel, not insight parallel" : "connect via strategic insight parallel"})`);
-    lines.push(`Use for: ${cs.use_for_narrative}`);
-    if (cs.relative_positioning) lines.push(`Relative positioning: ${cs.relative_positioning}`);
-    if (cs.email_usage_note) lines.push(`EMAIL USAGE NOTE: ${cs.email_usage_note}`);
-    if (cs.relationship_credential) lines.push(`Relationship credential: ${cs.relationship_credential}`);
-    return lines.join("\n");
-  });
+  const primary = caseStudies[0];
+  const alternatives = caseStudies.slice(1);
 
-  return blocks.join("\n\n");
+  let output = "PRIMARY CASE STUDY (cite this one as the parallel reference in the email):\n\n";
+  output += formatSingleCaseStudy(primary);
+
+  if (alternatives.length > 0) {
+    output += "\n\nOTHER CASE STUDIES THE FILTER CONSIDERED (do not cite these; shown only so you understand what was ranked below the primary and why):\n\n";
+    output += alternatives.map(formatSingleCaseStudy).join("\n\n");
+  }
+
+  return output;
+}
+
+function formatSingleCaseStudy(cs) {
+  const lines = [];
+  lines.push(`─── ${cs.client.toUpperCase()} / ${cs.campaign.toUpperCase()} ───`);
+  if (cs.url) lines.push(`URL: ${cs.url}`);
+  lines.push(`When: ${cs.when}`);
+  lines.push(`Situation: ${cs.situation}`);
+  lines.push(`Strategic move: ${cs.strategic_move}`);
+  lines.push(`Work: ${cs.work}`);
+  lines.push(`Results: ${cs.results}`);
+  lines.push(`Parallel type: ${cs.parallel_type}`);
+  lines.push(`Use for: ${cs.use_for_narrative}`);
+  if (cs.relative_positioning) lines.push(`Relative positioning: ${cs.relative_positioning}`);
+  if (cs.email_usage_note) lines.push(`EMAIL USAGE NOTE: ${cs.email_usage_note}`);
+  if (cs.relationship_credential) lines.push(`Relationship credential: ${cs.relationship_credential}`);
+  return lines.join("\n");
 }
 
 /**
