@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Brand Joy Lab · Intelligence Engine</title>
-  <link rel="stylesheet" href="styles_v2.css?v=5" />
+  <link rel="stylesheet" href="styles_v2.css?v=6" />
 </head>
 <body data-display="on">
   <div id="root"></div>
@@ -789,15 +789,18 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
   const [emailInstructions, setEmailInstructions] = useState("");
   const [running, setRunning] = useState(false);
   const [phase, setPhase] = useState(null);
-  const [streamed, setStreamed] = useState("");
-  const [evidenceCounts, setEvidenceCounts] = useState(null);
   const [error, setError] = useState(null);
-  // Follow-up turn state: carries the user's prior prompt and the full prior
-  // response as a preamble on the next queryBJL call. bjlClient.js does not
-  // expose a native conversation-history channel (the orchestrator is stateless
-  // per-request), so a preamble is the minimal correct path.
-  const [lastPrompt, setLastPrompt] = useState("");
-  const [lastResponse, setLastResponse] = useState("");
+
+  // Conversation history.
+  // `turns` is the full record of completed Q&A turns, oldest first, preserved
+  // across follow-ups. Each entry: { prompt, response, evidenceCounts, isFollowup }.
+  // `currentStream` + `currentPrompt` represent the in-progress turn that is
+  // actively streaming. When streaming finishes, that pair moves into `turns`.
+  const [turns, setTurns] = useState([]);
+  const [currentPrompt, setCurrentPrompt] = useState("");
+  const [currentStream, setCurrentStream] = useState("");
+  const [currentIsFollowup, setCurrentIsFollowup] = useState(false);
+
   const [followupText, setFollowupText] = useState("");
   const typeMeta = INTEL_TYPES.find(q => q.k === type);
 
@@ -810,26 +813,34 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
 
   const runQuery = useCallback(async (promptText, isFollowup = false) => {
     if (!promptText.trim() || running) return;
+
+    // A fresh (non-followup) Go starts a new conversation thread.
+    // A follow-up appends to the existing thread.
+    // We snapshot prior prompt/response from the last turn for the preamble.
+    const prevTurns = isFollowup ? turns : [];
+    const prior = isFollowup ? prevTurns[prevTurns.length - 1] : null;
+
     setRunning(true);
     setPhase("decomposing");
-    // Capture the response-so-far before the next turn so we can prepend it on
-    // this follow-up. After capture, clear the stream for the new response.
-    const prevResponse = streamed;
-    const prevPrompt = lastPrompt;
-    setStreamed("");
-    setEvidenceCounts(null);
-    setEvidenceRows([]);
     setError(null);
+    setEvidenceRows([]);
+    // If not a follow-up, wipe the thread. If it is, keep turns intact.
+    if (!isFollowup) setTurns([]);
+    setCurrentPrompt(promptText.trim());
+    setCurrentStream("");
+    setCurrentIsFollowup(isFollowup);
+
     const qualifiers = [];
     if (category && !category.startsWith("—")) qualifiers.push(`[Category: ${category}]`);
     if (audience && audience !== "any") qualifiers.push(`[Audience mode: ${audience}]`);
     let builtQuery;
-    if (isFollowup && prevPrompt && prevResponse) {
+    if (isFollowup && prior && prior.prompt && prior.response) {
       // Preamble pattern: prior turn re-sent as context so the orchestrator's
-      // decomposer and synthesis can build continuity.
+      // decomposer and synthesis can build continuity. bjlClient.js has no
+      // native conversation-history channel, so we carry it ourselves.
       builtQuery =
         (qualifiers.length ? qualifiers.join(" ") + "\n" : "") +
-        `[PRIOR QUESTION]\n${prevPrompt}\n\n[PRIOR RESPONSE]\n${prevResponse.trim()}\n\n[FOLLOW-UP QUESTION]\n${promptText.trim()}`;
+        `[PRIOR QUESTION]\n${prior.prompt}\n\n[PRIOR RESPONSE]\n${prior.response.trim()}\n\n[FOLLOW-UP QUESTION]\n${promptText.trim()}`;
     } else {
       builtQuery = (qualifiers.length ? qualifiers.join(" ") + "\n" : "") + promptText.trim();
     }
@@ -843,31 +854,61 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
       intentHint: typeMeta.intent,
       strategistContext: ctxParts.length ? ctxParts.join("\n\n") : undefined,
       onStatus: ({ phase }) => setPhase(phase),
-      onChunk: (text) => setStreamed(prev => prev + text),
+      onChunk: (text) => setCurrentStream(prev => prev + text),
       onEvidence: ({ rows }) => setEvidenceRows(rows || []),
       onDone: ({ evidence_counts }) => {
-        setEvidenceCounts(evidence_counts);
         setRunning(false);
         setPhase(null);
-        // Stash this turn as the basis for any follow-up
-        setLastPrompt(promptText.trim());
-        // Use a setState callback to capture the final streamed text
-        setStreamed(final => { setLastResponse(final); return final; });
+        // Move the in-progress turn into the thread using a setState callback
+        // so we capture the final streamed text even if the last chunk landed
+        // in the same frame as this onDone.
+        setCurrentStream(finalStream => {
+          setTurns(prev => [...prev, {
+            prompt: promptText.trim(),
+            response: finalStream,
+            evidenceCounts: evidence_counts || null,
+            isFollowup,
+          }]);
+          return "";
+        });
+        setCurrentPrompt("");
       },
-      onError: ({ message, phase }) => { setError(`${phase || "error"}: ${message}`); setRunning(false); setPhase(null); },
+      onError: ({ message, phase }) => {
+        setError(`${phase || "error"}: ${message}`);
+        setRunning(false);
+        setPhase(null);
+        setCurrentPrompt("");
+        setCurrentStream("");
+      },
     });
-  }, [category, audience, strategistContext, emailInstructions, type, typeMeta, running, streamed, lastPrompt, setEvidenceRows]);
+  }, [category, audience, strategistContext, emailInstructions, type, typeMeta, running, turns, setEvidenceRows]);
 
   const run = useCallback(() => runQuery(prompt, false), [runQuery, prompt]);
   const runFollowup = useCallback(() => {
     if (!followupText.trim()) return;
     const text = followupText;
     setFollowupText("");
-    setPrompt(text);
     runQuery(text, true);
   }, [followupText, runQuery]);
 
-  const docOpen = running || streamed || error;
+  const clearConversation = useCallback(() => {
+    setTurns([]);
+    setCurrentPrompt("");
+    setCurrentStream("");
+    setError(null);
+    setEvidenceRows([]);
+  }, [setEvidenceRows]);
+
+  const copyConversation = useCallback(() => {
+    const all = turns.map((t, i) =>
+      `Q${i + 1}${t.isFollowup ? " (follow-up)" : ""}: ${t.prompt}\n\n${t.response.trim()}`
+    ).join("\n\n---\n\n");
+    navigator.clipboard.writeText(all);
+  }, [turns]);
+
+  const lastTurn = turns[turns.length - 1];
+  const evidenceCounts = lastTurn?.evidenceCounts || null;
+  const docOpen = running || turns.length > 0 || error;
 
   return (
     <div className="canvas">
@@ -985,18 +1026,40 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
                   : running ? "retrieving…" : "—"}</span>
               </div>
               <div className="doc-actions">
-                <button className="icon-btn" title="Regenerate" onClick={run} disabled={running}><Icon name="regen" /></button>
-                <button className="icon-btn" title="Copy" onClick={() => navigator.clipboard.writeText(streamed)}><Icon name="copy" /></button>
+                <button className="icon-btn" title="Clear conversation" onClick={clearConversation} disabled={running || turns.length === 0}><Icon name="regen" /></button>
+                <button className="icon-btn" title="Copy full conversation" onClick={copyConversation} disabled={turns.length === 0}><Icon name="copy" /></button>
                 <button className="btn ghost" onClick={() => window.print()}><Icon name="download" size={12} /> Export PDF</button>
               </div>
             </div>
             {error && <div className="phase-pill err"><span className="dot" /> {error}</div>}
             {running && <div className="phase-pill curiosity"><span className="dot" /> {LOADING_CURIOSITY}{phase ? ` · ${PHASE_LABEL[phase] || phase}` : ""}</div>}
-            <div className="stream-doc">
-              {renderMarkdown(streamed)}
-              {running && <span className="streaming-cursor" />}
-            </div>
-            {!running && streamed && !error && (
+
+            {turns.map((t, i) => (
+              <div key={i} className="turn">
+                <div className="turn-head">
+                  <span className="turn-idx">Q{i + 1}{t.isFollowup ? " · follow-up" : ""}</span>
+                  <span className="turn-prompt">{t.prompt}</span>
+                </div>
+                <div className="stream-doc">
+                  {renderMarkdown(t.response)}
+                </div>
+              </div>
+            ))}
+
+            {running && currentPrompt && (
+              <div className="turn turn-active">
+                <div className="turn-head">
+                  <span className="turn-idx">Q{turns.length + 1}{currentIsFollowup ? " · follow-up" : ""}</span>
+                  <span className="turn-prompt">{currentPrompt}</span>
+                </div>
+                <div className="stream-doc">
+                  {renderMarkdown(currentStream)}
+                  <span className="streaming-cursor" />
+                </div>
+              </div>
+            )}
+
+            {!running && turns.length > 0 && !error && (
               <div className="followup fade-in">
                 <div className="followup-label">Stay curious. Ask a follow-up.</div>
                 <div className="followup-pills">

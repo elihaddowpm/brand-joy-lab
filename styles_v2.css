@@ -1775,6 +1775,37 @@ textarea { font-family: var(--font-text); }
   animation: fadeIn 200ms ease;
 }
 
+/* ---------- Intelligence mode: conversation thread ---------- */
+.turn {
+  padding: 20px 0 12px;
+  border-top: 1px solid var(--hairline);
+}
+.turn:first-of-type { border-top: 0; padding-top: 8px; }
+.turn-head {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  margin-bottom: 14px;
+}
+.turn-idx {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--grey-2);
+  flex-shrink: 0;
+  padding-top: 3px;
+  min-width: 90px;
+}
+.turn-prompt {
+  font-family: var(--font-display);
+  font-size: 20px;
+  line-height: 1.2;
+  letter-spacing: -0.005em;
+  color: var(--iron);
+}
+.turn-active .turn-prompt { opacity: 0.72; }
+
 /* ---------- Intelligence mode: follow-up prompt ---------- */
 .followup {
   margin-top: 28px;
