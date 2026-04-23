@@ -101,11 +101,137 @@ const validateCredentials = async (emailText, strategistCtx) => {
 };
 
 /* =========================================================================
- * buildEmailSystem — VERBATIM from live deployed index.html.
- * The single source of truth. Every email-writing path calls this.
- * Do not modify wording without updating the deployed version in lockstep.
+ * Case study library loader — inlined port of case_studies/case_study_loader.js.
+ * Because index_v2.html runs under text/babel (not native ESM), the exported
+ * functions from case_study_loader.js are mirrored here so Babel-transformed
+ * code can call them directly. The standalone module file remains in the repo
+ * as the canonical source of truth; keep this block in sync when that file
+ * changes.
  * ========================================================================= */
-const buildEmailSystem = (userInstructions) => {
+let _caseStudyLibraryCache = null;
+const loadCaseStudyLibrary = async () => {
+  if (_caseStudyLibraryCache) return _caseStudyLibraryCache;
+  const response = await fetch("/case_studies/library.json");
+  if (!response.ok) throw new Error("Failed to load case study library: " + response.status);
+  _caseStudyLibraryCache = await response.json();
+  return _caseStudyLibraryCache;
+};
+
+const scoreCaseStudy = (caseStudy, prospectContext) => {
+  let score = 0;
+  const { category, pain_shape, pain_keywords = [], audience_hints = [], needs_current_proof, needs_quantitative_proof } = prospectContext;
+  const allTags = [...(caseStudy.use_for_tags || [])];
+  const allContext = [...(pain_keywords || []), ...(audience_hints || [])].map(s => s.toLowerCase());
+  for (const tag of allTags) {
+    const normalizedTag = tag.toLowerCase().replace(/_/g, " ");
+    for (const ctx of allContext) {
+      if (normalizedTag.includes(ctx) || ctx.includes(normalizedTag)) score += 2;
+    }
+  }
+  if (category && caseStudy.use_for_narrative) {
+    const narrative = caseStudy.use_for_narrative.toLowerCase();
+    if (narrative.includes(category.toLowerCase())) score += 5;
+  }
+  if (pain_shape === "performance" && caseStudy.parallel_type === "process") score += 10;
+  if (pain_shape === "brand" && caseStudy.parallel_type === "insight") score += 3;
+  if (pain_shape === "brand" && caseStudy.parallel_type === "process") score -= 20;
+  if (pain_shape === "performance" && caseStudy.parallel_type === "insight") score -= 10;
+  if (needs_current_proof && (caseStudy.timing_frame === "current" || caseStudy.timing_frame === "brand_new")) score += 4;
+  if (needs_quantitative_proof && caseStudy.results_type === "descriptive_only") score -= 15;
+  return score;
+};
+
+const filterCaseStudies = async (prospectContext, maxCases = 3) => {
+  const library = await loadCaseStudyLibrary();
+  const scored = library.case_studies.map(cs => ({ case_study: cs, score: scoreCaseStudy(cs, prospectContext) }));
+  scored.sort((a, b) => b.score - a.score);
+  const topN = scored.slice(0, Math.max(maxCases, 2));
+  if (scored.length > 0 && scored[0].score < 3) {
+    const brandDefault = scored.find(s =>
+      s.case_study.parallel_type === "insight" &&
+      s.case_study.results_type === "quantitative" &&
+      !topN.some(t => t.case_study.identifier === s.case_study.identifier)
+    );
+    if (brandDefault && topN.length < maxCases) topN.push(brandDefault);
+  }
+  return topN.map(s => s.case_study);
+};
+
+const formatCaseStudiesForPrompt = (caseStudies) => {
+  if (!caseStudies || caseStudies.length === 0) {
+    return "No case studies pre-selected for this prospect. Use agency credentials only; do not fabricate case study references.";
+  }
+  const blocks = caseStudies.map(cs => {
+    const lines = [];
+    lines.push("─── " + cs.client.toUpperCase() + " / " + cs.campaign.toUpperCase() + " ───");
+    if (cs.url) lines.push("URL: " + cs.url);
+    lines.push("Identifier: " + cs.identifier);
+    lines.push("When: " + cs.when);
+    lines.push("Situation: " + cs.situation);
+    lines.push("Strategic move: " + cs.strategic_move);
+    lines.push("Work: " + cs.work);
+    lines.push("Results: " + cs.results);
+    lines.push("Parallel type: " + cs.parallel_type + " (" + (cs.parallel_type === "process" ? "connect via process/discipline parallel, not insight parallel" : "connect via strategic insight parallel") + ")");
+    if (cs.results_type === "descriptive_only") {
+      lines.push("Results type: descriptive_only — do not cite numerical outcomes for this case; use strategic thinking and campaign name only.");
+    }
+    lines.push("Use for: " + cs.use_for_narrative);
+    if (cs.relative_positioning) lines.push("Relative positioning: " + cs.relative_positioning);
+    if (cs.email_usage_note) lines.push("EMAIL USAGE NOTE: " + cs.email_usage_note);
+    if (cs.relationship_credential) lines.push("Relationship credential: " + cs.relationship_credential);
+    return lines.join("\n");
+  });
+  return blocks.join("\n\n");
+};
+
+const extractProspectContext = ({ waldo, bjlInsights, strategistContext, prospectCategory }) => {
+  const pain_keywords = [];
+  const audience_hints = [];
+  let pain_shape = "brand";
+  let needs_current_proof = false;
+  let needs_quantitative_proof = true;
+  if (waldo) {
+    const waldoText = JSON.stringify(waldo).toLowerCase();
+    const performanceIndicators = ["roas", "cac", "attribution", "booking cost", "performance marketing",
+      "conversion", "cost per", "media efficiency", "media waste", "measurement",
+      "ceo pressure on revenue", "revenue pressure", "budget cut", "flat budget",
+      "fragmented media", "multi-location", "portfolio", "multi-property"];
+    const performanceHits = performanceIndicators.filter(term => waldoText.includes(term));
+    if (performanceHits.length >= 2) pain_shape = "performance";
+    else if (performanceHits.length === 1) pain_shape = "mixed";
+    pain_keywords.push(...performanceHits);
+    const brandIndicators = ["positioning", "repositioning", "brand refresh", "identity", "platform",
+      "differentiation", "category", "audience shift", "rebrand", "tagline",
+      "creative", "emotional territory", "perception", "resonance"];
+    pain_keywords.push(...brandIndicators.filter(term => waldoText.includes(term)));
+    const audienceIndicators = ["multicultural", "diverse audience", "black", "latino", "gen z", "millennial",
+      "boomer", "family", "parents", "wellness", "luxury", "heritage",
+      "performance marketing", "destination", "tourism", "cvb", "hospitality"];
+    audience_hints.push(...audienceIndicators.filter(term => waldoText.includes(term)));
+  }
+  if (bjlInsights) {
+    const bjlLower = bjlInsights.toLowerCase();
+    const joyKeywords = ["escape", "discovery", "reconnection", "reset", "anticipation", "playful",
+      "tranquil", "relational", "aspirational", "wonder", "belonging"];
+    pain_keywords.push(...joyKeywords.filter(term => bjlLower.includes(term)));
+  }
+  return {
+    category: prospectCategory || null,
+    pain_shape,
+    pain_keywords: [...new Set(pain_keywords)],
+    audience_hints: [...new Set(audience_hints)],
+    needs_current_proof,
+    needs_quantitative_proof,
+  };
+};
+
+/* =========================================================================
+ * buildEmailSystem — VERBATIM from live deployed index.html, with one change:
+ * the case study library is no longer embedded. It is passed in per-call as
+ * formattedCaseStudies (pre-filtered, 2-3 most-relevant cases for this prospect).
+ * The single source of truth for every email-writing path.
+ * ========================================================================= */
+const buildEmailSystem = (userInstructions, formattedCaseStudies) => {
   const hasOverride = userInstructions && userInstructions.trim().length > 0;
 
   const SAFETY_FLOOR = [
@@ -133,7 +259,7 @@ const buildEmailSystem = (userInstructions) => {
     "",
     "5. NEVER fabricate facts about the prospect or their company. If the Waldo intelligence does not say something, do not invent it.",
     "",
-    "6. CASE STUDY REFERENCES — Case studies are proof points that support the BJL insight, not the central content of the email. The case study earns its place by demonstrating that PETERMAYER has applied this kind of thinking before to a parallel challenge. It is never the meat of the email. Keep the case study reference brief: a sentence or two of relevance, a sentence or two on the work, the URL exactly as provided by the user, and one supporting result if it sharpens the connection to the BJL insight. Do not let the case study description run longer than the BJL observation. When email instructions name a case study by URL, title, or short identifier (Pelicans, Kennedy), draw your reference from the CASE STUDY LIBRARY below. Use the actual content from the library, not generic language about the brand. Numbers from the library are defensible and can be cited. Do not cite numbers or claim results that are not in the library. If the email instructions name a case study, always include the URL exactly as provided — do not modify, shorten, or substitute the link. Campaign results quoted from the case study library should favor descriptive phrasing over dollar figures in first-touch emails — say 'the campaign measurably moved revenue' rather than '$5.7MM in campaign-attributed revenue.' Third-party rankings and awards (Tripadvisor, press coverage) may be quoted as-is.",
+    "6. CASE STUDY REFERENCES — Case studies are proof points that support the BJL insight, not the central content of the email. The case study earns its place by demonstrating that PETERMAYER has applied this kind of thinking before to a parallel challenge. It is never the meat of the email. Keep the case study reference brief: a sentence or two of relevance, a sentence or two on the work, the URL exactly as provided by the user, and one supporting result if it sharpens the connection to the BJL insight. Do not let the case study description run longer than the BJL observation. The CASE STUDY LIBRARY below has been pre-filtered for this prospect: only the 2-3 most relevant cases are present. Use the actual content from the library, not generic language about the brand. Numbers from the library are defensible and can be cited. Do not cite numbers or claim results that are not in the library. If a case study entry has a URL, always include the URL exactly as provided — do not modify, shorten, or substitute the link. Campaign results quoted from the case study library should favor descriptive phrasing over dollar figures in first-touch emails — say 'the campaign measurably moved revenue' rather than '$5.7MM in campaign-attributed revenue.' Third-party rankings and awards (Tripadvisor, press coverage) may be quoted as-is. PARALLEL TYPE MATCHING: each case study in the library is tagged with a parallel_type. When a case study is marked 'parallel_type: insight' (most entries), connect via a strategic insight parallel — frame the reference as 'when we worked with X, we saw a parallel pattern to what you may be facing.' When a case study is marked 'parallel_type: process', connect via a process/discipline parallel — frame the reference as 'we built a performance system for X that turned fragmented activity into a disciplined engine, and the shape of that approach applies to multi-location brands with revenue pressure.' Do not stretch a process case study into an insight parallel or vice versa. If the prospect's pain is brand resonance or positioning, reach for an insight case. If the prospect's pain is performance, measurement, or operational discipline, reach for the process case. DESCRIPTIVE-ONLY RESULTS: if a case study's results section indicates descriptive-only framing (no numerical results — the library will flag this with a 'Results type: descriptive_only' line), do not cite numerical outcomes for that case study. Cite the strategic thinking, the campaign name, and the work itself. If the email needs numerical proof, pair the descriptive-only case study with a case study that has quantitative results, or use a different case study entirely.",
     "",
     "7. TEMPORAL CLAIMS — Never describe PETERMAYER work as 'recent,' 'just-published,' 'just-wrapped,' 'just-launched,' or 'new' unless the case study library entry explicitly says the work is current. Banned phrasings include 'we just wrapped,' 'we just published,' 'we just worked with,' 'just shared,' and equivalent constructions that imply the work is fresh news. The library will tell you when each engagement happened. Use that timing honestly. If the library shows older work, frame it as work the firm has done, work from the firm's archive, or work that continues to inform the firm's thinking. Specific phrasings that work: 'work we did with [client] a few years back,' 'a project from our archive that is relevant here,' 'something we built for [client] that has stayed with us.' Never invent a specific year if one is not in the library, but never imply recency that the library does not support.",
     "",
@@ -144,48 +270,22 @@ const buildEmailSystem = (userInstructions) => {
     "10. SUBJECT LINE — Every email must begin with a subject line. Write the subject on its own line at the top of the output, prefixed with 'Subject:' so the downstream parser can extract it. The subject should be short (5-9 words), specific to this recipient, and lean toward intrigue rather than summary. Good subjects telegraph why the email is worth opening without giving away the content. Avoid generic subjects like 'Quick question' or 'Following up.' Avoid clickbait. Avoid subjects that match the opening line of the body word-for-word.",
   ].join("\n");
 
+  const caseStudyBody = formattedCaseStudies && formattedCaseStudies.trim()
+    ? formattedCaseStudies
+    : "No case studies pre-selected for this prospect. Use agency credentials only; do not fabricate case study references.";
   const CASE_STUDY_LIBRARY = [
     "",
     "═".repeat(75),
-    "CASE STUDY LIBRARY — PETERMAYER WORK",
+    "CASE STUDY LIBRARY — PETERMAYER WORK (pre-filtered for this prospect)",
     "═".repeat(75),
     "",
-    "Use these summaries when the email instructions reference a case study.",
-    "Quote specifics from these summaries rather than writing generic credentials.",
+    "These are the 2-3 case studies most relevant to this prospect's situation. They have been pre-filtered from the full library; you do not need to evaluate fit — you only need to pick the right one (or pair) for this email.",
     "",
     "Voice: refer to PETERMAYER's work using 'we' (we built, we did this work, we worked with). The firm's continuity makes that voice defensible regardless of when the work happened.",
     "",
     "Timing: each entry has a 'When' line. Use that timing honestly when framing the reference. Do not characterize older work as 'recent' or 'just-wrapped.' Phrasings that work for older work include 'work we did with [client] a few years back,' 'a project from our archive,' or 'something we built that has stayed with us.' If a relationship is ongoing, you can say so.",
     "",
-    "─── NEW ORLEANS PELICANS ───",
-    "URL: https://www.peteramayer.com/work/new-olreans-pelicans/brand-awareness-campaign",
-    "Identifier: Pelicans",
-    "When: The WON'T BOW DOWN campaign launched around 2019. Frame this as work from a few years back, not as recent or just-published.",
-    "",
-    "The situation: New Orleans is a football town. The Pelicans were the less-beloved kid brother to the Saints. Thin crowds led to fewer advertisers, less TV coverage, and a paradise for ticket scalpers. PETERMAYER's brief was to make the team as valuable to the community as its NFL counterpart.",
-    "",
-    "The strategic move: The Pelicans' problem was not the team. It was the relationship between the team and the city. We did not try to make people love the team. We made loving the team a way of loving the city. The cultural insight: defiance is the city's defining trait. Disrespect New Orleans and even our biggest naysayers come after you. Civic pride became the route to fan affinity.",
-    "",
-    "The work: WON'T BOW DOWN, a campaign built on a lyric from an old Mardi Gras Indian song that New Orleanians instantly recognized. The launch teased the meaning before revealing it. Mysterious 'WBD' letters appeared everywhere from player hats to bat signal projections, getting the city guessing. The reveal landed right before the season. The campaign extended into the locker room itself and into anthemic murals throughout the city.",
-    "",
-    "The results: 78M organic reach. 12,000 season tickets sold (filling two-thirds of Smoothie King Arena after a 33-49 season). 424K interactions. 360K likes in weeks. Coverage from regional media and the rest of the NBA. Tripadvisor and iSpot praise.",
-    "",
-    "Use this case study for: Sports teams of any level. Regional brands fighting for civic mindshare. Brands with an awareness or affinity gap. Underdog brands. Any brand that would benefit from being reframed as a civic icon rather than a commercial product. Brands looking to draft off cultural capital they don't currently own. Less obviously: visitor attractions wanting to convert from tourist destination to local civic asset, financial brands looking to anchor in regional identity, university or institutional brands where the audience is emotional but the brand is institutional.",
-    "",
-    "─── KENNEDY SPACE CENTER VISITOR COMPLEX ───",
-    "URL: https://www.peteramayer.com/work/kennedy-space-center/kennedy-space-center-visitor-complex",
-    "Identifier: Kennedy",
-    "When: We worked with Kennedy Space Center Visitor Complex from around 2015 through last year, a longstanding relationship. The LOOK UP campaign itself comes from the first half of that engagement (roughly 2015-2019). Frame as long-running client work whose creative thinking has continued to inform the firm. Do not call LOOK UP recent.",
-    "",
-    "The situation: With the Space Shuttle grounded, Kennedy Space Center went from a launchpad to another Florida attraction overnight. The Visitor Complex needed to make space travel as compelling as Disney World and Universal Studios.",
-    "",
-    "The strategic move: Kennedy's problem was not that people had stopped caring about space. It was that they had started experiencing space through screens. The Visitor Complex was selling proximity to a thing people thought they had already consumed. Our reframe: you can watch a launch on YouTube, but you cannot feel the ground shake. The campaign hinges on the difference between mediated experience and embodied experience.",
-    "",
-    "The work: LOOK UP, a campaign that pulled the screens away and compelled people to touch, feel, and experience space exploration firsthand. The name works on two levels: the literal physical action a visitor takes at the Complex, and a metaphorical posture about wonder.",
-    "",
-    "The results: $5.7MM campaign-attributed revenue. 121MM organic impressions. 49% new visitors. Ranked the #1 Attraction in the U.S. on Tripadvisor.",
-    "",
-    "Use this case study for: Visitor attractions of any kind. Theme parks. Zoos. Aquariums. Science centers. Museums. National park gateways and visitor complexes. Family destination brands competing against entertainment alternatives. Any brand whose subject matter consumers experience through media but whose business model depends on selling the embodied version. Less obviously: live sports properties whose problem is 'people watch on TV, why come to the stadium,' retail brands where Instagram has displaced the store visit, restaurant brands competing with delivery for the dine-in occasion.",
+    caseStudyBody,
     "",
     "═".repeat(75),
     "END CASE STUDY LIBRARY",
@@ -458,8 +558,25 @@ const queryBJL = async ({
 const generateOneEmail = async ({
   contactName, company, waldoContext, insights,
   userStrategistContext, userEmailInstructions, audienceModeValue,
+  waldoAccount, prospectCategory,
 }) => {
-  const EMAIL_SYSTEM = buildEmailSystem(userEmailInstructions);
+  // Pick the 2-3 most relevant case studies for this prospect.
+  let formattedCaseStudies = "";
+  try {
+    const prospectContext = extractProspectContext({
+      waldo: waldoAccount || null,
+      bjlInsights: insights || "",
+      strategistContext: userStrategistContext || "",
+      prospectCategory: prospectCategory || null,
+    });
+    const relevantCases = await filterCaseStudies(prospectContext, 3);
+    formattedCaseStudies = formatCaseStudiesForPrompt(relevantCases);
+  } catch (e) {
+    // On failure (e.g., library.json fetch error), fall through with empty case
+    // studies; buildEmailSystem will instruct the model to use credentials only.
+    formattedCaseStudies = "";
+  }
+  const EMAIL_SYSTEM = buildEmailSystem(userEmailInstructions, formattedCaseStudies);
   let userMsg = "";
   if (insights && insights.trim()) userMsg += "[BJL INSIGHTS — choose the single most relevant]\n" + insights.trim() + "\n\n";
   if (waldoContext) userMsg += "[WALDO INTELLIGENCE]\n" + waldoContext + "\n\n";
@@ -1283,6 +1400,8 @@ const OutreachMode = ({ setEvidenceRows, strategistContext, setStrategistContext
         userStrategistContext: strategistContext,
         userEmailInstructions: emailInstructions,
         audienceModeValue: "external",
+        waldoAccount: account,
+        prospectCategory: account.category || null,
       });
       out.push({ contact: c, text, error });
       setResults([...out]);
@@ -1630,6 +1749,8 @@ const BatchMode = ({ strategistContext, setStrategistContext }) => {
           userStrategistContext: strategistContext,
           userEmailInstructions: instructions,
           audienceModeValue: "external",
+          waldoAccount: account,
+          prospectCategory: account.category || null,
         });
         out[account.id].push({ contact: c, text, error });
         setResults({ ...out });
