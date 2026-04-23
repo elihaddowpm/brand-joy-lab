@@ -7,12 +7,6 @@ import { decompose } from "../../src/decomposer.js";
 import { retrieve } from "../../src/retrieval.js";
 import { synthesize } from "../../src/synthesis.js";
 
-// Sanitize the synthesis output at the point of streaming.
-// Catches em dashes the model might slip in despite the system prompt.
-function sanitizeChunk(text) {
-  return text.replace(/—/g, ", ").replace(/–/g, "-");
-}
-
 // Trim a string to max N chars, preserving word boundaries where possible.
 function trim(str, n) {
   if (!str) return "";
@@ -195,8 +189,7 @@ export default async (request) => {
         });
         
         for await (const chunk of synthStream) {
-          const sanitized = sanitizeChunk(chunk);
-          sendEvent("chunk", { text: sanitized });
+          sendEvent("chunk", { text: chunk });
         }
         
         sendEvent("done", { 

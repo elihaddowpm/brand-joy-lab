@@ -44,9 +44,6 @@ const sanitizeEmail = (text) => {
     .replace(/^\*{1,2}\n/, '')
     .replace(/^\*{1,2}\s*/, '')
     .replace(/^(Subject:)\*{1,2}\s*/, '$1')
-    .replace(/ — /g, '. ')
-    .replace(/—/g, '. ')
-    .replace(/ – /g, '. ')
     .replace(/\.\s*,/g, '.')
     .replace(/\.\./g, '.')
     .replace(/ \. /g, '. ')
@@ -250,7 +247,7 @@ const buildEmailSystem = (userInstructions, formattedCaseStudies) => {
     "3. WALDO RULES — Treat Waldo intelligence as background context that explains why you noticed this prospect, not as a problem they need solved. The signal is your reason for reaching out, not a brief you have been put on. Do not assume the surfaced trigger is their most pressing concern. It may be one of many things on their plate. Do not write the email in a way that implies you know what they are working on or what they need. Curiosity beats assumption. A prospective partner asking thoughtful questions reads better than an outside expert diagnosing the situation.",
     "",
     "4. VOICE PROHIBITIONS — these characters and phrases must not appear in your output:",
-    "(a) Em dashes are absolutely forbidden. The character — must not appear anywhere. Use commas, periods, or restructure the sentence.",
+    "(a) NEVER use em dashes (—) or en dashes (–). Use commas for parenthetical asides, periods to end sentences, and colons to introduce lists or examples. If you want to interrupt a sentence with an aside, use commas on both sides of the aside — do not reach for a dash. This rule has no exceptions. Do not use em dashes even in quoted verbatims, even in campaign names, even to break rhythm. If you catch yourself typing a dash, back up and rewrite the sentence.",
     "(b) Constructions using is/isn't, was/wasn't, are/aren't — rewrite to avoid them entirely.",
     "(c) Banned words: leverage, unlock, synergies, actionable, in today's landscape, touch base, circle back.",
     "(d) Never start with 'I hope this email finds you well' or any variant.",
