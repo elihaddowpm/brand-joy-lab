@@ -1774,3 +1774,125 @@ textarea { font-family: var(--font-text); }
   z-index: 50;
   animation: fadeIn 200ms ease;
 }
+
+/* ---------- Intelligence mode: follow-up prompt ---------- */
+.followup {
+  margin-top: 28px;
+  padding: 18px 20px 20px;
+  border-top: 1px solid var(--hairline);
+  background: var(--wash);
+  border-radius: var(--radius);
+}
+.followup-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--grey-2);
+  margin-bottom: 10px;
+}
+.followup-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.followup-pill {
+  font-family: var(--font-text);
+  font-size: 12px;
+  padding: 6px 12px;
+  border: 1px solid var(--hairline-strong);
+  background: var(--cloud);
+  color: var(--iron);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.followup-pill:hover { background: var(--wash); border-color: var(--iron); }
+.followup-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.followup-input {
+  flex: 1;
+  padding: 10px 14px;
+  border: 1px solid var(--hairline-strong);
+  background: var(--cloud);
+  border-radius: var(--radius);
+  font-size: 14px;
+  outline: 0;
+}
+.followup-input:focus { border-color: var(--iron); }
+
+/* ---------- Phase pill variant for curiosity loading copy ---------- */
+.phase-pill.curiosity {
+  background: var(--wash);
+  color: var(--iron);
+  font-style: italic;
+}
+
+/* ---------- Outreach row expansion: full-width Waldo section ---------- */
+.row-col.row-col-full { grid-column: 1 / -1; }
+.row-waldo {
+  padding: 12px 14px;
+  background: var(--cloud);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+}
+
+/* ---------- Topbar icon-only ghost button (for ?) ---------- */
+.btn.icon-only {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  border-radius: 999px;
+}
+
+/* ---------- Welcome modal ---------- */
+.welcome-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(14, 14, 14, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  animation: fadeIn 180ms ease;
+}
+.welcome-modal {
+  background: var(--cloud);
+  padding: 40px 48px 36px;
+  border-radius: 6px;
+  max-width: 440px;
+  width: calc(100% - 40px);
+  text-align: center;
+  box-shadow: 0 24px 80px -12px rgba(0,0,0,0.35);
+  animation: fadeIn 200ms ease;
+}
+.welcome-logo {
+  width: 180px;
+  height: auto;
+  display: block;
+  margin: 0 auto 20px;
+}
+.welcome-title {
+  font-family: var(--font-display);
+  font-size: 32px;
+  line-height: 1.05;
+  margin: 0 0 6px;
+  letter-spacing: -0.005em;
+}
+.welcome-subtitle {
+  font-size: 15px;
+  color: var(--grey-2);
+  margin: 0 0 24px;
+}
+.welcome-cta {
+  padding: 10px 24px;
+  font-size: 14px;
+}

@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Brand Joy Lab · Intelligence Engine</title>
-  <link rel="stylesheet" href="styles_v2.css?v=3" />
+  <link rel="stylesheet" href="styles_v2.css?v=4" />
 </head>
 <body data-display="on">
   <div id="root"></div>
@@ -40,13 +40,13 @@ const sanitizeEmail = (text) => {
     .replace(/\bHttps:\/\//g, 'https://')
     .replace(/\bHttp:\/\//g, 'http://')
     .replace(/Won'tBow/g, "Won't Bow")
-    .replace(/Won\u2019tBow/g, "Won\u2019t Bow")
+    .replace(/Won’tBow/g, "Won’t Bow")
     .replace(/^\*{1,2}\n/, '')
     .replace(/^\*{1,2}\s*/, '')
     .replace(/^(Subject:)\*{1,2}\s*/, '$1')
-    .replace(/ \u2014 /g, '. ')
-    .replace(/\u2014/g, '. ')
-    .replace(/ \u2013 /g, '. ')
+    .replace(/ — /g, '. ')
+    .replace(/—/g, '. ')
+    .replace(/ – /g, '. ')
     .replace(/\.\s*,/g, '.')
     .replace(/\.\./g, '.')
     .replace(/ \. /g, '. ')
@@ -124,8 +124,8 @@ const buildEmailSystem = (userInstructions) => {
     "3. WALDO RULES — Treat Waldo intelligence as background context that explains why you noticed this prospect, not as a problem they need solved. The signal is your reason for reaching out, not a brief you have been put on. Do not assume the surfaced trigger is their most pressing concern. It may be one of many things on their plate. Do not write the email in a way that implies you know what they are working on or what they need. Curiosity beats assumption. A prospective partner asking thoughtful questions reads better than an outside expert diagnosing the situation.",
     "",
     "4. VOICE PROHIBITIONS — these characters and phrases must not appear in your output:",
-    "(a) Em dashes are absolutely forbidden. The character \u2014 must not appear anywhere. Use commas, periods, or restructure the sentence.",
-    "(b) Constructions using is/isn't, was/wasn't, are/aren't \u2014 rewrite to avoid them entirely.",
+    "(a) Em dashes are absolutely forbidden. The character — must not appear anywhere. Use commas, periods, or restructure the sentence.",
+    "(b) Constructions using is/isn't, was/wasn't, are/aren't — rewrite to avoid them entirely.",
     "(c) Banned words: leverage, unlock, synergies, actionable, in today's landscape, touch base, circle back.",
     "(d) Never start with 'I hope this email finds you well' or any variant.",
     "(e) No exclamation points.",
@@ -133,22 +133,22 @@ const buildEmailSystem = (userInstructions) => {
     "",
     "5. NEVER fabricate facts about the prospect or their company. If the Waldo intelligence does not say something, do not invent it.",
     "",
-    "6. CASE STUDY REFERENCES \u2014 Case studies are proof points that support the BJL insight, not the central content of the email. The case study earns its place by demonstrating that PETERMAYER has applied this kind of thinking before to a parallel challenge. It is never the meat of the email. Keep the case study reference brief: a sentence or two of relevance, a sentence or two on the work, the URL exactly as provided by the user, and one supporting result if it sharpens the connection to the BJL insight. Do not let the case study description run longer than the BJL observation. When email instructions name a case study by URL, title, or short identifier (Pelicans, Kennedy), draw your reference from the CASE STUDY LIBRARY below. Use the actual content from the library, not generic language about the brand. Numbers from the library are defensible and can be cited. Do not cite numbers or claim results that are not in the library. If the email instructions name a case study, always include the URL exactly as provided \u2014 do not modify, shorten, or substitute the link. Campaign results quoted from the case study library should favor descriptive phrasing over dollar figures in first-touch emails \u2014 say 'the campaign measurably moved revenue' rather than '$5.7MM in campaign-attributed revenue.' Third-party rankings and awards (Tripadvisor, press coverage) may be quoted as-is.",
+    "6. CASE STUDY REFERENCES — Case studies are proof points that support the BJL insight, not the central content of the email. The case study earns its place by demonstrating that PETERMAYER has applied this kind of thinking before to a parallel challenge. It is never the meat of the email. Keep the case study reference brief: a sentence or two of relevance, a sentence or two on the work, the URL exactly as provided by the user, and one supporting result if it sharpens the connection to the BJL insight. Do not let the case study description run longer than the BJL observation. When email instructions name a case study by URL, title, or short identifier (Pelicans, Kennedy), draw your reference from the CASE STUDY LIBRARY below. Use the actual content from the library, not generic language about the brand. Numbers from the library are defensible and can be cited. Do not cite numbers or claim results that are not in the library. If the email instructions name a case study, always include the URL exactly as provided — do not modify, shorten, or substitute the link. Campaign results quoted from the case study library should favor descriptive phrasing over dollar figures in first-touch emails — say 'the campaign measurably moved revenue' rather than '$5.7MM in campaign-attributed revenue.' Third-party rankings and awards (Tripadvisor, press coverage) may be quoted as-is.",
     "",
-    "7. TEMPORAL CLAIMS \u2014 Never describe PETERMAYER work as 'recent,' 'just-published,' 'just-wrapped,' 'just-launched,' or 'new' unless the case study library entry explicitly says the work is current. Banned phrasings include 'we just wrapped,' 'we just published,' 'we just worked with,' 'just shared,' and equivalent constructions that imply the work is fresh news. The library will tell you when each engagement happened. Use that timing honestly. If the library shows older work, frame it as work the firm has done, work from the firm's archive, or work that continues to inform the firm's thinking. Specific phrasings that work: 'work we did with [client] a few years back,' 'a project from our archive that is relevant here,' 'something we built for [client] that has stayed with us.' Never invent a specific year if one is not in the library, but never imply recency that the library does not support.",
+    "7. TEMPORAL CLAIMS — Never describe PETERMAYER work as 'recent,' 'just-published,' 'just-wrapped,' 'just-launched,' or 'new' unless the case study library entry explicitly says the work is current. Banned phrasings include 'we just wrapped,' 'we just published,' 'we just worked with,' 'just shared,' and equivalent constructions that imply the work is fresh news. The library will tell you when each engagement happened. Use that timing honestly. If the library shows older work, frame it as work the firm has done, work from the firm's archive, or work that continues to inform the firm's thinking. Specific phrasings that work: 'work we did with [client] a few years back,' 'a project from our archive that is relevant here,' 'something we built for [client] that has stayed with us.' Never invent a specific year if one is not in the library, but never imply recency that the library does not support.",
     "",
     "8. BJL DATA IS ALWAYS PRESENT. Every email must include one short, specific BJL behavioral observation. This is the single most important reason PETERMAYER is reaching out and the only proprietary content in the email. Without it, the email is generic outreach. The BJL observation is the meat of the email. Other elements (hook, case study reference, credentials, close) support it. Pick ONE finding from the pulled BJL insights. Do not summarize multiple findings. Do not list. Pull one or two sentences worth of content from the chosen finding and frame it as something the firm has been tracking. The case study, when included, is a proof point that supports the BJL insight by showing the firm has applied this kind of thinking before. The case study is never a substitute for the BJL insight. The hierarchy: BJL insight first as the proprietary substance, case study second as proof we have done parallel thinking, agency credibility third as quick context. If you find yourself writing an email where the case study is the central content and the BJL data is missing or perfunctory, restructure. If no BJL insights have been provided to you, do not generate the email. Respond instead with: 'No BJL insights were provided. Pull insights before generating this email.' This is a hard rule. The whole purpose of this tool is to surface proprietary BJL data in outreach. An email without it does not represent the firm.",
     "",
-    "9. BJL FIGURES \u2014 OBSERVATION OVER NUMBER. When translating a BJL finding into email language, prefer the behavioral observation to the raw number. Do not quote Joy Index scores, point gaps between items, or percentage figures as standalone statistics in the body of an email. The observation the number supports is more persuasive than the number itself, and exposing the number invites questions the email cannot answer (what scale, what sample, what methodology). Example: a finding like 'in-person auto racing scores 20.5 vs 18.0 on the Joy Index' should be written as 'we have been tracking the gap between the live and broadcast versions of motorsports \u2014 the live experience carries emotional weight that broadcast struggles to preserve.' The strategic observation is retained. The brittle number is not. This rule applies only to BJL figures. Third-party validations from case studies (Tripadvisor rankings, industry awards, press coverage) may be cited normally, because those are externally verifiable and not proprietary to PETERMAYER's data.",
+    "9. BJL FIGURES — OBSERVATION OVER NUMBER. When translating a BJL finding into email language, prefer the behavioral observation to the raw number. Do not quote Joy Index scores, point gaps between items, or percentage figures as standalone statistics in the body of an email. The observation the number supports is more persuasive than the number itself, and exposing the number invites questions the email cannot answer (what scale, what sample, what methodology). Example: a finding like 'in-person auto racing scores 20.5 vs 18.0 on the Joy Index' should be written as 'we have been tracking the gap between the live and broadcast versions of motorsports — the live experience carries emotional weight that broadcast struggles to preserve.' The strategic observation is retained. The brittle number is not. This rule applies only to BJL figures. Third-party validations from case studies (Tripadvisor rankings, industry awards, press coverage) may be cited normally, because those are externally verifiable and not proprietary to PETERMAYER's data.",
     "",
-    "10. SUBJECT LINE \u2014 Every email must begin with a subject line. Write the subject on its own line at the top of the output, prefixed with 'Subject:' so the downstream parser can extract it. The subject should be short (5-9 words), specific to this recipient, and lean toward intrigue rather than summary. Good subjects telegraph why the email is worth opening without giving away the content. Avoid generic subjects like 'Quick question' or 'Following up.' Avoid clickbait. Avoid subjects that match the opening line of the body word-for-word.",
+    "10. SUBJECT LINE — Every email must begin with a subject line. Write the subject on its own line at the top of the output, prefixed with 'Subject:' so the downstream parser can extract it. The subject should be short (5-9 words), specific to this recipient, and lean toward intrigue rather than summary. Good subjects telegraph why the email is worth opening without giving away the content. Avoid generic subjects like 'Quick question' or 'Following up.' Avoid clickbait. Avoid subjects that match the opening line of the body word-for-word.",
   ].join("\n");
 
   const CASE_STUDY_LIBRARY = [
     "",
-    "\u2550".repeat(75),
-    "CASE STUDY LIBRARY \u2014 PETERMAYER WORK",
-    "\u2550".repeat(75),
+    "═".repeat(75),
+    "CASE STUDY LIBRARY — PETERMAYER WORK",
+    "═".repeat(75),
     "",
     "Use these summaries when the email instructions reference a case study.",
     "Quote specifics from these summaries rather than writing generic credentials.",
@@ -157,7 +157,7 @@ const buildEmailSystem = (userInstructions) => {
     "",
     "Timing: each entry has a 'When' line. Use that timing honestly when framing the reference. Do not characterize older work as 'recent' or 'just-wrapped.' Phrasings that work for older work include 'work we did with [client] a few years back,' 'a project from our archive,' or 'something we built that has stayed with us.' If a relationship is ongoing, you can say so.",
     "",
-    "\u2500\u2500\u2500 NEW ORLEANS PELICANS \u2500\u2500\u2500",
+    "─── NEW ORLEANS PELICANS ───",
     "URL: https://www.peteramayer.com/work/new-olreans-pelicans/brand-awareness-campaign",
     "Identifier: Pelicans",
     "When: The WON'T BOW DOWN campaign launched around 2019. Frame this as work from a few years back, not as recent or just-published.",
@@ -172,7 +172,7 @@ const buildEmailSystem = (userInstructions) => {
     "",
     "Use this case study for: Sports teams of any level. Regional brands fighting for civic mindshare. Brands with an awareness or affinity gap. Underdog brands. Any brand that would benefit from being reframed as a civic icon rather than a commercial product. Brands looking to draft off cultural capital they don't currently own. Less obviously: visitor attractions wanting to convert from tourist destination to local civic asset, financial brands looking to anchor in regional identity, university or institutional brands where the audience is emotional but the brand is institutional.",
     "",
-    "\u2500\u2500\u2500 KENNEDY SPACE CENTER VISITOR COMPLEX \u2500\u2500\u2500",
+    "─── KENNEDY SPACE CENTER VISITOR COMPLEX ───",
     "URL: https://www.peteramayer.com/work/kennedy-space-center/kennedy-space-center-visitor-complex",
     "Identifier: Kennedy",
     "When: We worked with Kennedy Space Center Visitor Complex from around 2015 through last year, a longstanding relationship. The LOOK UP campaign itself comes from the first half of that engagement (roughly 2015-2019). Frame as long-running client work whose creative thinking has continued to inform the firm. Do not call LOOK UP recent.",
@@ -187,26 +187,26 @@ const buildEmailSystem = (userInstructions) => {
     "",
     "Use this case study for: Visitor attractions of any kind. Theme parks. Zoos. Aquariums. Science centers. Museums. National park gateways and visitor complexes. Family destination brands competing against entertainment alternatives. Any brand whose subject matter consumers experience through media but whose business model depends on selling the embodied version. Less obviously: live sports properties whose problem is 'people watch on TV, why come to the stadium,' retail brands where Instagram has displaced the store visit, restaurant brands competing with delivery for the dine-in occasion.",
     "",
-    "\u2550".repeat(75),
+    "═".repeat(75),
     "END CASE STUDY LIBRARY",
-    "\u2550".repeat(75),
+    "═".repeat(75),
   ].join("\n");
 
   const DEFAULT_STRUCTURE = [
     "",
-    "STRUCTURE \u2014 use this default unless the user provides specific email instructions:",
+    "STRUCTURE — use this default unless the user provides specific email instructions:",
     "",
     "THE THREE-PART ARCHITECTURE OF EVERY EMAIL:",
-    "1. HOOK \u2014 Open with something specific enough that the prospect knows you actually paid attention to their world. The Waldo signal is one possible source, but the goal is to demonstrate genuine curiosity about their work, not to surface a problem you assume they have. Avoid framing the hook as 'you must be dealing with X' or 'the brief on your desk is Y'. Lead instead with what is true and observable about their situation, paired with a question or an observation that invites conversation rather than offering a diagnosis. The hook earns the next sentence. It does not deliver a verdict.",
-    "2. BJL BRIDGE \u2014 One behavioral observation from the consumer research. Express it as something you have been tracking that feels relevant to where they sit right now, not a statistic, not a finding, a behavioral truth. Keep it short. Let it raise a question in their mind, not answer one. It follows the hook. It supports the hook. It never replaces it.",
-    "3. AGENCY CREDIBILITY \u2014 Brief credential paragraph using only client names from the strategist context.",
+    "1. HOOK — Open with something specific enough that the prospect knows you actually paid attention to their world. The Waldo signal is one possible source, but the goal is to demonstrate genuine curiosity about their work, not to surface a problem you assume they have. Avoid framing the hook as 'you must be dealing with X' or 'the brief on your desk is Y'. Lead instead with what is true and observable about their situation, paired with a question or an observation that invites conversation rather than offering a diagnosis. The hook earns the next sentence. It does not deliver a verdict.",
+    "2. BJL BRIDGE — One behavioral observation from the consumer research. Express it as something you have been tracking that feels relevant to where they sit right now, not a statistic, not a finding, a behavioral truth. Keep it short. Let it raise a question in their mind, not answer one. It follows the hook. It supports the hook. It never replaces it.",
+    "3. AGENCY CREDIBILITY — Brief credential paragraph using only client names from the strategist context.",
     "",
     "Output format: Subject line first, then email body. Structure the email body with these exact markers so each section can be identified: write the hook paragraph, then on its own line write the literal text [BJL] (square brackets), then the BJL bridge paragraph, then on its own line write the literal text [CRED] (square brackets), then the agency credential paragraph, then the close and sign-off. These markers will be stripped before delivery.",
   ].join("\n");
 
   const USER_OVERRIDE = [
     "",
-    "STRUCTURE \u2014 the strategist has provided specific instructions for this email. Follow them as the structural guide. The absolute rules above still apply.",
+    "STRUCTURE — the strategist has provided specific instructions for this email. Follow them as the structural guide. The absolute rules above still apply.",
     "",
     "STRATEGIST INSTRUCTIONS:",
     (userInstructions || "").trim(),
@@ -260,7 +260,7 @@ const buildWaldoSystemContext = (account) => {
   lines.push('');
   const tension = account.creative_tension || account.top_signal?.why_it_matters || '';
   if (tension) {
-    lines.push('STRATEGIC TENSION (primary brief \u2014 the problem BJL data must speak to):');
+    lines.push('STRATEGIC TENSION (primary brief — the problem BJL data must speak to):');
     lines.push(tension);
     lines.push('');
   }
@@ -270,21 +270,21 @@ const buildWaldoSystemContext = (account) => {
     'Seasonal': 'Anchor the frame to the current moment without over-indexing on urgency.',
     'Building': 'Frame the opportunity as forward-looking. Do not imply a crisis that does not exist.',
   };
-  lines.push('URGENCY: ' + urgency + ' \u2014 ' + (urgencyGuidance[urgency] || ''));
+  lines.push('URGENCY: ' + urgency + ' — ' + (urgencyGuidance[urgency] || ''));
   lines.push('');
   if (account.top_signal) {
     lines.push('PRIMARY SIGNAL: ' + (account.top_signal.headline || ''));
     if (account.top_signal.detail) lines.push('Detail: ' + account.top_signal.detail);
     if (account.top_signal.exact_quote) {
       lines.push('EXACT QUOTE FROM THEIR LEADERSHIP: \"' + account.top_signal.exact_quote + '\"');
-      lines.push('(If you use this quote, use it verbatim \u2014 these are their own words.)');
+      lines.push('(If you use this quote, use it verbatim — these are their own words.)');
     }
     if (account.top_signal.why_it_matters) lines.push('Why it matters: ' + account.top_signal.why_it_matters);
   }
   lines.push('');
   const hook = account.sharpened_hook || account.suggested_hook || '';
   if (hook) {
-    lines.push('SHARPENED HOOK (directional \u2014 find your own expression grounded in BJL data):');
+    lines.push('SHARPENED HOOK (directional — find your own expression grounded in BJL data):');
     lines.push(hook);
     lines.push('');
   }
@@ -295,7 +295,7 @@ const buildWaldoSystemContext = (account) => {
   }
   const deepSignals = account.deep_signals || [];
   if (deepSignals.length) {
-    lines.push('DEEP SIGNALS (background intelligence \u2014 use to inform which BJL findings are most relevant):');
+    lines.push('DEEP SIGNALS (background intelligence — use to inform which BJL findings are most relevant):');
     deepSignals.forEach(s => {
       lines.push('  [' + (s.signal_type || 'Signal') + '] ' + (s.headline || ''));
       if (s.exact_quote) lines.push('    Exact quote: \"' + s.exact_quote + '\"');
@@ -461,7 +461,7 @@ const generateOneEmail = async ({
 }) => {
   const EMAIL_SYSTEM = buildEmailSystem(userEmailInstructions);
   let userMsg = "";
-  if (insights && insights.trim()) userMsg += "[BJL INSIGHTS \u2014 choose the single most relevant]\n" + insights.trim() + "\n\n";
+  if (insights && insights.trim()) userMsg += "[BJL INSIGHTS — choose the single most relevant]\n" + insights.trim() + "\n\n";
   if (waldoContext) userMsg += "[WALDO INTELLIGENCE]\n" + waldoContext + "\n\n";
   if (userStrategistContext && userStrategistContext.trim()) userMsg += "[STRATEGIST CONTEXT]\n" + userStrategistContext.trim() + "\n\n";
   userMsg += "[Prospect] " + contactName + " at " + company + "\n";
@@ -484,7 +484,7 @@ const generateOneEmail = async ({
     if (res.status !== 200) {
       let errData; try { errData = await res.json(); } catch { errData = null; }
       const errMsg = errData?.error?.message
-        || (res.status === 429 ? "Rate limit hit \u2014 increase delay between calls" : "API error " + res.status);
+        || (res.status === 429 ? "Rate limit hit — increase delay between calls" : "API error " + res.status);
       return { text: "", error: errMsg };
     }
     const data = await res.json();
@@ -627,9 +627,8 @@ const Icon = ({ name, size = 16 }) => {
  * ========================================================================= */
 const Rail = ({ mode, setMode }) => {
   const items = [
-    { k: "intelligence", label: "Intelligence", hint: "\u23181", num: "01" },
-    { k: "outreach",     label: "Outreach",     hint: "\u23182", num: "02" },
-    { k: "batch",        label: "Batch",        hint: "\u23183", num: "03" },
+    { k: "intelligence", label: "Intelligence", hint: "⌘1", num: "01" },
+    { k: "outreach",     label: "Outreach",     hint: "⌘2", num: "02" },
   ];
   return (
     <aside className="rail">
@@ -652,11 +651,11 @@ const Rail = ({ mode, setMode }) => {
       </div>
       <div className="rail-spacer" />
       <div className="rail-footer">
-        <span className="status"><span className="pulse" /> Supabase \u00b7 live</span>
-        <span>Sonnet decomposer \u00b7 Opus synthesis</span>
+        <span className="status"><span className="pulse" /> Supabase · live</span>
+        <span>Sonnet decomposer · Opus synthesis</span>
         <div className="rail-wordmark">
           <img src="assets/petermayer-brick.png" alt="PETERMAYER" />
-          <span className="rail-wordmark-tag">BJL \u00b7 v2</span>
+          <span className="rail-wordmark-tag">BJL · v2</span>
         </div>
       </div>
     </aside>
@@ -672,7 +671,7 @@ const TopBar = ({ crumbs, actions }) => (
       {crumbs.map((c, i) => (
         <React.Fragment key={i}>
           <span className={i === crumbs.length - 1 ? "cur" : ""}>{c}</span>
-          {i < crumbs.length - 1 && <span>\u203a</span>}
+          {i < crumbs.length - 1 && <span>›</span>}
         </React.Fragment>
       ))}
     </div>
@@ -697,7 +696,7 @@ const EvidenceDrawer = ({ rows, filter, onFilter }) => {
     <aside className="drawer">
       <div className="drawer-head">
         <div className="title">Evidence</div>
-        <div className="count">{filtered.length} rows \u00b7 live</div>
+        <div className="count">{filtered.length} rows · live</div>
       </div>
       <div className="drawer-filters">
         {kinds.map(k => (
@@ -723,7 +722,7 @@ const EvidenceDrawer = ({ rows, filter, onFilter }) => {
               </div>
               <div className="ev-id">{e.id}</div>
             </div>
-            <div className="ev-body">{e.kind === "verbatim" ? `\u201c${e.body}\u201d` : e.body}</div>
+            <div className="ev-body">{e.kind === "verbatim" ? `“${e.body}”` : e.body}</div>
             <div className="ev-meta"><span>{e.meta}</span></div>
           </div>
         ))}
@@ -740,12 +739,12 @@ const INTEL_TYPES = [
   { k: "brand",    label: "Brand lookup",    desc: "Rapid synthesis on a specific company or product", tag: "q-brand",    intent: "brand_lookup" },
   { k: "audience", label: "Audience dive",   desc: "Deep profile of a consumer segment via BJL laws",  tag: "q-audience", intent: "audience_deep_dive" },
   { k: "outreach", label: "Outreach angle",  desc: "Strategic angle for new business conversations",   tag: "q-outreach", intent: "outreach_angle" },
-  { k: "data",     label: "Data pull",       desc: "Raw evidence \u2014 verbatims, figures, cross-tabs", tag: "q-data",    intent: "data_pull" },
+  { k: "data",     label: "Data pull",       desc: "Raw evidence — verbatims, figures, cross-tabs", tag: "q-data",    intent: "data_pull" },
   { k: "draft",    label: "Outreach draft",  desc: "BJL findings shaped as raw material for a draft",  tag: "q-draft",   intent: "email_findings" },
 ];
 
 const CATEGORIES = [
-  "\u2014 any \u2014",
+  "— any —",
   "Food & Beverage / CPG",
   "QSR / Fast Food / Restaurants",
   "Retail / Grocery",
@@ -775,10 +774,18 @@ const PHASE_LABEL = {
   synthesizing: "Writing the brief",
 };
 
+const LOADING_CURIOSITY = "Thanks for being curious. The lab is finding your insights.";
+
+const FOLLOWUP_SUGGESTIONS = [
+  "Tell me more about this",
+  "What's the counter-evidence?",
+  "Who else in BJL touches this?",
+];
+
 const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistContext }) => {
   const [type, setType] = useState("brand");
   const [prompt, setPrompt] = useState("");
-  const [category, setCategory] = useState("\u2014 any \u2014");
+  const [category, setCategory] = useState("— any —");
   const [audience, setAudience] = useState("any");
   const [emailInstructions, setEmailInstructions] = useState("");
   const [running, setRunning] = useState(false);
@@ -786,6 +793,13 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
   const [streamed, setStreamed] = useState("");
   const [evidenceCounts, setEvidenceCounts] = useState(null);
   const [error, setError] = useState(null);
+  // Follow-up turn state: carries the user's prior prompt and the full prior
+  // response as a preamble on the next queryBJL call. bjlClient.js does not
+  // expose a native conversation-history channel (the orchestrator is stateless
+  // per-request), so a preamble is the minimal correct path.
+  const [lastPrompt, setLastPrompt] = useState("");
+  const [lastResponse, setLastResponse] = useState("");
+  const [followupText, setFollowupText] = useState("");
   const typeMeta = INTEL_TYPES.find(q => q.k === type);
 
   const show = {
@@ -795,18 +809,31 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
     email:    type === "draft",
   };
 
-  const run = useCallback(async () => {
-    if (!prompt.trim() || running) return;
+  const runQuery = useCallback(async (promptText, isFollowup = false) => {
+    if (!promptText.trim() || running) return;
     setRunning(true);
     setPhase("decomposing");
+    // Capture the response-so-far before the next turn so we can prepend it on
+    // this follow-up. After capture, clear the stream for the new response.
+    const prevResponse = streamed;
+    const prevPrompt = lastPrompt;
     setStreamed("");
     setEvidenceCounts(null);
     setEvidenceRows([]);
     setError(null);
     const qualifiers = [];
-    if (category && !category.startsWith("\u2014")) qualifiers.push(`[Category: ${category}]`);
+    if (category && !category.startsWith("—")) qualifiers.push(`[Category: ${category}]`);
     if (audience && audience !== "any") qualifiers.push(`[Audience mode: ${audience}]`);
-    const builtQuery = (qualifiers.length ? qualifiers.join(" ") + "\n" : "") + prompt.trim();
+    let builtQuery;
+    if (isFollowup && prevPrompt && prevResponse) {
+      // Preamble pattern: prior turn re-sent as context so the orchestrator's
+      // decomposer and synthesis can build continuity.
+      builtQuery =
+        (qualifiers.length ? qualifiers.join(" ") + "\n" : "") +
+        `[PRIOR QUESTION]\n${prevPrompt}\n\n[PRIOR RESPONSE]\n${prevResponse.trim()}\n\n[FOLLOW-UP QUESTION]\n${promptText.trim()}`;
+    } else {
+      builtQuery = (qualifiers.length ? qualifiers.join(" ") + "\n" : "") + promptText.trim();
+    }
     const ctxParts = [];
     if (strategistContext && strategistContext.trim()) ctxParts.push(strategistContext.trim());
     if (emailInstructions && emailInstructions.trim() && type === "draft") {
@@ -819,12 +846,29 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
       onStatus: ({ phase }) => setPhase(phase),
       onChunk: (text) => setStreamed(prev => prev + text),
       onEvidence: ({ rows }) => setEvidenceRows(rows || []),
-      onDone: ({ evidence_counts }) => { setEvidenceCounts(evidence_counts); setRunning(false); setPhase(null); },
+      onDone: ({ evidence_counts }) => {
+        setEvidenceCounts(evidence_counts);
+        setRunning(false);
+        setPhase(null);
+        // Stash this turn as the basis for any follow-up
+        setLastPrompt(promptText.trim());
+        // Use a setState callback to capture the final streamed text
+        setStreamed(final => { setLastResponse(final); return final; });
+      },
       onError: ({ message, phase }) => { setError(`${phase || "error"}: ${message}`); setRunning(false); setPhase(null); },
     });
-  }, [prompt, category, audience, strategistContext, emailInstructions, type, typeMeta, running, setEvidenceRows]);
+  }, [category, audience, strategistContext, emailInstructions, type, typeMeta, running, streamed, lastPrompt, setEvidenceRows]);
 
-  // ⌘↵ commission shortcut
+  const run = useCallback(() => runQuery(prompt, false), [runQuery, prompt]);
+  const runFollowup = useCallback(() => {
+    if (!followupText.trim()) return;
+    const text = followupText;
+    setFollowupText("");
+    setPrompt(text);
+    runQuery(text, true);
+  }, [followupText, runQuery]);
+
+  // ⌘↵ submit shortcut
   useEffect(() => {
     const h = (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); run(); }
@@ -841,23 +885,23 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
         <div style={{display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 22}}>
           <div>
             <div className="eyebrow" style={{marginBottom: 6}}>Intelligence engine</div>
-            <div className="display" style={{fontSize: 48, letterSpacing: "-0.01em"}}>Commission intelligence.</div>
+            <div className="display" style={{fontSize: 48, letterSpacing: "-0.01em"}}>Ask the Lab.</div>
             <div style={{marginTop: 8, color: "var(--grey-2)", maxWidth: "52ch", fontSize: 14}}>
-              Every query is grounded in BJL evidence. Pick a commission type, write the question,
+              Every question is grounded in BJL evidence. Pick a question type, write the question,
               add any context. The engine decomposes, retrieves, and synthesizes.
             </div>
           </div>
           <div className="mono" style={{color: "var(--grey-2)", textAlign: "right"}}>
-            session \u00b7 {new Date().toISOString().slice(0,10)}<br/>
-            v2 \u00b7 parallel build
+            session · {new Date().toISOString().slice(0,10)}<br/>
+            v2 · parallel build
           </div>
         </div>
 
         <div className="commission">
           <div className="commission-head">
-            <div className="step">Commission \u00b7 step 1 of 1</div>
+            <div className="step">Ask the Lab · step 1 of 1</div>
             <div className="mono" style={{color: "var(--grey-2)"}}>
-              {typeMeta.label.toUpperCase()} \u00b7 intentHint={typeMeta.intent}
+              {typeMeta.label.toUpperCase()} · intentHint={typeMeta.intent}
             </div>
           </div>
           <div className="commission-types">
@@ -904,7 +948,7 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
                       <span style={{color: "var(--grey-1)"}}>optional</span>
                     </div>
                     <textarea
-                      placeholder="Internal knowledge the engine should factor in \u2014 known pitches, client relationships, past work, org intel."
+                      placeholder="Internal knowledge the engine should factor in — known pitches, client relationships, past work, org intel."
                       value={strategistContext}
                       onChange={e => setStrategistContext(e.target.value)}
                     />
@@ -930,11 +974,11 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
             <div className="meta">
               <span><b>Decomposer</b> Sonnet</span>
               <span><b>Synthesis</b> Opus</span>
-              <span><b>Est.</b> \u223c11s</span>
+              <span><b>Est.</b> ∼11s</span>
             </div>
             <div style={{display: "flex", gap: 8}}>
               <button className="btn primary" onClick={run} disabled={running || !prompt.trim()}>
-                {running ? "Generating\u2026" : <>Commission <span className="kbd">\u2318\u21b5</span></>}
+                {running ? "Finding insights…" : <>Go <span className="kbd">⌘↵</span></>}
               </button>
             </div>
           </div>
@@ -945,10 +989,10 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
             <div className="doc-head">
               <div className="doc-meta">
                 <span><b>Type</b> {typeMeta.label}</span>
-                <span><b>Scope</b> {category.startsWith("\u2014") ? "any category" : category}</span>
+                <span><b>Scope</b> {category.startsWith("—") ? "any category" : category}</span>
                 <span><b>Evidence</b> {evidenceCounts
-                  ? `${evidenceCounts.items} items \u00b7 ${evidenceCounts.verbatims} verbatims \u00b7 ${evidenceCounts.laws} laws`
-                  : running ? "retrieving\u2026" : "\u2014"}</span>
+                  ? `${evidenceCounts.items} items · ${evidenceCounts.verbatims} verbatims · ${evidenceCounts.laws} laws`
+                  : running ? "retrieving…" : "—"}</span>
               </div>
               <div className="doc-actions">
                 <button className="icon-btn" title="Regenerate" onClick={run} disabled={running}><Icon name="regen" /></button>
@@ -957,14 +1001,36 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
               </div>
             </div>
             {error && <div className="phase-pill err"><span className="dot" /> {error}</div>}
-            {running && phase && <div className="phase-pill"><span className="dot" /> {PHASE_LABEL[phase] || phase}</div>}
+            {running && <div className="phase-pill curiosity"><span className="dot" /> {LOADING_CURIOSITY}{phase ? ` · ${PHASE_LABEL[phase] || phase}` : ""}</div>}
             <div className="stream-doc">
               {renderMarkdown(streamed)}
               {running && <span className="streaming-cursor" />}
             </div>
+            {!running && streamed && !error && (
+              <div className="followup fade-in">
+                <div className="followup-label">Stay curious. Ask a follow-up.</div>
+                <div className="followup-pills">
+                  {FOLLOWUP_SUGGESTIONS.map(s => (
+                    <button key={s} className="followup-pill" type="button"
+                      onClick={() => setFollowupText(s)}>
+                      {s}
+                    </button>
+                  ))}
+                </div>
+                <div className="followup-row">
+                  <input type="text" className="followup-input"
+                    value={followupText}
+                    onChange={(e) => setFollowupText(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); runFollowup(); } }}
+                    placeholder="Ask a follow-up…" />
+                  <button className="btn primary" onClick={runFollowup}
+                    disabled={!followupText.trim()}>Go</button>
+                </div>
+              </div>
+            )}
           </article>
         ) : (
-          <div className="doc-placeholder">Output appears here after you commission a query.</div>
+          <div className="doc-placeholder">Output appears here after you ask the Lab a question.</div>
         )}
       </div>
     </div>
@@ -990,7 +1056,7 @@ const AccountCard = ({ account }) => {
         <div className="acc-name">{account.company || account.name}</div>
         <div className="acc-meta">
           {account.domain && <span>{account.domain}</span>}
-          {account.domain && account.category && <span>\u00b7</span>}
+          {account.domain && account.category && <span>·</span>}
           {account.category && <span className="acc-category">{account.category}</span>}
         </div>
       </div>
@@ -1194,7 +1260,7 @@ const OutreachMode = ({ setEvidenceRows, strategistContext, setStrategistContext
       <aside className="panel">
         <div className="panel-head">
           <div className="title">Account</div>
-          <div className="meta">Waldo \u00b7 single</div>
+          <div className="meta">Waldo · single</div>
         </div>
         <div className="panel-body">
           <div className="waldo-drop"
@@ -1202,7 +1268,7 @@ const OutreachMode = ({ setEvidenceRows, strategistContext, setStrategistContext
             onDragOver={(e) => e.preventDefault()}
             onDrop={onDrop}>
             <div className="big">{account ? "Load new file" : "Load Waldo file"}</div>
-            <div className="sub">.json \u00b7 drop or click</div>
+            <div className="sub">.json · drop or click</div>
           </div>
           <input ref={fileInputRef} type="file" accept=".json" style={{display: "none"}}
             onChange={(e) => e.target.files?.[0] && loadFile(e.target.files[0])} />
@@ -1233,8 +1299,8 @@ const OutreachMode = ({ setEvidenceRows, strategistContext, setStrategistContext
                         )}
                       </div>
                       <div className="who">
-                        <div className="name">{c.name}{badge && <span className="sig-badge">\u2192 {badge}</span>}</div>
-                        <div className="role">{[c.role, c.seniority].filter(Boolean).join(" \u00b7 ") || c.email}</div>
+                        <div className="name">{c.name}{badge && <span className="sig-badge">→ {badge}</span>}</div>
+                        <div className="role">{[c.role, c.seniority].filter(Boolean).join(" · ") || c.email}</div>
                       </div>
                     </div>
                   );
@@ -1249,14 +1315,14 @@ const OutreachMode = ({ setEvidenceRows, strategistContext, setStrategistContext
         <div className="email-wrap">
           <div className="email-header">
             <div>
-              <div className="eyebrow" style={{marginBottom: 6}}>Outreach \u00b7 single-account</div>
+              <div className="eyebrow" style={{marginBottom: 6}}>Outreach · single-account</div>
               <div className="title">
                 {account ? <>{(account.company || account.name).split(" ").slice(0, 3).join(" ")} <span style={{color: "var(--accent)"}}>/</span> {selected.size} emails</> : <>No account loaded</>}
               </div>
             </div>
             <div className="meta">
-              run \u00b7 {new Date().toISOString().slice(0,16).replace("T", " ")}<br/>
-              sonnet \u00b7 /api/claude
+              run · {new Date().toISOString().slice(0,16).replace("T", " ")}<br/>
+              sonnet · /api/claude
             </div>
           </div>
 
@@ -1291,12 +1357,12 @@ const OutreachMode = ({ setEvidenceRows, strategistContext, setStrategistContext
               <div style={{display: "flex", gap: 8, marginBottom: 18, alignItems: "center"}}>
                 <button className="btn primary" onClick={pullInsights} disabled={insightsPulling}>
                   <Icon name="search" size={12} />
-                  {insightsPulling ? (PHASE_LABEL[insightsPhase] || "Pulling\u2026") : insightsReady ? "Re-pull insights" : "Pull BJL insights"}
+                  {insightsPulling ? (PHASE_LABEL[insightsPhase] || "Pulling…") : insightsReady ? "Re-pull insights" : "Pull BJL insights"}
                 </button>
                 <button className="btn" onClick={generate}
                   disabled={!insightsReady || selected.size === 0 || generating}>
                   <Icon name="sparkle" size={12} />
-                  {generating ? `Generating ${genProgress}/${selected.size}\u2026` : `Generate ${selected.size} emails`}
+                  {generating ? `Generating ${genProgress}/${selected.size}…` : `Generate ${selected.size} emails`}
                 </button>
                 {results.length > 0 && !generating && (
                   <button className="btn ghost" onClick={exportCSV}>
@@ -1343,7 +1409,7 @@ const OutreachEmailCard = ({ result, index }) => {
         <div className="ec-avatar">{initials}</div>
         <div className="ec-to">
           <div className="name">{contact.name}</div>
-          <div className="role">{[contact.role, contact.email].filter(Boolean).join(" \u00b7 ")}</div>
+          <div className="role">{[contact.role, contact.email].filter(Boolean).join(" · ")}</div>
         </div>
         <div className="ec-actions">
           <button className="icon-btn" title="Copy"
@@ -1556,7 +1622,7 @@ const BatchMode = ({ strategistContext, setStrategistContext }) => {
     <div className="batch-layout">
       <div className="batch-head">
         <div>
-          <div className="eyebrow" style={{marginBottom: 8}}>Outreach \u00b7 multi-account batch</div>
+          <div className="eyebrow" style={{marginBottom: 8}}>Outreach · multi-account batch</div>
           <div className="title">
             {accounts.length > 0 ? <>{accounts.length} accounts <span className="accent">/</span> one voice.</> : <>Load a batch <span className="accent">/</span> set the voice.</>}
           </div>
@@ -1572,11 +1638,11 @@ const BatchMode = ({ strategistContext, setStrategistContext }) => {
           <input ref={fileInputRef} type="file" accept=".json" style={{display: "none"}}
             onChange={(e) => e.target.files?.[0] && loadFile(e.target.files[0])} />
           <button className="btn" onClick={runAllPull} disabled={pulling || accounts.length === 0}>
-            <Icon name="regen" size={12} />{pulling ? "Pulling\u2026" : "Re-pull insights"}
+            <Icon name="regen" size={12} />{pulling ? "Pulling…" : "Re-pull insights"}
           </button>
           <button className="btn primary" onClick={runGenerate} disabled={eligibleContacts === 0 || generating}>
             <Icon name="sparkle" size={12} />
-            {generating ? `Generating\u2026` : `Generate all \u00b7 ${eligibleContacts} emails`}
+            {generating ? `Generating…` : `Generate all · ${eligibleContacts} emails`}
           </button>
           {totalDrafts > 0 && (
             <button className="btn ghost" onClick={exportCSV}><Icon name="download" size={12} /> Export CSV</button>
@@ -1604,9 +1670,9 @@ const BatchMode = ({ strategistContext, setStrategistContext }) => {
           <div className="progress-fill" style={{width: accounts.length ? (ready / accounts.length * 100) + "%" : "0%"}} />
         </div>
         <span><b style={{color: "var(--iron)"}}>{ready}</b> / {accounts.length || 0} ready</span>
-        <span style={{color: "var(--grey-1)"}}>\u00b7</span>
+        <span style={{color: "var(--grey-1)"}}>·</span>
         <span>{totalDrafts} emails drafted</span>
-        {pulling && <span style={{color: "var(--grey-2)"}}>\u00b7 pulling {pullProgress.current + 1}/{pullProgress.total}\u2026</span>}
+        {pulling && <span style={{color: "var(--grey-2)"}}>· pulling {pullProgress.current + 1}/{pullProgress.total}…</span>}
       </div>
 
       <div className="roster">
@@ -1647,7 +1713,7 @@ const BatchRow = ({ account, index, status, open, onToggle, findings, rawInsight
         <span className="row-idx">{String(index + 1).padStart(2, "0")}</span>
         <div>
           <div className="row-name">{account.company || account.name}</div>
-          <div className="mono" style={{color: "var(--grey-2)", marginTop: 2}}>{account.category || "\u2014"}</div>
+          <div className="mono" style={{color: "var(--grey-2)", marginTop: 2}}>{account.category || "—"}</div>
         </div>
         <span className="row-stat"><b>{contactCount}</b> contacts</span>
         <span className="row-stat">{draftCount ? <><b>{draftCount}</b> drafts</> : <>no drafts</>}</span>
@@ -1664,6 +1730,12 @@ const BatchRow = ({ account, index, status, open, onToggle, findings, rawInsight
 
       {open && (
         <div className="row-body fade-in">
+          <div className="row-col row-col-full">
+            <div className="lbl"><span>Waldo prospect intelligence</span></div>
+            <div className="row-waldo">
+              <AccountCard account={account} />
+            </div>
+          </div>
           <div className="row-col">
             <div className="lbl">
               <span>BJL insights for this account</span>
@@ -1673,12 +1745,12 @@ const BatchRow = ({ account, index, status, open, onToggle, findings, rawInsight
             </div>
             {status === "loading" && (
               <div style={{padding: 16, border: "1px dashed var(--hairline-strong)", borderRadius: 2, color: "var(--grey-2)", fontSize: 13}}>
-                Retrieving BJL evidence\u2026
+                Retrieving BJL evidence…
               </div>
             )}
             {status === "queued" && (
               <div style={{padding: 16, border: "1px dashed var(--hairline-strong)", borderRadius: 2, color: "var(--grey-2)", fontSize: 13}}>
-                Queued \u2014 waiting for earlier accounts.
+                Queued — waiting for earlier accounts.
               </div>
             )}
             {status === "error" && (
@@ -1748,7 +1820,7 @@ const BatchEmailRow = ({ result }) => {
       <div className="re-head">
         <div>
           <div className="re-to">{contact.name}</div>
-          <div className="re-role">{[contact.role, contact.email].filter(Boolean).join(" \u00b7 ")}</div>
+          <div className="re-role">{[contact.role, contact.email].filter(Boolean).join(" · ")}</div>
         </div>
         <div className="re-subj">
           <span className="sub-label">Subj</span>{subject || "(no subject)"}
@@ -1778,25 +1850,48 @@ const BatchEmailRow = ({ result }) => {
 /* =========================================================================
  * 13. App root — shell + mode switching + shared state.
  * ========================================================================= */
+const WelcomeModal = ({ onDismiss }) => (
+  <div className="welcome-overlay" onClick={onDismiss}>
+    <div className="welcome-modal" onClick={(e) => e.stopPropagation()}>
+      <img src="assets/bjl-logo.png" alt="Brand Joy Lab" className="welcome-logo" />
+      <h1 className="welcome-title">Welcome to the Brand Joy Lab.</h1>
+      <p className="welcome-subtitle">Built for the curious.</p>
+      <button className="btn primary welcome-cta" onClick={onDismiss}>Let's go</button>
+    </div>
+  </div>
+);
+
 const App = () => {
-  const [mode, setMode] = useState(() => localStorage.getItem("bjl_mode_v2") || "intelligence");
+  const [mode, setMode] = useState(() => {
+    const saved = localStorage.getItem("bjl_mode_v2");
+    return saved === "batch" ? "outreach" : (saved || "intelligence");
+  });
   const [drawerOpen, setDrawerOpen] = useState(true);
   const [drawerFilter, setDrawerFilter] = useState("all");
   const [evidenceRows, setEvidenceRows] = useState([]);
   const [strategistContext, setStrategistContext] = useState("");
+  const [showWelcome, setShowWelcome] = useState(() => !localStorage.getItem("bjl_welcome_dismissed"));
+
+  const dismissWelcome = () => {
+    localStorage.setItem("bjl_welcome_dismissed", "1");
+    setShowWelcome(false);
+  };
 
   useEffect(() => { localStorage.setItem("bjl_mode_v2", mode); }, [mode]);
 
-  // Keyboard shortcuts: ⌘1/⌘2/⌘3
+  // Keyboard shortcuts: ⌘1/⌘2
   useEffect(() => {
     const h = (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "1") { e.preventDefault(); setMode("intelligence"); }
       if ((e.metaKey || e.ctrlKey) && e.key === "2") { e.preventDefault(); setMode("outreach"); }
-      if ((e.metaKey || e.ctrlKey) && e.key === "3") { e.preventDefault(); setMode("batch"); }
     };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
   }, []);
+
+  // Migrate legacy "batch" mode value to "outreach" — Batch has been folded
+  // into Outreach. Also guards against stale localStorage after this change.
+  useEffect(() => { if (mode === "batch") setMode("outreach"); }, [mode]);
 
   // Keep-warm: ping /api/claude on mount so the function is hot when the user acts
   useEffect(() => {
@@ -1808,55 +1903,49 @@ const App = () => {
   }, []);
 
   const crumbs = {
-    intelligence: ["Workbench", "Intelligence engine", "Commission"],
-    outreach:     ["Workbench", "Outreach", "Single account"],
-    batch:        ["Workbench", "Outreach", "Multi-account batch"],
-  }[mode];
+    intelligence: ["Workbench", "Intelligence engine", "Ask the Lab"],
+    outreach:     ["Workbench", "Outreach", "Accounts"],
+  }[mode] || ["Workbench"];
 
-  const showDrawer = drawerOpen && mode !== "batch";
+  const showDrawer = drawerOpen && mode !== "outreach";
 
   return (
-    <div className="app" data-screen-label={`BJL \u00b7 ${mode}`}>
+    <div className="app" data-screen-label={`BJL · ${mode}`}>
       <Rail mode={mode} setMode={setMode} />
       <div className="main">
         <TopBar
           crumbs={crumbs}
           actions={
-            mode !== "batch" ? (
-              <>
+            <>
+              {mode === "intelligence" && (
                 <button className="btn ghost" onClick={() => setDrawerOpen(!drawerOpen)}>
                   <Icon name="evidence" size={13} />{drawerOpen ? "Hide evidence" : "Show evidence"}
                 </button>
-                <button className="btn" onClick={() => { setEvidenceRows([]); }}>
-                  <Icon name="plus" size={12} /> New session
-                </button>
-              </>
-            ) : (
+              )}
               <button className="btn" onClick={() => { setEvidenceRows([]); }}>
                 <Icon name="plus" size={12} /> New session
               </button>
-            )
+              <button className="btn ghost icon-only" title="About the Lab"
+                onClick={() => setShowWelcome(true)}>?</button>
+            </>
           }
         />
         <div className={`body ${showDrawer ? "" : "no-drawer"}`}>
-          <div style={mode === "batch"
+          <div style={mode === "outreach"
             ? {minHeight: 0, display: "flex", flexDirection: "column", overflow: "auto"}
             : {overflow: "hidden", minHeight: 0, display: "flex", flexDirection: "column"}}>
             {mode === "intelligence" && <IntelligenceMode
               setEvidenceRows={setEvidenceRows}
               strategistContext={strategistContext}
               setStrategistContext={setStrategistContext} />}
-            {mode === "outreach" && <OutreachMode
-              setEvidenceRows={setEvidenceRows}
-              strategistContext={strategistContext}
-              setStrategistContext={setStrategistContext} />}
-            {mode === "batch" && <BatchMode
+            {mode === "outreach" && <BatchMode
               strategistContext={strategistContext}
               setStrategistContext={setStrategistContext} />}
           </div>
           {showDrawer && <EvidenceDrawer rows={evidenceRows} filter={drawerFilter} onFilter={setDrawerFilter} />}
         </div>
       </div>
+      {showWelcome && <WelcomeModal onDismiss={dismissWelcome} />}
     </div>
   );
 };
