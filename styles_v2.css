@@ -155,6 +155,12 @@ textarea { font-family: var(--font-text); }
   text-transform: uppercase;
 }
 .rail-brand-mark .accent { color: var(--accent); }
+.rail-brand-logo {
+  display: block;
+  width: 120px;
+  height: auto;
+  max-width: 100%;
+}
 .rail-brand-sub {
   margin-top: 6px;
   font-size: 11px;

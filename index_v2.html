@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Brand Joy Lab · Intelligence Engine</title>
-  <link rel="stylesheet" href="styles_v2.css?v=6" />
+  <link rel="stylesheet" href="styles_v2.css?v=7" />
 </head>
 <body data-display="on">
   <div id="root"></div>
@@ -633,7 +633,7 @@ const Rail = ({ mode, setMode }) => {
   return (
     <aside className="rail">
       <div className="rail-brand">
-        <div className="rail-brand-mark">Brand Joy<br/>Lab<span className="accent">.</span></div>
+        <img src="assets/bjl-logo.png" alt="Brand Joy Lab" className="rail-brand-logo" />
         <div className="rail-brand-sub">Intelligence engine</div>
       </div>
       <div className="rail-section">
@@ -1923,6 +1923,14 @@ const App = () => {
   const [drawerFilter, setDrawerFilter] = useState("all");
   const [evidenceRows, setEvidenceRows] = useState([]);
   const [strategistContext, setStrategistContext] = useState("");
+  // Session key: incrementing this forces the active mode component to remount,
+  // wiping its local state (conversation turns, loaded Waldo files, draft
+  // results, etc.) without lifting every piece of state into App.
+  const [sessionKey, setSessionKey] = useState(0);
+  const newSession = () => {
+    setEvidenceRows([]);
+    setSessionKey(k => k + 1);
+  };
   // Welcome modal shows on every page load (refresh / new tab). It is NOT
   // shown when the user clicks "New session" — that button is an in-tool
   // soft reset and doesn't trigger a reload, so no persistence is needed.
@@ -1964,7 +1972,7 @@ const App = () => {
                   <Icon name="evidence" size={13} />{drawerOpen ? "Hide evidence" : "Show evidence"}
                 </button>
               )}
-              <button className="btn" onClick={() => { setEvidenceRows([]); }}>
+              <button className="btn" onClick={newSession}>
                 <Icon name="plus" size={12} /> New session
               </button>
               <button className="btn ghost icon-only" title="About the Lab"
@@ -1977,10 +1985,12 @@ const App = () => {
             ? {minHeight: 0, display: "flex", flexDirection: "column", overflow: "auto"}
             : {overflow: "hidden", minHeight: 0, display: "flex", flexDirection: "column"}}>
             {mode === "intelligence" && <IntelligenceMode
+              key={`intel-${sessionKey}`}
               setEvidenceRows={setEvidenceRows}
               strategistContext={strategistContext}
               setStrategistContext={setStrategistContext} />}
             {mode === "outreach" && <BatchMode
+              key={`outreach-${sessionKey}`}
               strategistContext={strategistContext}
               setStrategistContext={setStrategistContext} />}
           </div>
