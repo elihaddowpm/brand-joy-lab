@@ -82,7 +82,7 @@ function mergeItemResults(tagItems, semanticItems, fullTextItems) {
 
 /**
  * Retrieve evidence from BJL based on the decomposer's spec.
- * Fires 7 RPC calls in parallel and returns the merged bundle.
+ * Fires 8 RPC calls in parallel and returns the merged bundle.
  */
 export async function retrieve({ spec, rawQuery, supabaseUrl, supabaseKey, openaiKey }) {
   const supabase = createClient(supabaseUrl, supabaseKey);
@@ -108,6 +108,7 @@ export async function retrieve({ spec, rawQuery, supabaseUrl, supabaseKey, opena
     fullTextItemsResult,
     tagVerbatimsResult,
     semanticVerbatimsResult,
+    fullTextVerbatimsResult,
     lawsResult,
     demoSplitsResult,
   ] = await Promise.all([
@@ -161,7 +162,21 @@ export async function retrieve({ spec, rawQuery, supabaseUrl, supabaseKey, opena
       p_limit: 12,
     }) : { data: [], error: null },
 
-    // 6. Laws (combines tag overlap + full text)
+    // 6. Full-text entity search on verbatims (NO category filter).
+    // Fires only when the decomposer extracted entity tokens.
+    // Catches brand/entity mentions regardless of how the verbatim was categorized.
+    spec.entity_tokens && spec.entity_tokens.length > 0
+      ? supabase.rpc("retrieve_verbatims_full_text", {
+          p_entity_query: spec.entity_tokens.join(" OR "),
+          p_joy_modes: spec.joy_modes?.length ? spec.joy_modes : null,
+          p_generation: demographics.generation,
+          p_gender: demographics.gender,
+          p_require_quotable: true,
+          p_limit: 15,
+        })
+      : { data: [], error: null },
+
+    // 7. Laws (combines tag overlap + full text)
     supabase.rpc("retrieve_laws", {
       p_joy_modes: spec.joy_modes?.length ? spec.joy_modes : null,
       p_categories: spec.category_keys?.length ? spec.category_keys : null,
@@ -176,7 +191,7 @@ export async function retrieve({ spec, rawQuery, supabaseUrl, supabaseKey, opena
       p_limit: 8,
     }),
 
-    // 7. Demographic splits (only if there's a demographic focus)
+    // 8. Demographic splits (only if there's a demographic focus)
     (demographics.gender || demographics.generation || demographics.income_bracket) 
       ? supabase.rpc("retrieve_demo_splits", {
           p_min_abs_gender_gap: demographics.gender ? 10 : null,
@@ -194,6 +209,7 @@ export async function retrieve({ spec, rawQuery, supabaseUrl, supabaseKey, opena
     ["full-text items", fullTextItemsResult],
     ["tag verbatims", tagVerbatimsResult],
     ["semantic verbatims", semanticVerbatimsResult],
+    ["full-text verbatims", fullTextVerbatimsResult],
     ["laws", lawsResult],
     ["demo splits", demoSplitsResult],
   ];
@@ -208,12 +224,19 @@ export async function retrieve({ spec, rawQuery, supabaseUrl, supabaseKey, opena
     fullTextItemsResult.data
   );
 
-  // Dedupe verbatims by id (same verbatim can show up in tag + semantic)
+  // Dedupe verbatims by id (same verbatim can show up in multiple retrieval paths).
+  // Full-text entity matches go first in the merge so they survive dedupe when the
+  // same verbatim appears in multiple paths. Slice limit bumped from 15 to 18 to
+  // accommodate the additional path's contributions.
   const verbatimMap = new Map();
-  for (const v of [...(tagVerbatimsResult.data || []), ...(semanticVerbatimsResult.data || [])]) {
+  for (const v of [
+    ...(fullTextVerbatimsResult.data || []),
+    ...(tagVerbatimsResult.data || []),
+    ...(semanticVerbatimsResult.data || []),
+  ]) {
     if (!verbatimMap.has(v.id)) verbatimMap.set(v.id, v);
   }
-  const verbatims = Array.from(verbatimMap.values()).slice(0, 15);
+  const verbatims = Array.from(verbatimMap.values()).slice(0, 18);
 
   return {
     items: mergedItems,

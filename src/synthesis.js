@@ -42,7 +42,7 @@ Items come from different question types. Each type measures something different
 
 OTHER EVIDENCE TYPES:
 
-- **verbatims**: Consumer quotes in their own words. These are the emotional voice of the category. Only use quotes marked is_quotable=true, which is already filtered. Always attribute to the speaker's demographics where useful (e.g. "a 52-year-old Boomer woman").
+- **verbatims**: Consumer quotes in their own words. These are the emotional voice of the category. Only use quotes marked is_quotable=true, which is already filtered. Always attribute to the speaker's demographics where useful (e.g. "a 52-year-old Boomer woman"). When the query is about a specific brand, product, or entity, the verbatims have been retrieved by direct text match in addition to tag and semantic retrieval — meaning mentions that appear in verbatims filed under unrelated categories are still surfaced. Do not exclude a verbatim just because its category tag seems off-topic; the retrieval correctly determined the verbatim is relevant to the query.
 - **laws**: BJL framework laws that apply. These are derived principles, not raw data. Use them as strategic lenses, not as citations.
 - **demo_splits**: Gaps between demographic groups. gender_gap positive = female skew, negative = male skew. genz_vs_boomer positive = Gen Z skew. Gaps above 10 JI points are strategically meaningful.
 

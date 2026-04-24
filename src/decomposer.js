@@ -91,9 +91,12 @@ OUTPUT SCHEMA:
     "parental_status": ["..."] | null
   },
   "semantic_query": "short phrase capturing the query's emotional/strategic core, used for embedding search",
+  "entity_tokens": [...] | null,
   "min_n": integer (default 200; use lower for narrow queries),
   "reasoning": "one sentence explaining your tag choices"
 }
+
+entity_tokens: specific brand names, product names, proper nouns from the query that should be searched directly by text match. Null if the query has no specific entity.
 
 TAGGING PRINCIPLES:
 1. Pick 2-5 joy_modes, 1-4 occasions, 2-5 functional_jobs, 0-3 tensions. Tighter specs produce sharper retrieval.
@@ -102,7 +105,14 @@ TAGGING PRINCIPLES:
 4. For audience queries, set the relevant demographic filter. Leave others null.
 5. The semantic_query should be 3-10 words capturing the emotional/strategic core. Not a restatement of the query; a distillation.
 6. Only set a demographic filter if the query explicitly targets that demographic. Don't infer demographics from the brand's imagined audience.
-7. If the query is genuinely about something outside BJL's scope (e.g. asking Claude to write code), return empty arrays and intent="general".`;
+7. If the query is genuinely about something outside BJL's scope (e.g. asking Claude to write code), return empty arrays and intent="general".
+8. If the query contains specific brand names, product names, destination names, celebrity names, or other proper nouns that identify a particular entity, extract them into entity_tokens. Examples:
+   - "Tell me what we know about Cracker Barrel" → entity_tokens: ["Cracker Barrel"]
+   - "How do travelers describe Hawaii versus Florida" → entity_tokens: ["Hawaii", "Florida"]
+   - "What do BJL verbatims say about Disney" → entity_tokens: ["Disney"]
+   - "joy among Gen Z sports fans" → entity_tokens: null (no specific entity)
+   - "Outreach for EchoPark Speedway" → entity_tokens: ["EchoPark Speedway"]
+Entity tokens enable a text-based retrieval path that bypasses the categorization of the underlying data. Only include tokens that are specific entities — do not include common nouns, category names, or generic terms.`;
 
 /**
  * Decompose a user query into a structured retrieval spec.
@@ -171,8 +181,12 @@ export async function decompose({ query, intentHint, strategistContext, waldoCon
     }
   }
   
+  spec.entity_tokens = Array.isArray(spec.entity_tokens) && spec.entity_tokens.length > 0
+    ? spec.entity_tokens.slice(0, 5)
+    : null;
+
   spec.min_n = spec.min_n ?? 200;
   spec.intent = spec.intent ?? "general";
-  
+
   return spec;
 }
