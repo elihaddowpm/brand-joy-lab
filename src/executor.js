@@ -7,9 +7,10 @@
 // Service role key is NEVER used here — that's reserved for the email path.
 
 import pg from "pg";
-import { Parser } from "node-sql-parser";
+import sqlParser from "node-sql-parser";
 
 const { Pool } = pg;
+const { Parser } = sqlParser;
 
 // Patterns that reject a query before any database round-trip.
 // The role enforces these at the DB level; this is belt-and-suspenders.
