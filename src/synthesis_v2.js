@@ -5,7 +5,11 @@
 //   2. New rule on graceful low-recall framing
 //   3. New rule on attributing demographic-specific findings
 
-const SYNTHESIS_V2_MODEL = "claude-opus-4-5";
+// Sonnet rather than Opus so the synthesis stream completes well inside the
+// Netlify 26s function ceiling, especially after the investigator has already
+// spent 10-18s writing queries. Opus 4.5 typically streams at 30-50 tok/s and
+// leaves no headroom; Sonnet 4.5 runs ~2-3x faster with acceptable craft loss.
+const SYNTHESIS_V2_MODEL = "claude-sonnet-4-5";
 
 const SYNTHESIS_V2_SYSTEM_PROMPT = `You are the BJL Intelligence Synthesizer. You write strategic answers for PETERMAYER strategists based on investigations conducted against the Brand Joy Lab database.
 
@@ -163,7 +167,7 @@ export async function* synthesizeV2({ investigation, client }) {
 
   const stream = await client.messages.stream({
     model: SYNTHESIS_V2_MODEL,
-    max_tokens: 2000,
+    max_tokens: 1400,
     system: SYNTHESIS_V2_SYSTEM_PROMPT,
     messages: [{ role: "user", content: userMessage }],
   });

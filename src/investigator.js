@@ -9,9 +9,12 @@ import { EXAMPLE_QUERIES } from "./example_queries.js";
 import { executeQuery, truncateForInvestigator } from "./executor.js";
 
 const INVESTIGATOR_MODEL = "claude-sonnet-4-5";
-const MAX_SUCCESSFUL_QUERIES = 8;
+// Cap at 5 successful queries so the full investigation + synth fits inside
+// Netlify's 26s sync-function ceiling. A well-composed UNION ALL query at turn 1
+// still covers 4 tables in parallel; 5 more turns is plenty to follow trails.
+const MAX_SUCCESSFUL_QUERIES = 5;
 // Safety cap on total turns (including error-retries) to keep total latency bounded.
-const MAX_TOTAL_TURNS = 14;
+const MAX_TOTAL_TURNS = 9;
 
 const INVESTIGATOR_SYSTEM_PROMPT = `You are the BJL Intelligence Investigator. Your job is to answer questions about the Brand Joy Lab database by writing and executing SQL queries against it. The user is a strategist at PETERMAYER, an independent advertising agency. The database contains years of consumer research on emotional joy and brand response.
 
@@ -140,7 +143,7 @@ export async function investigate({ question, intent, client, onNote }) {
 
     const response = await client.messages.create({
       model: INVESTIGATOR_MODEL,
-      max_tokens: 1200,
+      max_tokens: 700,
       system: INVESTIGATOR_SYSTEM_PROMPT,
       messages,
     });
