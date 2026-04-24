@@ -6,8 +6,9 @@ import Anthropic from "@anthropic-ai/sdk";
 import { decompose } from "../../src/decomposer.js";
 import { retrieve } from "../../src/retrieval.js";
 import { synthesize } from "../../src/synthesis.js";
-import { investigate } from "../../src/investigator.js";
-import { synthesizeV2 } from "../../src/synthesis_v2.js";
+// Investigator + synthesis_v2 are dynamically imported below so a pg or
+// node-sql-parser bundling failure surfaces as an SSE error rather than a
+// cold-start crash. The email path keeps its static imports.
 
 // Trim a string to max N chars, preserving word boundaries where possible.
 function trim(str, n) {
@@ -152,6 +153,18 @@ export default async (request) => {
         if (mode === "investigate") {
           // Investigator path: Intelligence mode. Writes SQL against a
           // read-only role, up to 8 queries, then synthesizes.
+          let investigate, synthesizeV2;
+          try {
+            ({ investigate } = await import("../../src/investigator.js"));
+            ({ synthesizeV2 } = await import("../../src/synthesis_v2.js"));
+          } catch (importErr) {
+            console.error("Investigator import failed:", importErr, importErr?.stack);
+            sendEvent("error", {
+              message: "Failed to load investigator module: " + (importErr?.message || String(importErr)),
+              phase: "import",
+            });
+            return;
+          }
           sendEvent("status", { phase: "investigating" });
           const investigation = await investigate({
             question: query,
@@ -244,10 +257,19 @@ export default async (request) => {
           });
         }
       } catch (err) {
-        console.error("Orchestrator error:", err);
-        sendEvent("error", { 
-          message: err.message || "An error occurred during processing",
-          phase: err.phase || "unknown",
+        console.error("Orchestrator error:", err, err?.stack);
+        const phase = err?.phase
+          || (mode === "investigate" ? "investigate" : "unknown");
+        // Surface postgres error codes and the head of the stack so the UI
+        // can show the actual failure instead of a generic "Request failed".
+        const detail = [
+          err?.message || String(err),
+          err?.code ? `(code: ${err.code})` : null,
+          err?.detail ? `(detail: ${err.detail})` : null,
+        ].filter(Boolean).join(" ");
+        sendEvent("error", {
+          message: detail || "An error occurred during processing",
+          phase,
         });
       } finally {
         controller.close();
