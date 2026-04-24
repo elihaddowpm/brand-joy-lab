@@ -10,10 +10,6 @@
 
 [functions.bjl-query]
   timeout = 26
-  # pg-native and pg-cloudflare are optional pg peers esbuild would choke on
-  # while trying to resolve dynamic requires; pg itself stays bundled.
-  external_node_modules = ["pg-native", "pg-cloudflare"]
-  included_files = ["node_modules/pg/**"]
 
 [context.production.environment]
   NODE_VERSION = "18"
