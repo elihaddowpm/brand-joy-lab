@@ -38,10 +38,39 @@ function getPool() {
     statement_timeout: 5000,
     query_timeout: 5500,
     idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 5000,
     // Supabase pooler requires SSL.
     ssl: { rejectUnauthorized: false },
   });
+  _pool.on("error", (err) => {
+    console.error("pg Pool error:", err?.message, err?.code);
+  });
   return _pool;
+}
+
+/**
+ * Lightweight connection probe — runs SELECT 1 against the readonly role.
+ * Used by the /api/bjl-query diagnostic path to isolate connection issues
+ * from investigator logic.
+ */
+export async function pingDb() {
+  try {
+    const pool = getPool();
+    const client = await pool.connect();
+    try {
+      const result = await client.query("SELECT 1 AS ok, current_user AS as_user, current_database() AS db");
+      return { ok: true, row: result.rows[0] };
+    } finally {
+      client.release();
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      error: err?.message || String(err),
+      code: err?.code || null,
+      detail: err?.detail || null,
+    };
+  }
 }
 
 function getParser() {

@@ -125,14 +125,15 @@ export default async (request) => {
 
   // Investigator path also needs the read-only Postgres URL for executor.
   const needsInvestigator = mode === "investigate";
+  const needsReadonlyDb = mode === "investigate" || mode === "pg-ping";
   const readonlyUrl = process.env.SUPABASE_READONLY_URL;
 
   const missingEnv = [];
-  if (!anthropicKey) missingEnv.push("ANTHROPIC_API_KEY");
-  if (!supabaseUrl) missingEnv.push("SUPABASE_URL");
-  if (!supabaseKey) missingEnv.push("SUPABASE_ANON_KEY");
-  if (!openaiKey && !needsInvestigator) missingEnv.push("OPENAI_API_KEY");
-  if (needsInvestigator && !readonlyUrl) missingEnv.push("SUPABASE_READONLY_URL");
+  if (!anthropicKey && mode !== "pg-ping") missingEnv.push("ANTHROPIC_API_KEY");
+  if (!supabaseUrl && mode !== "pg-ping") missingEnv.push("SUPABASE_URL");
+  if (!supabaseKey && mode !== "pg-ping") missingEnv.push("SUPABASE_ANON_KEY");
+  if (!openaiKey && !needsInvestigator && mode !== "pg-ping") missingEnv.push("OPENAI_API_KEY");
+  if (needsReadonlyDb && !readonlyUrl) missingEnv.push("SUPABASE_READONLY_URL");
   if (missingEnv.length > 0) {
     return new Response(JSON.stringify({
       error: "Server misconfigured: missing required environment variables: " + missingEnv.join(", ")
@@ -150,6 +151,33 @@ export default async (request) => {
       };
       
       try {
+        if (mode === "pg-ping") {
+          // Diagnostic path: tries a SELECT 1 through the readonly pool and
+          // returns the row + role + db info, or the pg error detail.
+          sendEvent("status", { phase: "pinging" });
+          let pingDb;
+          try {
+            ({ pingDb } = await import("../../src/executor.js"));
+          } catch (importErr) {
+            sendEvent("error", {
+              message: "pg import failed: " + (importErr?.message || String(importErr)),
+              phase: "import",
+            });
+            return;
+          }
+          const result = await pingDb();
+          sendEvent("debug", { pgPing: result, envUrlSet: !!readonlyUrl });
+          if (result.ok) {
+            sendEvent("chunk", { text: "PG OK. user=" + result.row.as_user + " db=" + result.row.db });
+            sendEvent("done", { pgPing: result });
+          } else {
+            sendEvent("error", {
+              message: "pg error: " + result.error + (result.code ? " (code " + result.code + ")" : ""),
+              phase: "pg",
+            });
+          }
+          return;
+        }
         if (mode === "investigate") {
           // Investigator path: Intelligence mode. Writes SQL against a
           // read-only role, up to 8 queries, then synthesizes.
