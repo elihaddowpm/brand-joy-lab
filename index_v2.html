@@ -567,28 +567,16 @@ const queryBJL = async ({
   finally { reader.releaseLock(); }
 };
 
-const investigateQuery = async ({
-  question, intent = null, debug = false,
-  onStatus = () => {}, onNote = () => {}, onChunk = () => {}, onDone = () => {},
-  onError = () => {}, onDebug = () => {},
-  endpoint = "/api/bjl-query", signal,
-}) => {
-  let response;
-  try {
-    response = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: question, mode: "investigate", intent, debug }),
-      signal,
-    });
-  } catch (err) { onError({ message: err.message, phase: "fetch" }); return; }
+// Stream an SSE response into the given event handlers. Shared by both legs
+// of the investigator flow (mode=investigate + mode=synthesize).
+const streamSSE = async (response, handlers) => {
   if (!response.ok) {
     let errBody;
     try { errBody = await response.json(); } catch { errBody = { error: response.statusText }; }
-    onError({ message: errBody.error || "Request failed", phase: "http", status: response.status });
+    handlers.onError && handlers.onError({ message: errBody.error || "Request failed", phase: "http", status: response.status });
     return;
   }
-  if (!response.body) { onError({ message: "No response body", phase: "stream" }); return; }
+  if (!response.body) { handlers.onError && handlers.onError({ message: "No response body", phase: "stream" }); return; }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -610,18 +598,74 @@ const investigateQuery = async ({
         if (!data) continue;
         let parsed;
         try { parsed = JSON.parse(data); } catch { continue; }
-        switch (eventType) {
-          case "status": onStatus(parsed); break;
-          case "investigation_note": onNote(parsed); break;
-          case "chunk": onChunk(parsed.text); break;
-          case "done": onDone(parsed); break;
-          case "error": onError(parsed); break;
-          case "debug": onDebug(parsed); break;
-        }
+        const h = handlers[eventType];
+        if (typeof h === "function") h(parsed);
       }
     }
-  } catch (err) { onError({ message: err.message, phase: "stream" }); }
+  } catch (err) { handlers.onError && handlers.onError({ message: err.message, phase: "stream" }); }
   finally { reader.releaseLock(); }
+};
+
+// Run the full Intelligence flow as two sequential requests:
+//   1. mode=investigate → streams investigation_note events + a transcript event
+//   2. mode=synthesize  → streams chunk events with the final brief
+// Each leg gets its own 26s Netlify function budget.
+const investigateQuery = async ({
+  question, intent = null, debug = false,
+  onStatus = () => {}, onNote = () => {}, onChunk = () => {}, onDone = () => {},
+  onError = () => {}, onDebug = () => {},
+  endpoint = "/api/bjl-query", signal,
+}) => {
+  // Leg 1: investigation
+  let investigation = null;
+  let investigationMeta = null;
+  let legOneFailed = false;
+  let investigateResponse;
+  try {
+    investigateResponse = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: question, mode: "investigate", intent, debug }),
+      signal,
+    });
+  } catch (err) { onError({ message: err.message, phase: "fetch" }); return; }
+
+  await streamSSE(investigateResponse, {
+    status: onStatus,
+    investigation_note: onNote,
+    transcript: (payload) => { investigation = payload.investigation; },
+    debug: onDebug,
+    done: (payload) => { investigationMeta = payload; },
+    error: (payload) => { legOneFailed = true; onError(payload); },
+  });
+
+  if (legOneFailed) return;
+  if (!investigation) {
+    onError({ message: "Investigation completed but no transcript returned", phase: "protocol" });
+    return;
+  }
+
+  // Leg 2: synthesis
+  let synthResponse;
+  try {
+    synthResponse = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: question, mode: "synthesize", investigation, debug }),
+      signal,
+    });
+  } catch (err) { onError({ message: err.message, phase: "fetch" }); return; }
+
+  await streamSSE(synthResponse, {
+    status: onStatus,
+    chunk: (payload) => onChunk(payload.text),
+    debug: onDebug,
+    done: (payload) => {
+      // Merge the investigation meta from leg 1 with the synth 'done' info.
+      onDone({ ...(investigationMeta || {}), ...payload });
+    },
+    error: onError,
+  });
 };
 
 /* =========================================================================

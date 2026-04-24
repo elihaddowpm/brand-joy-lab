@@ -151,6 +151,41 @@ export default async (request) => {
       };
       
       try {
+        if (mode === "synthesize") {
+          // Second-leg call: takes the investigation transcript produced by
+          // the mode=investigate call and streams the synthesizer brief.
+          // Splitting the flow across two requests gives each leg its own
+          // 26s Netlify ceiling instead of sharing one.
+          const investigation = body.investigation;
+          if (!investigation || typeof investigation !== "object") {
+            sendEvent("error", {
+              message: "mode=synthesize requires an 'investigation' object in the body",
+              phase: "input",
+            });
+            return;
+          }
+          let synthesizeV2;
+          try {
+            ({ synthesizeV2 } = await import("../../src/synthesis_v2.js"));
+          } catch (importErr) {
+            sendEvent("error", {
+              message: "synthesis import failed: " + (importErr?.message || String(importErr)),
+              phase: "import",
+            });
+            return;
+          }
+          sendEvent("status", { phase: "synthesizing" });
+          const synthStream = synthesizeV2({ investigation, client: anthropic });
+          for await (const chunk of synthStream) {
+            sendEvent("chunk", { text: chunk });
+          }
+          sendEvent("done", {
+            queryBudgetUsed: investigation.queryBudgetUsed,
+            errorCount: (investigation.errors || []).length,
+            stoppedEarly: investigation.stoppedEarly,
+          });
+          return;
+        }
         if (mode === "pg-ping") {
           // Diagnostic path: tries a SELECT 1 through the readonly pool and
           // returns the row + role + db info, or the pg error detail.
@@ -179,12 +214,14 @@ export default async (request) => {
           return;
         }
         if (mode === "investigate") {
-          // Investigator path: Intelligence mode. Writes SQL against a
-          // read-only role, up to 8 queries, then synthesizes.
-          let investigate, synthesizeV2;
+          // First-leg call: run the investigator loop, emit investigation_note
+          // events, and emit a final 'transcript' event with the full
+          // investigation object. The client then calls mode=synthesize with
+          // that transcript to get the streamed brief. Splitting gives each
+          // leg its own 26s Netlify budget.
+          let investigate;
           try {
             ({ investigate } = await import("../../src/investigator.js"));
-            ({ synthesizeV2 } = await import("../../src/synthesis_v2.js"));
           } catch (importErr) {
             console.error("Investigator import failed:", importErr, importErr?.stack);
             sendEvent("error", {
@@ -211,16 +248,12 @@ export default async (request) => {
             });
           }
 
-          sendEvent("status", { phase: "synthesizing" });
-          const synthStream = synthesizeV2({ investigation, client: anthropic });
-          for await (const chunk of synthStream) {
-            sendEvent("chunk", { text: chunk });
-          }
-
+          sendEvent("transcript", { investigation });
           sendEvent("done", {
             queryBudgetUsed: investigation.queryBudgetUsed,
             errorCount: (investigation.errors || []).length,
             stoppedEarly: investigation.stoppedEarly,
+            phase: "investigation_complete",
           });
         } else {
           // Existing structured pipeline for email / legacy callers.

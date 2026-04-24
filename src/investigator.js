@@ -9,13 +9,11 @@ import { EXAMPLE_QUERIES } from "./example_queries.js";
 import { executeQuery, truncateForInvestigator } from "./executor.js";
 
 const INVESTIGATOR_MODEL = "claude-sonnet-4-5";
-// Cap at 6 successful queries so the full investigation + synth fits inside
-// Netlify's 26s sync-function ceiling while still giving the investigator
-// enough room to use later queries for "so what" depth rather than stopping
-// at the literal answer.
-const MAX_SUCCESSFUL_QUERIES = 6;
-// Safety cap on total turns (including error-retries) to keep total latency bounded.
-const MAX_TOTAL_TURNS = 10;
+// Investigation now runs as its own SSE leg separate from synthesis, so the
+// budget can use ~20-22s of the 26s function ceiling purely for queries.
+// 7 successful queries leaves headroom for error-retries and closing SUMMARY.
+const MAX_SUCCESSFUL_QUERIES = 7;
+const MAX_TOTAL_TURNS = 11;
 
 const INVESTIGATOR_SYSTEM_PROMPT = `You are the BJL Intelligence Investigator. Your job is to answer questions about the Brand Joy Lab database by writing and executing SQL queries against it. The user is a strategist at PETERMAYER, an independent advertising agency. The database contains years of consumer research on emotional joy and brand response.
 
