@@ -6,6 +6,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import { decompose } from "../../src/decomposer.js";
 import { retrieve } from "../../src/retrieval.js";
 import { synthesize } from "../../src/synthesis.js";
+import { investigate } from "../../src/investigator.js";
+import { synthesizeV2 } from "../../src/synthesis_v2.js";
 
 // Trim a string to max N chars, preserving word boundaries where possible.
 function trim(str, n) {
@@ -106,8 +108,8 @@ export default async (request) => {
     });
   }
 
-  const { query, intentHint, strategistContext, waldoContext, debug } = body;
-  
+  const { query, intentHint, strategistContext, waldoContext, debug, mode, intent } = body;
+
   if (!query || typeof query !== "string" || query.trim().length === 0) {
     return new Response(JSON.stringify({ error: "Missing required field: query" }), {
       status: 400,
@@ -119,10 +121,20 @@ export default async (request) => {
   const supabaseUrl = process.env.SUPABASE_URL;
   const supabaseKey = process.env.SUPABASE_ANON_KEY;
   const openaiKey = process.env.OPENAI_API_KEY;
-  
-  if (!anthropicKey || !supabaseUrl || !supabaseKey || !openaiKey) {
-    return new Response(JSON.stringify({ 
-      error: "Server misconfigured: missing one or more required environment variables" 
+
+  // Investigator path also needs the read-only Postgres URL for executor.
+  const needsInvestigator = mode === "investigate";
+  const readonlyUrl = process.env.SUPABASE_READONLY_URL;
+
+  const missingEnv = [];
+  if (!anthropicKey) missingEnv.push("ANTHROPIC_API_KEY");
+  if (!supabaseUrl) missingEnv.push("SUPABASE_URL");
+  if (!supabaseKey) missingEnv.push("SUPABASE_ANON_KEY");
+  if (!openaiKey && !needsInvestigator) missingEnv.push("OPENAI_API_KEY");
+  if (needsInvestigator && !readonlyUrl) missingEnv.push("SUPABASE_READONLY_URL");
+  if (missingEnv.length > 0) {
+    return new Response(JSON.stringify({
+      error: "Server misconfigured: missing required environment variables: " + missingEnv.join(", ")
     }), { status: 500, headers: { "Content-Type": "application/json" } });
   }
 
@@ -137,32 +149,92 @@ export default async (request) => {
       };
       
       try {
-        // Step 1: Decompose
-        sendEvent("status", { phase: "decomposing" });
-        const spec = await decompose({ 
-          query, 
-          intentHint, 
-          strategistContext, 
-          waldoContext, 
-          client: anthropic 
-        });
-        
-        if (debug) {
-          sendEvent("debug", { spec });
-        }
+        if (mode === "investigate") {
+          // Investigator path: Intelligence mode. Writes SQL against a
+          // read-only role, up to 8 queries, then synthesizes.
+          sendEvent("status", { phase: "investigating" });
+          const investigation = await investigate({
+            question: query,
+            intent: intent || null,
+            client: anthropic,
+            onNote: ({ note, queryIndex }) => {
+              sendEvent("investigation_note", { note, queryIndex });
+            },
+          });
 
-        // Step 2: Retrieve
-        sendEvent("status", { phase: "retrieving" });
-        const evidence = await retrieve({ 
-          spec, 
-          rawQuery: query, 
-          supabaseUrl, 
-          supabaseKey, 
-          openaiKey 
-        });
-        
-        if (debug) {
-          sendEvent("debug", {
+          if (debug) {
+            sendEvent("debug", {
+              queryBudgetUsed: investigation.queryBudgetUsed,
+              errorCount: (investigation.errors || []).length,
+              stoppedEarly: investigation.stoppedEarly,
+            });
+          }
+
+          sendEvent("status", { phase: "synthesizing" });
+          const synthStream = synthesizeV2({ investigation, client: anthropic });
+          for await (const chunk of synthStream) {
+            sendEvent("chunk", { text: chunk });
+          }
+
+          sendEvent("done", {
+            queryBudgetUsed: investigation.queryBudgetUsed,
+            errorCount: (investigation.errors || []).length,
+            stoppedEarly: investigation.stoppedEarly,
+          });
+        } else {
+          // Existing structured pipeline for email / legacy callers.
+          // Step 1: Decompose
+          sendEvent("status", { phase: "decomposing" });
+          const spec = await decompose({
+            query,
+            intentHint,
+            strategistContext,
+            waldoContext,
+            client: anthropic
+          });
+
+          if (debug) {
+            sendEvent("debug", { spec });
+          }
+
+          // Step 2: Retrieve
+          sendEvent("status", { phase: "retrieving" });
+          const evidence = await retrieve({
+            spec,
+            rawQuery: query,
+            supabaseUrl,
+            supabaseKey,
+            openaiKey
+          });
+
+          if (debug) {
+            sendEvent("debug", {
+              evidence_counts: {
+                items: evidence.items?.length ?? 0,
+                verbatims: evidence.verbatims?.length ?? 0,
+                laws: evidence.laws?.length ?? 0,
+                demo_splits: evidence.demo_splits?.length ?? 0,
+              }
+            });
+          }
+
+          // Step 2.5: compact evidence rows for the frontend drawer.
+          sendEvent("evidence", { rows: toEvidenceRows(evidence) });
+
+          // Step 3: Synthesize (streaming)
+          sendEvent("status", { phase: "synthesizing" });
+          const synthStream = synthesize({
+            query,
+            evidence,
+            strategistContext,
+            waldoContext,
+            client: anthropic
+          });
+          for await (const chunk of synthStream) {
+            sendEvent("chunk", { text: chunk });
+          }
+
+          sendEvent("done", {
             evidence_counts: {
               items: evidence.items?.length ?? 0,
               verbatims: evidence.verbatims?.length ?? 0,
@@ -171,36 +243,6 @@ export default async (request) => {
             }
           });
         }
-
-        // Step 2.5: Emit compact evidence rows for the frontend evidence drawer.
-        // Additive event — existing callers that ignore it keep working unchanged.
-        // Rows are slimmed to what the UI renders, not the full shape fed to synthesis.
-        sendEvent("evidence", { rows: toEvidenceRows(evidence) });
-
-        // Step 3: Synthesize (streaming)
-        sendEvent("status", { phase: "synthesizing" });
-        
-        const synthStream = synthesize({ 
-          query, 
-          evidence, 
-          strategistContext, 
-          waldoContext, 
-          client: anthropic 
-        });
-        
-        for await (const chunk of synthStream) {
-          sendEvent("chunk", { text: chunk });
-        }
-        
-        sendEvent("done", { 
-          evidence_counts: {
-            items: evidence.items?.length ?? 0,
-            verbatims: evidence.verbatims?.length ?? 0,
-            laws: evidence.laws?.length ?? 0,
-            demo_splits: evidence.demo_splits?.length ?? 0,
-          }
-        });
-        
       } catch (err) {
         console.error("Orchestrator error:", err);
         sendEvent("error", { 

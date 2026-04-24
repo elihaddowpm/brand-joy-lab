@@ -505,8 +505,10 @@ const parseBatchFile = (file) => {
 };
 
 /* =========================================================================
- * 3. queryBJL — inlined SSE client with onEvidence hook.
- * Matches orchestrator/src/bjlClient.js semantics.
+ * 3. queryBJL / investigateQuery — inlined SSE clients.
+ *    - queryBJL: structured pipeline for email path (intentHint: email_findings).
+ *    - investigateQuery: SQL investigator + synthesis_v2 for Intelligence mode.
+ *    Matches orchestrator/src/bjlClient.js semantics.
  * ========================================================================= */
 const queryBJL = async ({
   query, intentHint, strategistContext, waldoContext, debug = false,
@@ -519,7 +521,7 @@ const queryBJL = async ({
     response = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, intentHint, strategistContext, waldoContext, debug }),
+      body: JSON.stringify({ query, intentHint, strategistContext, waldoContext, debug, mode: "email" }),
       signal,
     });
   } catch (err) { onError({ message: err.message, phase: "fetch" }); return; }
@@ -558,6 +560,63 @@ const queryBJL = async ({
           case "error": onError(parsed); break;
           case "debug": onDebug(parsed); break;
           case "evidence": onEvidence(parsed); break;
+        }
+      }
+    }
+  } catch (err) { onError({ message: err.message, phase: "stream" }); }
+  finally { reader.releaseLock(); }
+};
+
+const investigateQuery = async ({
+  question, intent = null, debug = false,
+  onStatus = () => {}, onNote = () => {}, onChunk = () => {}, onDone = () => {},
+  onError = () => {}, onDebug = () => {},
+  endpoint = "/api/bjl-query", signal,
+}) => {
+  let response;
+  try {
+    response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: question, mode: "investigate", intent, debug }),
+      signal,
+    });
+  } catch (err) { onError({ message: err.message, phase: "fetch" }); return; }
+  if (!response.ok) {
+    let errBody;
+    try { errBody = await response.json(); } catch { errBody = { error: response.statusText }; }
+    onError({ message: errBody.error || "Request failed", phase: "http", status: response.status });
+    return;
+  }
+  if (!response.body) { onError({ message: "No response body", phase: "stream" }); return; }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let frameEnd;
+      while ((frameEnd = buffer.indexOf("\n\n")) !== -1) {
+        const frame = buffer.slice(0, frameEnd);
+        buffer = buffer.slice(frameEnd + 2);
+        const lines = frame.split("\n");
+        let eventType = "message"; let data = "";
+        for (const line of lines) {
+          if (line.startsWith("event: ")) eventType = line.slice(7);
+          else if (line.startsWith("data: ")) data += line.slice(6);
+        }
+        if (!data) continue;
+        let parsed;
+        try { parsed = JSON.parse(data); } catch { continue; }
+        switch (eventType) {
+          case "status": onStatus(parsed); break;
+          case "investigation_note": onNote(parsed); break;
+          case "chunk": onChunk(parsed.text); break;
+          case "done": onDone(parsed); break;
+          case "error": onError(parsed); break;
+          case "debug": onDebug(parsed); break;
         }
       }
     }
@@ -872,49 +931,27 @@ const EvidenceDrawer = ({ rows, filter, onFilter }) => {
 };
 
 /* =========================================================================
- * 10. IntelligenceMode — commission panel + streaming prose doc.
+ * 10. IntelligenceMode — single-dialogue input + optional intent chips.
+ *      Routes through the SQL investigator (investigateQuery). Investigation
+ *      notes stream as progress text; synthesis streams as the answer.
  * ========================================================================= */
 
-const INTEL_TYPES = [
-  { k: "brand",    label: "Brand lookup",    desc: "Rapid synthesis on a specific company or product", tag: "q-brand",    intent: "brand_lookup" },
-  { k: "audience", label: "Audience dive",   desc: "Deep profile of a consumer segment via BJL laws",  tag: "q-audience", intent: "audience_deep_dive" },
-  { k: "outreach", label: "Outreach angle",  desc: "Strategic angle for new business conversations",   tag: "q-outreach", intent: "outreach_angle" },
-  { k: "data",     label: "Data pull",       desc: "Raw evidence — verbatims, figures, cross-tabs", tag: "q-data",    intent: "data_pull" },
-  { k: "draft",    label: "Outreach draft",  desc: "BJL findings shaped as raw material for a draft",  tag: "q-draft",   intent: "email_findings" },
-];
-
-const CATEGORIES = [
-  "— any —",
-  "Food & Beverage / CPG",
-  "QSR / Fast Food / Restaurants",
-  "Retail / Grocery",
-  "Travel & Tourism / Hospitality",
-  "Financial Services",
-  "Sports & Entertainment",
-  "Technology / Telecom",
-  "Health & Wellness",
-  "Home & Furniture",
-  "Auto / Transportation",
-  "Fashion / Beauty",
-  "Media / Streaming",
-  "Alcohol & Beverage",
-  "Other",
-];
-
-const AUDIENCE_MODES = [
-  { k: "any",     label: "Any audience" },
-  { k: "segment", label: "Named segment" },
-  { k: "psycho",  label: "Psychographic" },
-  { k: "demo",    label: "Demographic slice" },
+const INTEL_CHIPS = [
+  { k: "brand_lookup",       label: "Brand Lookup",       tag: "q-brand" },
+  { k: "audience_deep_dive", label: "Audience Deep Dive", tag: "q-audience" },
+  { k: "outreach_angle",     label: "Outreach Angle",     tag: "q-outreach" },
+  { k: "data_pull",          label: "Data Pull",          tag: "q-data" },
 ];
 
 const PHASE_LABEL = {
-  decomposing: "Reading your query",
-  retrieving:  "Searching BJL",
-  synthesizing: "Writing the brief",
+  investigating: "Digging through the corpus",
+  synthesizing:  "Writing the brief",
+  // kept for any residual callers
+  decomposing:   "Reading your query",
+  retrieving:    "Searching BJL",
 };
 
-const LOADING_CURIOSITY = "Thanks for being curious. The lab is finding your insights.";
+const LOADING_CURIOSITY = "Thanks for being curious. The lab is digging.";
 
 const FOLLOWUP_SUGGESTIONS = [
   "Tell me more about this",
@@ -922,92 +959,72 @@ const FOLLOWUP_SUGGESTIONS = [
   "Who else in BJL touches this?",
 ];
 
+const INTEL_WELCOME = "Welcome to the Brand Joy Lab. Ask about a brand, an audience, a category, or an angle. Use the tags above if you want to suggest a direction. The lab will dig.";
+
 const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistContext }) => {
-  const [type, setType] = useState("brand");
+  const [intent, setIntent] = useState(null); // null means no chip selected
   const [prompt, setPrompt] = useState("");
-  const [category, setCategory] = useState("— any —");
-  const [audience, setAudience] = useState("any");
-  const [emailInstructions, setEmailInstructions] = useState("");
   const [running, setRunning] = useState(false);
   const [phase, setPhase] = useState(null);
   const [error, setError] = useState(null);
 
-  // Conversation history.
-  // `turns` is the full record of completed Q&A turns, oldest first, preserved
-  // across follow-ups. Each entry: { prompt, response, evidenceCounts, isFollowup }.
-  // `currentStream` + `currentPrompt` represent the in-progress turn that is
-  // actively streaming. When streaming finishes, that pair moves into `turns`.
+  // Live investigation notes, appended as the investigator emits them.
+  // Cleared when a new query starts; fades out when synthesis begins.
+  const [notes, setNotes] = useState([]);
+
+  // Conversation history. Preserved across follow-ups.
   const [turns, setTurns] = useState([]);
   const [currentPrompt, setCurrentPrompt] = useState("");
   const [currentStream, setCurrentStream] = useState("");
   const [currentIsFollowup, setCurrentIsFollowup] = useState(false);
 
   const [followupText, setFollowupText] = useState("");
-  const typeMeta = INTEL_TYPES.find(q => q.k === type);
 
-  const show = {
-    category: true,
-    audience: ["audience", "data", "outreach"].includes(type),
-    context:  ["outreach", "draft", "brand"].includes(type),
-    email:    type === "draft",
-  };
+  const toggleChip = useCallback((k) => {
+    setIntent(prev => prev === k ? null : k);
+  }, []);
 
   const runQuery = useCallback(async (promptText, isFollowup = false) => {
     if (!promptText.trim() || running) return;
 
-    // A fresh (non-followup) Go starts a new conversation thread.
-    // A follow-up appends to the existing thread.
-    // We snapshot prior prompt/response from the last turn for the preamble.
     const prevTurns = isFollowup ? turns : [];
     const prior = isFollowup ? prevTurns[prevTurns.length - 1] : null;
 
     setRunning(true);
-    setPhase("decomposing");
+    setPhase("investigating");
     setError(null);
     setEvidenceRows([]);
-    // If not a follow-up, wipe the thread. If it is, keep turns intact.
+    setNotes([]);
     if (!isFollowup) setTurns([]);
     setCurrentPrompt(promptText.trim());
     setCurrentStream("");
     setCurrentIsFollowup(isFollowup);
 
-    const qualifiers = [];
-    if (category && !category.startsWith("—")) qualifiers.push(`[Category: ${category}]`);
-    if (audience && audience !== "any") qualifiers.push(`[Audience mode: ${audience}]`);
-    let builtQuery;
+    let builtQuestion;
     if (isFollowup && prior && prior.prompt && prior.response) {
-      // Preamble pattern: prior turn re-sent as context so the orchestrator's
-      // decomposer and synthesis can build continuity. bjlClient.js has no
-      // native conversation-history channel, so we carry it ourselves.
-      builtQuery =
-        (qualifiers.length ? qualifiers.join(" ") + "\n" : "") +
+      builtQuestion =
         `[PRIOR QUESTION]\n${prior.prompt}\n\n[PRIOR RESPONSE]\n${prior.response.trim()}\n\n[FOLLOW-UP QUESTION]\n${promptText.trim()}`;
     } else {
-      builtQuery = (qualifiers.length ? qualifiers.join(" ") + "\n" : "") + promptText.trim();
+      builtQuestion = promptText.trim();
     }
-    const ctxParts = [];
-    if (strategistContext && strategistContext.trim()) ctxParts.push(strategistContext.trim());
-    if (emailInstructions && emailInstructions.trim() && type === "draft") {
-      ctxParts.push("EMAIL INSTRUCTIONS (shape findings as raw material for a draft matching this):\n" + emailInstructions.trim());
+    if (strategistContext && strategistContext.trim()) {
+      builtQuestion = `[STRATEGIST CONTEXT]\n${strategistContext.trim()}\n\n${builtQuestion}`;
     }
-    await queryBJL({
-      query: builtQuery,
-      intentHint: typeMeta.intent,
-      strategistContext: ctxParts.length ? ctxParts.join("\n\n") : undefined,
+
+    await investigateQuery({
+      question: builtQuestion,
+      intent: intent || null,
       onStatus: ({ phase }) => setPhase(phase),
+      onNote: ({ note }) => setNotes(prev => [...prev, note]),
       onChunk: (text) => setCurrentStream(prev => prev + text),
-      onEvidence: ({ rows }) => setEvidenceRows(rows || []),
-      onDone: ({ evidence_counts }) => {
+      onDone: (info) => {
         setRunning(false);
         setPhase(null);
-        // Move the in-progress turn into the thread using a setState callback
-        // so we capture the final streamed text even if the last chunk landed
-        // in the same frame as this onDone.
         setCurrentStream(finalStream => {
           setTurns(prev => [...prev, {
             prompt: promptText.trim(),
             response: finalStream,
-            evidenceCounts: evidence_counts || null,
+            investigationMeta: info || null,
             isFollowup,
           }]);
           return "";
@@ -1022,7 +1039,7 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
         setCurrentStream("");
       },
     });
-  }, [category, audience, strategistContext, emailInstructions, type, typeMeta, running, turns, setEvidenceRows]);
+  }, [intent, strategistContext, running, turns, setEvidenceRows]);
 
   const run = useCallback(() => runQuery(prompt, false), [runQuery, prompt]);
   const runFollowup = useCallback(() => {
@@ -1048,8 +1065,9 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
   }, [turns]);
 
   const lastTurn = turns[turns.length - 1];
-  const evidenceCounts = lastTurn?.evidenceCounts || null;
+  const investigationMeta = lastTurn?.investigationMeta || null;
   const docOpen = running || turns.length > 0 || error;
+  const showNotes = running && phase !== "synthesizing" && notes.length > 0;
 
   return (
     <div className="canvas">
@@ -1059,98 +1077,72 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
             <div className="eyebrow" style={{marginBottom: 6}}>Intelligence engine</div>
             <div className="display" style={{fontSize: 48, letterSpacing: "-0.01em"}}>Ask the Lab.</div>
             <div style={{marginTop: 8, color: "var(--grey-2)", maxWidth: "52ch", fontSize: 14}}>
-              Every question is grounded in BJL evidence. Pick a question type, write the question,
-              add any context. The engine decomposes, retrieves, and synthesizes.
+              {INTEL_WELCOME}
             </div>
           </div>
           <div className="mono" style={{color: "var(--grey-2)", textAlign: "right"}}>
             session · {new Date().toISOString().slice(0,10)}<br/>
-            v2 · parallel build
+            v2 · investigator
           </div>
         </div>
 
         <div className="commission">
           <div className="commission-head">
-            <div className="step">Ask the Lab · step 1 of 1</div>
+            <div className="step">Ask the Lab</div>
             <div className="mono" style={{color: "var(--grey-2)"}}>
-              {typeMeta.label.toUpperCase()} · intentHint={typeMeta.intent}
+              {intent ? INTEL_CHIPS.find(c => c.k === intent).label.toUpperCase() : "NO TAG"}
             </div>
           </div>
-          <div className="commission-types">
-            {INTEL_TYPES.map((q, i) => (
-              <button key={q.k} className={`q-type ${q.tag}`}
-                aria-pressed={type === q.k}
-                onClick={() => setType(q.k)}>
-                <span className="q-swatch" />
-                <span className="q-num">{String(i+1).padStart(2, "0")}</span>
-                <span className="q-name">{q.label}</span>
-                <span className="q-desc">{q.desc}</span>
+          <div className="intent-chips" style={{display: "flex", flexWrap: "wrap", gap: 8, padding: "12px 16px"}}>
+            {INTEL_CHIPS.map(c => (
+              <button key={c.k} type="button"
+                className={`chip ${c.tag} ${intent === c.k ? "active" : ""}`}
+                aria-pressed={intent === c.k}
+                onClick={() => toggleChip(c.k)}
+                style={{
+                  padding: "6px 14px",
+                  borderRadius: 999,
+                  border: "1px solid var(--grey-1)",
+                  background: intent === c.k ? "var(--accent)" : "transparent",
+                  color: intent === c.k ? "var(--bg)" : "var(--grey-2)",
+                  fontSize: 12,
+                  letterSpacing: 0.2,
+                  cursor: "pointer",
+                  transition: "all .15s ease",
+                }}>
+                {c.label}
               </button>
             ))}
           </div>
           <div className="commission-body">
             <textarea className="commission-prompt" rows={3}
               value={prompt} onChange={e => setPrompt(e.target.value)}
-              placeholder="What would you like the engine to answer?"
+              onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); run(); } }}
+              placeholder="Ask anything. Brand, audience, category, angle."
             />
-            <div className="param-row">
-              {show.category && (
-                <label className="param-group">
-                  <span className="label">Category</span>
-                  <select value={category} onChange={e => setCategory(e.target.value)}>
-                    {CATEGORIES.map(c => <option key={c}>{c}</option>)}
-                  </select>
-                </label>
-              )}
-              {show.audience && (
-                <label className="param-group">
-                  <span className="label">Audience</span>
-                  <select value={audience} onChange={e => setAudience(e.target.value)}>
-                    {AUDIENCE_MODES.map(a => <option key={a.k} value={a.k}>{a.label}</option>)}
-                  </select>
-                </label>
-              )}
-            </div>
-            {(show.context || show.email) && (
-              <div className="aux fade-in">
-                {show.context && (
-                  <div className="aux-cell">
-                    <div className="aux-label">
-                      <span>Strategist context</span>
-                      <span style={{color: "var(--grey-1)"}}>optional</span>
-                    </div>
-                    <textarea
-                      placeholder="Internal knowledge the engine should factor in — known pitches, client relationships, past work, org intel."
-                      value={strategistContext}
-                      onChange={e => setStrategistContext(e.target.value)}
-                    />
-                  </div>
-                )}
-                {show.email && (
-                  <div className="aux-cell">
-                    <div className="aux-label">
-                      <span>Email instructions</span>
-                      <span style={{color: "var(--grey-1)"}}>shapes findings</span>
-                    </div>
-                    <textarea
-                      placeholder="Voice, length, what to reference, what to avoid."
-                      value={emailInstructions}
-                      onChange={e => setEmailInstructions(e.target.value)}
-                    />
-                  </div>
-                )}
+            <div className="aux fade-in">
+              <div className="aux-cell">
+                <div className="aux-label">
+                  <span>Strategist context</span>
+                  <span style={{color: "var(--grey-1)"}}>optional</span>
+                </div>
+                <textarea
+                  placeholder="Internal context the lab should factor in — known pitches, client relationships, past work."
+                  value={strategistContext}
+                  onChange={e => setStrategistContext(e.target.value)}
+                />
               </div>
-            )}
+            </div>
           </div>
           <div className="commission-foot">
             <div className="meta">
-              <span><b>Decomposer</b> Sonnet</span>
+              <span><b>Investigator</b> Sonnet</span>
               <span><b>Synthesis</b> Opus</span>
-              <span><b>Est.</b> ∼11s</span>
+              <span><b>Est.</b> 12-25s</span>
             </div>
             <div style={{display: "flex", gap: 8}}>
               <button className="btn primary" onClick={run} disabled={running || !prompt.trim()}>
-                {running ? "Finding insights…" : "Go"}
+                {running ? "Digging…" : "Go"}
               </button>
             </div>
           </div>
@@ -1160,11 +1152,10 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
           <article className="intel-doc-shell fade-in">
             <div className="doc-head">
               <div className="doc-meta">
-                <span><b>Type</b> {typeMeta.label}</span>
-                <span><b>Scope</b> {category.startsWith("—") ? "any category" : category}</span>
-                <span><b>Evidence</b> {evidenceCounts
-                  ? `${evidenceCounts.items} items · ${evidenceCounts.verbatims} verbatims · ${evidenceCounts.laws} laws`
-                  : running ? "retrieving…" : "—"}</span>
+                <span><b>Tag</b> {intent ? INTEL_CHIPS.find(c => c.k === intent).label : "none"}</span>
+                <span><b>Investigation</b> {investigationMeta
+                  ? `${investigationMeta.queryBudgetUsed || 0} queries${investigationMeta.stoppedEarly ? " · stopped at budget" : ""}`
+                  : running ? "running…" : "—"}</span>
               </div>
               <div className="doc-actions">
                 <button className="icon-btn" title="Clear conversation" onClick={clearConversation} disabled={running || turns.length === 0}><Icon name="regen" /></button>
@@ -1174,6 +1165,23 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
             </div>
             {error && <div className="phase-pill err"><span className="dot" /> {error}</div>}
             {running && <div className="phase-pill curiosity"><span className="dot" /> {LOADING_CURIOSITY}{phase ? ` · ${PHASE_LABEL[phase] || phase}` : ""}</div>}
+
+            {showNotes && (
+              <div className="investigation-notes fade-in" style={{
+                padding: "12px 16px",
+                borderLeft: "2px solid var(--grey-1)",
+                margin: "8px 0 20px",
+                color: "var(--grey-2)",
+                fontSize: 13,
+                fontFamily: "var(--mono, monospace)",
+              }}>
+                {notes.map((n, i) => (
+                  <div key={i} style={{marginBottom: 4, opacity: i === notes.length - 1 ? 1 : 0.6}}>
+                    {i === notes.length - 1 ? "› " : "  "}{n}
+                  </div>
+                ))}
+              </div>
+            )}
 
             {turns.map((t, i) => (
               <div key={i} className="turn">
