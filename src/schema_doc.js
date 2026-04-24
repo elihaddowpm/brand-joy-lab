@@ -79,6 +79,23 @@ How to use:
 - Audience analysis: combine generation + gender + theme + parental_status. The schema fully supports demographic combinations.
 - Always attribute verbatims to demographics ("a Boomer woman in the South").
 
+Searching for words in response text:
+
+When searching for specific words (profanity, emotional language, topic terms, brand mentions), include common inflections and compounds unless the question explicitly calls for a single exact form.
+
+- "fuck" → pattern should match fuck|fucking|fucked|fucks
+- "shit" → pattern should match shit|shits|shitty|shitted|bullshit|dipshit|horseshit
+- "run" → pattern should match run|running|ran|runs
+- "buy" → pattern should match buy|buying|bought|buys|purchased|purchasing|purchase
+
+Use word-boundary matching with the \`\\y\` operator in regex to avoid false positives:
+\`response_text ~* '\\y(fuck|fucking|fucked|fucks)\\y'\`
+
+For COUNTING instances rather than just detecting presence, use regexp_matches with the 'g' flag and count the rows returned:
+\`SELECT COUNT(*) FROM bjl_verbatims, regexp_matches(response_text, '\\y(pattern)\\y', 'gi');\`
+
+ILIKE only tells you whether a word appears, not how often. For word-frequency questions, regexp_matches is the right tool.
+
 ### \`bjl_demo_splits\` — demographic Joy Index breakdowns (~560 rows)
 
 One row per item with JI broken out by demographic slice.
