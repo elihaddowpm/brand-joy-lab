@@ -10,6 +10,9 @@
 
 [functions.bjl-query]
   timeout = 26
+  # pg has optional native deps (pg-native, pg-cloudflare) that esbuild struggles
+  # to bundle cleanly; keep them external so pg's runtime fallback path is taken.
+  external_node_modules = ["pg", "pg-native", "pg-cloudflare"]
 
 [context.production.environment]
   NODE_VERSION = "18"
