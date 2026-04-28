@@ -150,6 +150,8 @@ export async function retrieve({ spec, rawQuery, supabaseUrl, supabaseKey, opena
       p_parental_status: demographics.parental_status,
       p_require_quotable: true,
       p_limit: 12,
+      p_year_month_from: spec.year_month_from || null,
+      p_year_month_to: spec.year_month_to || null,
     }) : { data: [], error: null },
 
     // 5. Semantic verbatim retrieval
@@ -160,6 +162,8 @@ export async function retrieve({ spec, rawQuery, supabaseUrl, supabaseKey, opena
       p_generation: demographics.generation,
       p_require_quotable: true,
       p_limit: 12,
+      p_year_month_from: spec.year_month_from || null,
+      p_year_month_to: spec.year_month_to || null,
     }) : { data: [], error: null },
 
     // 6. Full-text entity search on verbatims (NO category filter).
@@ -173,6 +177,8 @@ export async function retrieve({ spec, rawQuery, supabaseUrl, supabaseKey, opena
           p_gender: demographics.gender,
           p_require_quotable: true,
           p_limit: 15,
+          p_year_month_from: spec.year_month_from || null,
+          p_year_month_to: spec.year_month_to || null,
         })
       : { data: [], error: null },
 

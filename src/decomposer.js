@@ -78,7 +78,7 @@ DEMOGRAPHICS (for verbatim filtering):
 
 OUTPUT SCHEMA:
 {
-  "intent": "outreach_angle" | "brand_lookup" | "audience_deep_dive" | "data_pull" | "email_findings" | "general",
+  "intent": "outreach_angle" | "brand_lookup" | "audience_deep_dive" | "data_pull" | "email_findings" | "temporal_trend" | "general",
   "category_keys": ["..."],
   "joy_modes": ["..."],
   "occasions": ["..."],
@@ -92,11 +92,22 @@ OUTPUT SCHEMA:
   },
   "semantic_query": "short phrase capturing the query's emotional/strategic core, used for embedding search",
   "entity_tokens": [...] | null,
+  "year_month_from": "YYYY-MM" | null,
+  "year_month_to": "YYYY-MM" | null,
   "min_n": integer (default 200; use lower for narrow queries),
   "reasoning": "one sentence explaining your tag choices"
 }
 
 entity_tokens: specific brand names, product names, proper nouns from the query that should be searched directly by text match. Null if the query has no specific entity.
+
+year_month_from / year_month_to: optional temporal window, format 'YYYY-MM'. BJL fields monthly; fieldings available Aug 2023 through the current month. Populate both when the query has a temporal frame:
+- "last 6 months" → from = (current month - 6), to = current month
+- "this year" → from = "YYYY-01" for the current year, to = current month
+- "since September" / "since last fall" → from = that month, to = current month
+- "last quarter" → from = (current month - 3), to = current month
+- "how has X shifted" / "is Y rising" / "momentum of Z" / any trend/change framing → from = (current month - 6), to = current month (default 6-month window if not specified)
+- A specific month like "in January 2025" → from = to = "2025-01"
+Leave BOTH null for queries with no temporal intent (brand lookups, static profiles, definitional questions). Never set only one end. Never emit a future month — cap `to` at the current month.
 
 TAGGING PRINCIPLES:
 1. Pick 2-5 joy_modes, 1-4 occasions, 2-5 functional_jobs, 0-3 tensions. Tighter specs produce sharper retrieval.
@@ -125,8 +136,9 @@ Entity tokens enable a text-based retrieval path that bypasses the categorizatio
  * @returns {Promise<Object>} The retrieval spec
  */
 export async function decompose({ query, intentHint, strategistContext, waldoContext, client }) {
-  let userMessage = `QUERY:\n${query}`;
-  
+  const currentYearMonth = new Date().toISOString().slice(0, 7); // 'YYYY-MM' in UTC, close enough for monthly windows
+  let userMessage = `QUERY:\n${query}\n\nCURRENT_MONTH: ${currentYearMonth}`;
+
   if (intentHint) {
     userMessage += `\n\nINTENT HINT: ${intentHint}`;
   }
@@ -136,7 +148,7 @@ export async function decompose({ query, intentHint, strategistContext, waldoCon
   if (waldoContext) {
     userMessage += `\n\nACCOUNT CONTEXT (Waldo research on the target account):\n${JSON.stringify(waldoContext).slice(0, 3000)}`;
   }
-  
+
   userMessage += "\n\nReturn the retrieval spec as JSON.";
 
   const response = await client.messages.create({
@@ -184,6 +196,26 @@ export async function decompose({ query, intentHint, strategistContext, waldoCon
   spec.entity_tokens = Array.isArray(spec.entity_tokens) && spec.entity_tokens.length > 0
     ? spec.entity_tokens.slice(0, 5)
     : null;
+
+  // Defensive validation for temporal window. Require strict 'YYYY-MM' format,
+  // drop anything outside the known corpus range, ensure from <= to, and
+  // require both ends (a half-open window is ambiguous — the decomposer prompt
+  // says never set only one end, but we enforce it here too).
+  const YM_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+  const CORPUS_MIN = "2023-08";
+  const currentMonth = new Date().toISOString().slice(0, 7);
+  const isValidYm = (v) => typeof v === "string" && YM_RE.test(v);
+  let ymFrom = isValidYm(spec.year_month_from) ? spec.year_month_from : null;
+  let ymTo = isValidYm(spec.year_month_to) ? spec.year_month_to : null;
+  if (ymFrom && ymFrom < CORPUS_MIN) ymFrom = CORPUS_MIN;
+  if (ymTo && ymTo > currentMonth) ymTo = currentMonth;
+  if (ymFrom && ymTo && ymFrom > ymTo) {
+    // Swap rather than discard — the decomposer probably flipped them.
+    const tmp = ymFrom; ymFrom = ymTo; ymTo = tmp;
+  }
+  if (!ymFrom || !ymTo) { ymFrom = null; ymTo = null; }
+  spec.year_month_from = ymFrom;
+  spec.year_month_to = ymTo;
 
   spec.min_n = spec.min_n ?? 200;
   spec.intent = spec.intent ?? "general";

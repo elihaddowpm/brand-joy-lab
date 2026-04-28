@@ -10,9 +10,22 @@ This document describes the Brand Joy Lab database. Treat it as authoritative �
 
 ## Quick orientation
 
-The BJL corpus is a multi-wave consumer survey on emotional joy and brand response. Three primary data tables (scores, verbatims, demo_splits), one synthesis table (laws), and several lookup tables defining the vocabulary.
+The BJL corpus is a monthly consumer survey on emotional joy and brand response. Three primary data tables (scores, verbatims, demo_splits), one synthesis table (laws), and several lookup tables defining the vocabulary.
 
 Key concept: most quantitative responses are scored on a "Joy Index" (JI), a normalized 0-100 score where higher means more joy. JI values are comparable across items asked the same way. Compare JI only within matching \`question_type\`.
+
+## Temporal dimension — READ FIRST
+
+BJL runs monthly fieldings. The corpus spans 29 months, Aug 2023 → the current month.
+
+The ONLY temporal column you should ever query is \`bjl_verbatims.year_month\` (text, format \`'YYYY-MM'\`), populated on every row. It joins to \`bjl_fieldings\` via \`fielding_id\` (\`'m_YYYY_MM'\`) for month metadata like respondent counts and field date ranges.
+
+Do NOT use:
+- \`wave\` — internal jargon, opaque to users, and collapses many months into two buckets. Do not filter, group, or label output by wave. Do not surface the word "wave" in your INVESTIGATION_NOTE or SUMMARY.
+- \`created_at\` — database ingestion timestamp, not fielding date. Every row has the same value. Useless for temporal analysis.
+- \`bjl_waves\` lookup — ignore. It is legacy and does not describe temporal structure.
+
+For "last N months" questions: filter \`year_month >= to_char(CURRENT_DATE - INTERVAL 'N months', 'YYYY-MM')\`. For "how has X shifted" / "momentum of Y" / trend framings with no explicit window: default to the last 6 months. For a named month or quarter: pin the exact \`year_month\` values. When writing the SUMMARY, name months directly ("Jan–Mar 2026", "the last six months") — never "Wave 2" or similar.
 
 ---
 
@@ -35,7 +48,6 @@ Key columns:
 - \`top_response\` (text) — most common answer
 - \`pct\` (numeric) — generic percentage column
 - \`n\` (integer) — sample size
-- \`wave\` (text) — fielding wave identifier
 - \`joy_modes\` (text[]) — which joy modes apply
 - \`tags\` (text[]) — free-form tags
 - \`topics\` (text[]) — topical tags
@@ -69,6 +81,8 @@ Key columns:
 - \`income_bracket\` (text) — Under $35K, $35-75K, $75-125K, Over $125K
 - \`region\` (text) — US Census region
 - \`parental_status\` (text) — Parent, Non-Parent
+- \`year_month\` (text, \`'YYYY-MM'\`) — monthly fielding bucket. Populated from Date Submitted in the source Excel. Use this for month-by-month comparisons and temporal trends.
+- \`fielding_id\` (text, \`'m_YYYY_MM'\`) — joins to \`bjl_fieldings.fielding_id\` when you need month metadata (date ranges, respondent counts, notes).
 - \`is_quotable\` (boolean) — pre-flagged quotability; ALWAYS filter \`is_quotable = true\` for anything that will appear in output
 - \`search_vector\` (tsvector)
 - \`embedding\` (vector)
@@ -78,6 +92,23 @@ How to use:
 - For entity searches: \`SELECT * FROM retrieve_verbatims_full_text('Brand Name', NULL, NULL, NULL, true, 15)\`. This RPC bypasses category filtering — use it for any brand/entity query.
 - Audience analysis: combine generation + gender + theme + parental_status. The schema fully supports demographic combinations.
 - Always attribute verbatims to demographics ("a Boomer woman in the South").
+
+Temporal filter example:
+\`\`\`sql
+-- Theme share by month over the last 6 months
+WITH recent AS (
+  SELECT year_month, unnest(themes) AS theme
+  FROM bjl_verbatims
+  WHERE is_quotable = true
+    AND year_month >= to_char(CURRENT_DATE - INTERVAL '6 months', 'YYYY-MM')
+)
+SELECT year_month, theme, COUNT(*) AS n,
+       ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (PARTITION BY year_month), 1) AS pct
+FROM recent
+GROUP BY year_month, theme
+ORDER BY year_month, n DESC
+LIMIT 200;
+\`\`\`
 
 Searching for words in response text:
 
@@ -157,8 +188,8 @@ Modes: achievement, aesthetic, awe, freedom, hedonic, inspirational, physical, p
 ### \`bjl_occasions\` (25 rows) — consumption occasions
 ### \`bjl_functional_jobs\` (24 rows) — jobs-to-be-done
 ### \`bjl_questions\` (203 rows) — master list of survey questions with metadata
-### \`bjl_waves\` (1 row) — fielding waves with date ranges
-### \`bjl_fieldings\` (29 rows) — detail on each fielding event
+### \`bjl_fieldings\` (29 rows) — one row per monthly fielding, Aug 2023 → current month
+Key columns: \`fielding_id\` (\`'m_YYYY_MM'\`), \`year_month\` (\`'YYYY-MM'\`), \`field_start\`, \`field_end\`, \`n_respondents\`, \`notes\`. Join to \`bjl_verbatims\` on \`fielding_id\` when you need respondent counts, field date ranges, or per-month notes.
 
 ---
 
