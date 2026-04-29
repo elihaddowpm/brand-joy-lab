@@ -1,0 +1,2510 @@
+<!--
+  ARCHIVED — Brand Joy Lab Intelligence Engine V1
+
+  This file was the production index.html until the V2 frontend was promoted
+  to default in PR #4 (chore(frontend): promote V2 to default index, archive V1).
+
+  V1 architecture: SSE-streaming via /api/bjl-query (single function file),
+  with batch email generation, brand lookup, audience deep dive, and outreach
+  modes rendered through the original dark-themed UI. This frontend hit
+  Netlify's 26-second sync function ceiling on long queries, which is why the
+  V2 polling architecture was built to replace it.
+
+  Kept in the repo as a historical reference for what V1 looked like and how
+  it was wired. Not deployed. The current frontend is /index.html (V2).
+
+  See git history for the path that got us here:
+    PR #1 — polling/triage architecture replacing the SSE flow
+    PR #2 — synthesizer prompt: cite n alongside every figure
+    PR #3 — favicon
+    PR #4 — promote V2 to default (this archive)
+-->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BJL Intelligence Engine — PETERMAYER (V1, archived)</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <style>*{box-sizing:border-box;margin:0;padding:0}html,body,#root{height:100%}body{background:#0c0b09;--color-background-primary:#0c0b09;--color-background-secondary:#141310;--color-background-tertiary:#1a1814;--color-text-primary:#f0ede8;--color-text-secondary:#c8c4bc;--color-text-tertiary:#7a776f;--color-border-primary:#3a3730;--color-border-secondary:#2a2720;--color-border-tertiary:#222018;--border-radius-sm:4px;--border-radius-md:6px;--border-radius-lg:10px;--font-sans:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}</style>
+</head>
+<body>
+  <div id="root" style="height:100vh"></div>
+  <script type="text/babel" data-presets="react">
+const { useState, useRef, useEffect, useCallback } = React;
+
+const BJL_DATA_STORAGE_KEY = "bjl_data_v3";
+const CONVERSATION_STORAGE_KEY = "bjl_conversation_v1";
+const MAX_HISTORY_MSGS = 8;
+// BJL_DATA_EMBEDDED removed — orchestrator now streams live evidence from Supabase via /api/bjl-query.
+
+
+
+const TAXONOMY = `THE 13 MODES OF JOY — use to frame findings and spot adjacencies.
+
+PLAYFUL: fun, spontaneous | AESTHETIC: beauty, art, design, environment
+HEDONIC: immediate sensory pleasure, indulgence | PHYSICAL: movement, exercise
+SENTIMENTAL: nostalgia, memory, tradition, legacy | RELATIONAL: togetherness, belonging (#1 verbatim mode, 24%)
+ACHIEVEMENT: mastery, control, pride | TRIUMPH: overcoming adversity
+FREEDOM: liberation, escape — vacation JI=78.6, highest travel item | AWE: wonder, amazement
+INSPIRATIONAL: energized toward action | SELF-ACTUALIZATION: purpose, meaning
+SPIRITUAL: transcendence, connection with something greater
+
+JOY-TO-PURCHASE: Hedonic=impulse | Relational=occasion/gift | Achievement=considered | Freedom=aspirational big-ticket | Sentimental=loyalty | Playful=discovery | Awe=premium/experience
+
+CATEGORY ADJACENCY: Every brand competes with every source of the same joy mode across all categories.
+AD FINDING: Prior brand users score brand ads 6.74/10 vs 4.74/10 for non-users (42% gap). Joy amplifies loyalty more than it creates new customers.
+`;
+
+const INSTRUCTIONS = `You are the Brand Joy Lab Intelligence Engine for PETERMAYER, an independent creative advertising agency.
+Research base: 12,663 U.S. consumers, Aug 2023–Mar 2026. 3,589 scored items. 62,755 classified verbatims. 13 joy modes.
+Joy Index = mean × 20. Scale –60 to 100. Only cite data present in the BJL context below. Never fabricate scores or quotes.
+
+DATA TYPES:
+JOY SCALE — Joy Index scores. Comparable within the same question block only, never across questions.
+SELECT-ALL — Co-existing truths. Never rank them or call one "primary." Every selected item is equally true.
+ORDINAL — Degree of agreement (1–5 mean). Cite as "X out of 5" or "XX% agree."
+VERBATIMS — Real consumer words only. Never quote or paraphrase data-format lines (scores, percentages, response labels).
+
+TENSION FIRST — PRIMARY REASONING INSTRUCTION:
+Before writing anything, scan for what is surprising, counterintuitive, or structurally interesting. The best finding is rarely the highest score. Look for:
+— Items that rank unexpectedly high or low for their category
+— Gaps between what drives joy and what people actually do
+— Joy modes appearing where you wouldn't expect them
+— Contrasts between demographic segments or brand types
+— High pct_negative alongside a positive mean (polarization = always interesting)
+Lead with the most tension-producing finding. Build outward from there.
+
+OUTPUT BY QUERY TYPE:
+BRAND LOOKUP — Lead with the unexpected finding. Frame data points as implications, not observations. End with one sharp strategic question.
+AUDIENCE DIVE — Profile through what surprises you. What do they care about that you wouldn't predict?
+OUTREACH ANGLE — One sharp tension between what the brand is probably doing and what the data reveals. 3 paragraphs max.
+DATA PULL — Most counterintuitive stat first. Structure: surprising finding → supporting data → what it means. No lists of obvious top scores.
+OUTREACH DRAFT — Relational, humble, immediate. Sound like someone who found something interesting and felt compelled to reach out.
+
+VERBATIMS: Surface consumer quotes to make insights human. Real language beats statistics in a room.
+CONVERSATION: Build on prior exchanges naturally. Reference what was already established.
+DEMOGRAPHICS: Flag n < 50. Note when shifting from segment to overall figures.
+`;
+
+
+function buildSystemPrompt(bjlData) {
+  return TAXONOMY + '\n\n' + INSTRUCTIONS + '\n\n' + (bjlData || '');
+}
+
+const QUERY_TYPES = [
+  { value: "brand_lookup", label: "Brand Lookup", placeholder: "e.g. Delta, Chick-fil-A, IKEA" },
+  { value: "audience_dive", label: "Audience Dive", placeholder: "e.g. Millennial women, Gen Z men" },
+  { value: "outreach_angle", label: "Outreach Angle", placeholder: "e.g. Discover, Regions Bank" },
+  { value: "data_pull", label: "Data Pull", placeholder: "e.g. financial joy, fandom and brands" },
+  { value: "outreach_draft", label: "Outreach Draft", placeholder: "e.g. Athletic Brewing, Regions Bank" },
+];
+
+const CATEGORIES = [
+  "Food & Beverage / CPG","QSR / Fast Food / Restaurants","Retail / Grocery",
+  "Travel & Tourism / Hospitality","Financial Services","Sports & Entertainment",
+  "Technology / Telecom","Health & Wellness","Home & Furniture",
+  "Auto / Transportation","Fashion / Beauty","Media / Streaming","Alcohol & Beverage","Other",
+];
+
+const GENERATIONS = ["Gen Z (18-29)","Millennial (30-44)","Gen X (45-54)","Boomer (55-69)","Silent/Boomer (70+)"];
+const GENDERS = ["Female","Male"];
+const INCOMES = ["Under $35K","$35-75K","$75-125K","$125K+"];
+
+function ts() { return new Date().toLocaleTimeString([], { hour:"2-digit", minute:"2-digit" }); }
+
+// ── queryBJL — SSE streaming client for the v2 orchestrator (/api/bjl-query) ──
+// Mirror of src/bjlClient.js, inlined here because this page uses runtime-Babel
+// (no ES module imports). Keep in sync with src/bjlClient.js when tuning the parser.
+async function queryBJL({
+  query,
+  intentHint,
+  strategistContext,
+  waldoContext,
+  debug = false,
+  onStatus = () => {},
+  onChunk = () => {},
+  onDone = () => {},
+  onError = () => {},
+  onDebug = () => {},
+  endpoint = "/api/bjl-query",
+  signal,
+}) {
+  let response;
+  try {
+    response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query, intentHint, strategistContext, waldoContext, debug }),
+      signal,
+    });
+  } catch (err) {
+    onError({ message: err.message, phase: "fetch" });
+    return;
+  }
+
+  if (!response.ok) {
+    let errorBody;
+    try { errorBody = await response.json(); } catch { errorBody = { error: response.statusText }; }
+    onError({ message: errorBody.error || "Request failed", phase: "http", status: response.status });
+    return;
+  }
+
+  if (!response.body) {
+    onError({ message: "No response body", phase: "stream" });
+    return;
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      // Parse SSE frames: each event is "event: X\ndata: Y\n\n"
+      let frameEnd;
+      while ((frameEnd = buffer.indexOf("\n\n")) !== -1) {
+        const frame = buffer.slice(0, frameEnd);
+        buffer = buffer.slice(frameEnd + 2);
+
+        const lines = frame.split("\n");
+        let eventType = "message";
+        let data = "";
+        for (const line of lines) {
+          if (line.startsWith("event: ")) eventType = line.slice(7);
+          else if (line.startsWith("data: ")) data += line.slice(6);
+        }
+
+        if (!data) continue;
+
+        let parsed;
+        try { parsed = JSON.parse(data); } catch { continue; }
+
+        switch (eventType) {
+          case "status": onStatus(parsed); break;
+          case "chunk":  onChunk(parsed.text); break;
+          case "done":   onDone(parsed); break;
+          case "error":  onError(parsed); break;
+          case "debug":  onDebug(parsed); break;
+        }
+      }
+    }
+  } catch (err) {
+    onError({ message: err.message, phase: "stream" });
+  } finally {
+    try { reader.releaseLock(); } catch {}
+  }
+}
+
+function Dot({ delay }) {
+  return <div style={{ width:7,height:7,borderRadius:"50%",background:"#E8C547",animation:"bjlp 1.3s ease-in-out infinite",animationDelay:`${delay}s` }} />;
+}
+
+function MsgBubble({ msg }) {
+  const isUser = msg.role === "user";
+  const toHtml = s => s.replace(/\*\*(.*?)\*\*/g, '<strong style="color:var(--color-text-primary)">$1</strong>');
+
+  if (isUser) {
+    return (
+      <div style={{ display:"flex",justifyContent:"flex-end",marginBottom:16 }}>
+        <div style={{ maxWidth:"75%",background:"#E8C54718",border:"1px solid #E8C54744",borderRadius:"var(--border-radius-lg) var(--border-radius-lg) 4px var(--border-radius-lg)",padding:"10px 14px" }}>
+          <p style={{ margin:0,fontSize:13,color:"var(--color-text-primary)",lineHeight:1.5 }}>{msg.content}</p>
+          <p style={{ margin:"4px 0 0",fontSize:10,color:"#E8C54788" }}>{msg.time}</p>
+        </div>
+      </div>
+    );
+  }
+
+  const splitIdx = msg.content.search(/WHERE TO GO NEXT/i);
+  const main = splitIdx > -1 ? msg.content.slice(0, splitIdx).trim() : msg.content.trim();
+  const followSection = splitIdx > -1 ? msg.content.slice(splitIdx) : "";
+  const followUps = followSection.split("\n")
+    .filter(l => /^\d+\./.test(l.trim()))
+    .map(l => l.replace(/^\d+\.\s*/, "").replace(/^\[|\]$/g, "").trim())
+    .filter(l => l.length > 15).slice(0, 3);
+
+  return (
+    <div style={{ marginBottom:20 }}>
+      <div style={{ background:"var(--color-background-secondary)",border:"1px solid var(--color-border-tertiary)",borderRadius:"4px var(--border-radius-lg) var(--border-radius-lg) var(--border-radius-lg)",padding:"16px 20px" }}>
+        {main.split("\n").map((line, i) => {
+          if (!line.trim()) return <div key={i} style={{ height:4 }} />;
+          if (/^#{1,3}\s/.test(line)) return <p key={i} style={{ fontSize:10,fontWeight:500,letterSpacing:".13em",textTransform:"uppercase",color:"#E8C547",margin:"16px 0 4px" }}>{line.replace(/^#+\s/,"")}</p>;
+          if (/^[-•]\s/.test(line)) return (
+            <div key={i} style={{ display:"flex",gap:9,marginBottom:6,alignItems:"flex-start" }}>
+              <span style={{ color:"#E8C547",flexShrink:0,fontSize:8,marginTop:6 }}>◆</span>
+              <span style={{ color:"var(--color-text-secondary)",lineHeight:1.65,fontSize:13 }} dangerouslySetInnerHTML={{ __html:toHtml(line.slice(2)) }} />
+            </div>
+          );
+          if (/^\d+\.\s/.test(line)) {
+            const num = line.match(/^(\d+)/)[1];
+            return (
+              <div key={i} style={{ display:"flex",gap:9,marginBottom:7,alignItems:"flex-start" }}>
+                <span style={{ color:"#E8C547",fontWeight:500,flexShrink:0,minWidth:16,fontSize:12 }}>{num}.</span>
+                <span style={{ color:"var(--color-text-secondary)",lineHeight:1.65,fontSize:13 }} dangerouslySetInnerHTML={{ __html:toHtml(line.replace(/^\d+\.\s/,"")) }} />
+              </div>
+            );
+          }
+          return <p key={i} style={{ color:"var(--color-text-secondary)",lineHeight:1.68,margin:"2px 0",fontSize:13 }} dangerouslySetInnerHTML={{ __html:toHtml(line) }} />;
+        })}
+      </div>
+      {followUps.length > 0 && (
+        <div style={{ marginTop:8,paddingLeft:4 }}>
+          {followUps.map((q,i) => (
+            <button key={i} data-followup={q}
+              style={{ display:"block",width:"100%",textAlign:"left",background:"none",border:"none",borderLeft:"2px solid #E8C54744",padding:"5px 10px",color:"var(--color-text-tertiary)",fontSize:12,cursor:"pointer",fontFamily:"inherit",lineHeight:1.4,marginBottom:4,transition:"all .15s" }}
+              onMouseEnter={e => { e.currentTarget.style.borderLeftColor="#E8C547"; e.currentTarget.style.color="var(--color-text-primary)"; }}
+              onMouseLeave={e => { e.currentTarget.style.borderLeftColor="#E8C54744"; e.currentTarget.style.color="var(--color-text-tertiary)"; }}>
+              → {q}
+            </button>
+          ))}
+        </div>
+      )}
+      <p style={{ fontSize:10,color:"var(--color-text-tertiary)",margin:"4px 0 0",paddingLeft:4 }}>{msg.time}</p>
+    </div>
+  );
+}
+
+function BJLTool() {
+    const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [loadingLabel, setLoadingLabel] = useState(null);
+  const [error, setError] = useState(null);
+  const [storageReady, setStorageReady] = useState(false);
+  const [showComposer, setShowComposer] = useState(true);
+  const [queryType, setQueryType] = useState("brand_lookup");
+  const [strategistContext, setStrategistContext] = useState("");
+  const [showContext, setShowContext] = useState(false);
+  const [emailInstructions, setEmailInstructions] = useState("");
+  const [showEmailInstructions, setShowEmailInstructions] = useState(false);
+  const [category, setCategory] = useState("");
+  const [generation, setGeneration] = useState("");
+  const [gender, setGender] = useState("");
+  const [income, setIncome] = useState("");
+  const [showDemo, setShowDemo] = useState(false);
+  const [audienceMode, setAudienceMode] = useState("external");
+  const [recipientRole, setRecipientRole] = useState("");
+  const [prospectName, setProspectName] = useState("");
+  const [batchMode, setBatchMode] = useState(false);
+  const [batchEmailPrompt, setBatchEmailPrompt] = useState("");
+  const [batchDelay, setBatchDelay] = useState(40);
+  const [batchIndustry, setBatchIndustry] = useState("");
+  const [batchInsights, setBatchInsights] = useState("");
+  const [batchInsightsPulling, setBatchInsightsPulling] = useState(false);
+  const [batchInsightsReady, setBatchInsightsReady] = useState(false);
+  const [batchContacts, setBatchContacts] = useState([]);
+  const [batchResults, setBatchResults] = useState([]);
+  const [batchRunning, setBatchRunning] = useState(false);
+  const [batchProgress, setBatchProgress] = useState(0);
+  const [batchError, setBatchError] = useState(null);
+  const [waldoData, setWaldoData] = useState(null);
+  const [waldoAccount, setWaldoAccount] = useState(null);
+  const [waldoContacts, setWaldoContacts] = useState([]);
+  const [waldoResults, setWaldoResults] = useState([]);
+  const [waldoRunning, setWaldoRunning] = useState(false);
+  const [waldoProgress, setWaldoProgress] = useState(0);
+  const [waldoInsights, setWaldoInsights] = useState('');
+  const [waldoInsightsPulling, setWaldoInsightsPulling] = useState(false);
+  const [waldoInsightsReady, setWaldoInsightsReady] = useState(false);
+  const [showWaldoSignals, setShowWaldoSignals] = useState(false);
+
+  // Multi-account prepare-then-generate workflow state
+  //
+  // accountInsights: { [accountId]: { text: string, ready: boolean, error: string | null } }
+  // accountInsightsPulling: boolean — is the Phase 1 pull currently running across accounts
+  // accountInsightsProgress: { current: number, total: number } — progress counter for the pull
+  // multiAccountEmailInstructions: string — the ONE Email Instructions prompt shared across all accounts
+  // multiAccountExpanded: { [accountId]: boolean } — which review blocks are open in the UI
+  // multiAccountGenerating: boolean — is Phase 3 currently running
+  // multiAccountResults: Array<{ company, contact, text, error }> — unified results across all accounts
+  const [accountInsights, setAccountInsights] = useState({});
+  const [accountInsightsPulling, setAccountInsightsPulling] = useState(false);
+  const [accountInsightsProgress, setAccountInsightsProgress] = useState({ current: 0, total: 0 });
+  const [multiAccountEmailInstructions, setMultiAccountEmailInstructions] = useState("");
+  const [multiAccountExpanded, setMultiAccountExpanded] = useState({});
+  const [multiAccountGenerating, setMultiAccountGenerating] = useState(false);
+  const [multiAccountResults, setMultiAccountResults] = useState([]);
+
+  const bottomRef = useRef(null);
+  const inputRef = useRef(null);
+  const textareaRef = useRef(null);
+
+  const scrollToBottom = useCallback(() => {
+    setTimeout(() => bottomRef.current?.scrollIntoView({ behavior:"smooth" }), 80);
+  }, []);
+
+  useEffect(() => {
+    async function loadHistory() {
+      try {
+        const stored = await window.storage.get(CONVERSATION_STORAGE_KEY);
+        if (stored && stored.value) {
+          const parsed = JSON.parse(stored.value);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setMessages(parsed);
+          }
+        }
+      } catch(e) {
+        // No stored history yet — start fresh
+      }
+      setStorageReady(true);
+    }
+    loadHistory();
+  }, []);
+
+  useEffect(() => {
+    if (messages.length > 0) scrollToBottom();
+  }, [messages, scrollToBottom]);
+
+  // Keep-warm: ping the orchestrator on mount so cold starts happen before the user queries.
+  // An empty body returns 400 "Missing query" — that still wakes the Lambda without running synthesis.
+  useEffect(() => {
+    fetch("/api/bjl-query", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    }).catch(() => {});
+  }, []);
+
+  const saveHistory = async (msgs) => {
+    try {
+      await window.storage.set(CONVERSATION_STORAGE_KEY, JSON.stringify(msgs.slice(-MAX_HISTORY_MSGS)));
+    } catch(e) { /* storage failure is non-fatal */ }
+  };
+
+  const sanitizeEmail = (text) => {
+    return text
+      // Fix common typos lifted verbatim from context field
+      .replace(/Won'tBow/g, "Won't Bow")
+      .replace(/Won’tBow/g, "Won’t Bow")
+      // Strip leading ** artifact (markdown bold leaking into output)
+      .replace(/^\*{1,2}\n/, '')
+      .replace(/^\*{1,2}\s*/, '')
+      // Strip ** from subject line if it appears there
+      .replace(/^(Subject:)\*{1,2}\s*/, '$1')
+      // Replace spaced em dashes with a period — preserves sentence structure
+      .replace(/ — /g, '. ')
+      // Replace unspaced em dash (list separator context) with period + space
+      .replace(/—/g, '. ')
+      // Replace spaced en dashes the same way
+      .replace(/ – /g, '. ')
+      // Clean up any double periods or period-comma artifacts
+      .replace(/\.\s*,/g, '.')
+      .replace(/\.\./g, '.')
+      // Clean up spacing and capitalization from em dash replacement
+      .replace(/ \. /g, '. ')
+      .replace(/\. ([a-z])/g, (m, c) => '. ' + c.toUpperCase())
+      .replace(/\.\s*,/g, '.')
+      .replace(/\.\./g, '.')
+      // Lop off https:// or http:// when followed by www. The www-prefixed URL renders
+      // as a link in every modern email client and we avoid the model's habit of
+      // autocapitalizing the protocol to "Https://" after a sentence-ending period.
+      .replace(/\b[Hh]ttps?:\/\/(?=www\.)/g, '')
+      // For the rare URL that uses https:// without a www. prefix, lowercase the
+      // protocol so it stays a valid clickable link.
+      .replace(/\bHttps:\/\//g, 'https://')
+      .replace(/\bHttp:\/\//g, 'http://')
+      // Strip raw Joy Index scores — these need methodology context to be meaningful in cold email
+      .replace(/\bJI=\d+\.?\d*/g, '')
+      .replace(/a Joy Index of \d+\.?\d*/gi, 'a high joy score')
+      .replace(/Joy Index of \d+\.?\d*/gi, 'high on the joy scale')
+      .replace(/scores a \d+\.?\d* (on|for|in)/gi, 'scores highly $1')
+      .replace(/\d+\.?\d* (on the [Jj]oy|on our [Jj]oy)/g, 'highly $1')
+      .replace(/The high on the joy scale/gi, 'This high joy score')
+      // Normalize sign-off — model sometimes signs with a real name from Waldo context
+      .replace(/\n(Ryan|Eli|Shannon|Dana|Chris|Tameka|Deandra|Mauricio|Pete|Stella|Nicole|Christina|Terri|Dustin|Drew|Jen|Carol|Amy|Tim|Luis|Stephen|Jim|Nate|Hiroshi|Jessica|Dan)\s*$/, '\n[Your name]');
+  };
+
+  const buildEmailSystem = (userInstructions) => {
+    const hasOverride = userInstructions && userInstructions.trim().length > 0;
+
+    // SAFETY FLOOR — always enforced regardless of user instructions.
+    // These are the rules that prevent malformed or unsafe output.
+    const SAFETY_FLOOR = [
+      "You are an outreach email writer for PETERMAYER, an independent advertising agency in New Orleans.",
+      "",
+      "ABSOLUTE RULES — these apply to every email regardless of any other instructions:",
+      "",
+      "1. AGENCY CREDIBILITY — Use ONLY the exact client names and credentials explicitly provided in the strategist context field. Do not add, infer, or invent any client names beyond what is explicitly listed. Do not reach into general knowledge for sports leagues, brands, or properties that sound plausible. If a client name does not appear word-for-word in the strategist context, it cannot appear in the email. No exceptions.",
+      "",
+      "2. BJL DATA RULES:",
+      "(a) Never calculate ratios or percentages by dividing one question's result by another question's result. Cross-question math produces misleading statistics.",
+      "(b) The question 'Aside from sports, which areas do you feel fandom-level passion about?' asked respondents about passion OUTSIDE of sports. You cannot use this question to claim sports ranks lower than other categories.",
+      "(c) Select-all items are co-existing truths, not rankings. Never call any item a primary driver.",
+      "(d) Never tell a prospect their venue, brand, or category scores low or underperforms. Use BJL data to create intrigue, not to put them on the defensive.",
+      "",
+      "3. WALDO RULES — Treat Waldo intelligence as background context that explains why you noticed this prospect, not as a problem they need solved. The signal is your reason for reaching out, not a brief you have been put on. Do not assume the surfaced trigger is their most pressing concern. It may be one of many things on their plate. Do not write the email in a way that implies you know what they are working on or what they need. Curiosity beats assumption. A prospective partner asking thoughtful questions reads better than an outside expert diagnosing the situation.",
+      "",
+      "4. VOICE PROHIBITIONS — these characters and phrases must not appear in your output:",
+      "(a) Em dashes are absolutely forbidden. The character — must not appear anywhere. Use commas, periods, or restructure the sentence.",
+      "(b) Constructions using is/isn't, was/wasn't, are/aren't — rewrite to avoid them entirely.",
+      "(c) Banned words: leverage, unlock, synergies, actionable, in today's landscape, touch base, circle back.",
+      "(d) Never start with 'I hope this email finds you well' or any variant.",
+      "(e) No exclamation points.",
+      "(f) Open with 'Hi [Name]' not 'Dear'.",
+      "",
+      "5. NEVER fabricate facts about the prospect or their company. If the Waldo intelligence does not say something, do not invent it.",
+      "",
+      "6. CASE STUDY REFERENCES — Case studies are proof points that support the BJL insight, not the central content of the email. The case study earns its place by demonstrating that PETERMAYER has applied this kind of thinking before to a parallel challenge. It is never the meat of the email. Keep the case study reference brief: a sentence or two of relevance, a sentence or two on the work, the URL exactly as provided by the user, and one supporting result if it sharpens the connection to the BJL insight. Do not let the case study description run longer than the BJL observation. When email instructions name a case study by URL, title, or short identifier (Pelicans, Kennedy), draw your reference from the CASE STUDY LIBRARY below. Use the actual content from the library, not generic language about the brand. Numbers from the library are defensible and can be cited. Do not cite numbers or claim results that are not in the library. If the email instructions name a case study, always include the URL exactly as provided — do not modify, shorten, or substitute the link.",
+      "",
+      "7. TEMPORAL CLAIMS — Never describe PETERMAYER work as 'recent,' 'just-published,' 'just-wrapped,' 'just-launched,' or 'new' unless the case study library entry explicitly says the work is current. Banned phrasings include 'we just wrapped,' 'we just published,' 'we just worked with,' 'just shared,' and equivalent constructions that imply the work is fresh news. The library will tell you when each engagement happened. Use that timing honestly. If the library shows older work, frame it as work the firm has done, work from the firm's archive, or work that continues to inform the firm's thinking. Specific phrasings that work: 'work we did with [client] a few years back,' 'a project from our archive that is relevant here,' 'something we built for [client] that has stayed with us.' Never invent a specific year if one is not in the library, but never imply recency that the library does not support.",
+      "",
+      "8. BJL DATA IS ALWAYS PRESENT. Every email must include one short, specific BJL behavioral observation. This is the single most important reason PETERMAYER is reaching out and the only proprietary content in the email. Without it, the email is generic outreach. The BJL observation is the meat of the email. Other elements (hook, case study reference, credentials, close) support it. Pick ONE finding from the pulled BJL insights. Do not summarize multiple findings. Do not list. Pull one or two sentences worth of content from the chosen finding and frame it as something the firm has been tracking. The case study, when included, is a proof point that supports the BJL insight by showing the firm has applied this kind of thinking before. The case study is never a substitute for the BJL insight. The hierarchy: BJL insight first as the proprietary substance, case study second as proof we have done parallel thinking, agency credibility third as quick context. If you find yourself writing an email where the case study is the central content and the BJL data is missing or perfunctory, restructure. If no BJL insights have been provided to you, do not generate the email. Respond instead with: 'No BJL insights were provided. Pull insights before generating this email.' This is a hard rule. The whole purpose of this tool is to surface proprietary BJL data in outreach. An email without it does not represent the firm.",
+      "",
+      "9. SUBJECT LINE — Every email must begin with a subject line. Write the subject on its own line at the top of the output, prefixed with 'Subject:' so the downstream parser can extract it. The subject should be short (5-9 words), specific to this recipient, and lean toward intrigue rather than summary. Good subjects telegraph why the email is worth opening without giving away the content. Avoid generic subjects like 'Quick question' or 'Following up.' Avoid clickbait. Avoid subjects that match the opening line of the body word-for-word.",
+    ].join("\n");
+
+    const CASE_STUDY_LIBRARY = [
+      "",
+      "═══════════════════════════════════════════════════════════════════════════",
+      "CASE STUDY LIBRARY — PETERMAYER WORK",
+      "═══════════════════════════════════════════════════════════════════════════",
+      "",
+      "Use these summaries when the email instructions reference a case study.",
+      "Quote specifics from these summaries rather than writing generic credentials.",
+      "",
+      "Voice: refer to PETERMAYER's work using 'we' (we built, we did this work, we worked with). The firm's continuity makes that voice defensible regardless of when the work happened.",
+      "",
+      "Timing: each entry has a 'When' line. Use that timing honestly when framing the reference. Do not characterize older work as 'recent' or 'just-wrapped.' Phrasings that work for older work include 'work we did with [client] a few years back,' 'a project from our archive,' or 'something we built that has stayed with us.' If a relationship is ongoing, you can say so.",
+      "",
+      "─── NEW ORLEANS PELICANS ───",
+      "URL: https://www.peteramayer.com/work/new-olreans-pelicans/brand-awareness-campaign",
+      "Identifier: Pelicans",
+      "When: The WON'T BOW DOWN campaign launched around 2019. Frame this as work from a few years back, not as recent or just-published.",
+      "",
+      "The situation: New Orleans is a football town. The Pelicans were the less-beloved kid brother to the Saints. Thin crowds led to fewer advertisers, less TV coverage, and a paradise for ticket scalpers. PETERMAYER's brief was to make the team as valuable to the community as its NFL counterpart.",
+      "",
+      "The strategic move: The Pelicans' problem was not the team. It was the relationship between the team and the city. We did not try to make people love the team. We made loving the team a way of loving the city. The cultural insight: defiance is the city's defining trait. Disrespect New Orleans and even our biggest naysayers come after you. Civic pride became the route to fan affinity.",
+      "",
+      "The work: WON'T BOW DOWN, a campaign built on a lyric from an old Mardi Gras Indian song that New Orleanians instantly recognized. The launch teased the meaning before revealing it. Mysterious 'WBD' letters appeared everywhere from player hats to bat signal projections, getting the city guessing. The reveal landed right before the season. The campaign extended into the locker room itself and into anthemic murals throughout the city.",
+      "",
+      "The results: 78M organic reach. 12,000 season tickets sold (filling two-thirds of Smoothie King Arena after a 33-49 season). 424K interactions. 360K likes in weeks. Coverage from regional media and the rest of the NBA. Tripadvisor and iSpot praise.",
+      "",
+      "Use this case study for: Sports teams of any level. Regional brands fighting for civic mindshare. Brands with an awareness or affinity gap. Underdog brands. Any brand that would benefit from being reframed as a civic icon rather than a commercial product. Brands looking to draft off cultural capital they don't currently own. Less obviously: visitor attractions wanting to convert from tourist destination to local civic asset, financial brands looking to anchor in regional identity, university or institutional brands where the audience is emotional but the brand is institutional.",
+      "",
+      "─── KENNEDY SPACE CENTER VISITOR COMPLEX ───",
+      "URL: https://www.peteramayer.com/work/kennedy-space-center/kennedy-space-center-visitor-complex",
+      "Identifier: Kennedy",
+      "When: We worked with Kennedy Space Center Visitor Complex from around 2015 through last year, a longstanding relationship. The LOOK UP campaign itself comes from the first half of that engagement (roughly 2015-2019). Frame as long-running client work whose creative thinking has continued to inform the firm. Do not call LOOK UP recent.",
+      "",
+      "The situation: With the Space Shuttle grounded, Kennedy Space Center went from a launchpad to another Florida attraction overnight. The Visitor Complex needed to make space travel as compelling as Disney World and Universal Studios.",
+      "",
+      "The strategic move: Kennedy's problem was not that people had stopped caring about space. It was that they had started experiencing space through screens. The Visitor Complex was selling proximity to a thing people thought they had already consumed. Our reframe: you can watch a launch on YouTube, but you cannot feel the ground shake. The campaign hinges on the difference between mediated experience and embodied experience.",
+      "",
+      "The work: LOOK UP, a campaign that pulled the screens away and compelled people to touch, feel, and experience space exploration firsthand. The name works on two levels: the literal physical action a visitor takes at the Complex, and a metaphorical posture about wonder.",
+      "",
+      "The results: $5.7MM campaign-attributed revenue. 121MM organic impressions. 49% new visitors. Ranked the #1 Attraction in the U.S. on Tripadvisor.",
+      "",
+      "Use this case study for: Visitor attractions of any kind. Theme parks. Zoos. Aquariums. Science centers. Museums. National park gateways and visitor complexes. Family destination brands competing against entertainment alternatives. Any brand whose subject matter consumers experience through media but whose business model depends on selling the embodied version. Less obviously: live sports properties whose problem is 'people watch on TV, why come to the stadium,' retail brands where Instagram has displaced the store visit, restaurant brands competing with delivery for the dine-in occasion.",
+      "",
+      "═══════════════════════════════════════════════════════════════════════════",
+      "END CASE STUDY LIBRARY",
+      "═══════════════════════════════════════════════════════════════════════════",
+    ].join("\n");
+
+    // DEFAULT STRUCTURE — used only when the user has not provided email instructions.
+    // This is the original three-part architecture for first-touch outreach.
+    const DEFAULT_STRUCTURE = [
+      "",
+      "STRUCTURE — use this default unless the user provides specific email instructions:",
+      "",
+      "THE THREE-PART ARCHITECTURE OF EVERY EMAIL:",
+      "1. HOOK — Open with something specific enough that the prospect knows you actually paid attention to their world. The Waldo signal is one possible source, but the goal is to demonstrate genuine curiosity about their work, not to surface a problem you assume they have. Avoid framing the hook as 'you must be dealing with X' or 'the brief on your desk is Y'. Lead instead with what is true and observable about their situation, paired with a question or an observation that invites conversation rather than offering a diagnosis. The hook earns the next sentence. It does not deliver a verdict.",
+      "2. BJL BRIDGE — One behavioral observation from the consumer research. Express it as something you have been tracking that feels relevant to where they sit right now, not a statistic, not a finding, a behavioral truth. Keep it short. Let it raise a question in their mind, not answer one. It follows the hook. It supports the hook. It never replaces it.",
+      "3. AGENCY CREDIBILITY — Brief credential paragraph using only client names from the strategist context.",
+      "",
+      "Output format: Subject line first, then email body. Structure the email body with these exact markers so each section can be identified: write the hook paragraph, then on its own line write the literal text [BJL] (square brackets), then the BJL bridge paragraph, then on its own line write the literal text [CRED] (square brackets), then the agency credential paragraph, then the close and sign-off. These markers will be stripped before delivery.",
+    ].join("\n");
+
+    // USER OVERRIDE — when present, replaces DEFAULT_STRUCTURE entirely.
+    // The safety floor still applies. The user controls everything else.
+    const USER_OVERRIDE = [
+      "",
+      "STRUCTURE — the strategist has provided specific instructions for this email. Follow them as the structural guide. The absolute rules above still apply.",
+      "",
+      "STRATEGIST INSTRUCTIONS:",
+      userInstructions.trim(),
+      "",
+      "Note: the [BJL] and [CRED] section markers from the default structure are NOT required when following strategist instructions. Output the email in whatever structure the instructions specify.",
+    ].join("\n");
+
+    return SAFETY_FLOOR + CASE_STUDY_LIBRARY + (hasOverride ? USER_OVERRIDE : DEFAULT_STRUCTURE);
+  };
+
+  /**
+   * Generate one outreach email for one contact at one account.
+   * Returns { text: string, error: string | null }. Never throws.
+   *
+   * This is the shared helper that every email-writing path in the tool
+   * calls. Keeps the /api/claude call shape, sanitization, and credential
+   * validation in one place so we stop maintaining four divergent copies.
+   *
+   * @param {Object} params
+   * @param {string} params.contactName — recipient's name (e.g. "Tameka Rish")
+   * @param {string} params.company — account company name
+   * @param {string} params.waldoContext — output of buildWaldoSystemContext(account)
+   * @param {string} params.insights — BJL findings for this account (may be empty string)
+   * @param {string} params.userStrategistContext — strategist context field value
+   * @param {string} params.userEmailInstructions — email instructions field value
+   * @param {string} params.audienceModeValue — "external" | "internal"
+   */
+  const generateOneEmail = async ({
+    contactName,
+    company,
+    waldoContext,
+    insights,
+    userStrategistContext,
+    userEmailInstructions,
+    audienceModeValue,
+  }) => {
+    const EMAIL_SYSTEM = buildEmailSystem(userEmailInstructions);
+
+    let userMsg = "";
+    if (insights && insights.trim()) {
+      userMsg += "[BJL INSIGHTS — choose the single most relevant]\n" + insights.trim() + "\n\n";
+    }
+    if (waldoContext) {
+      userMsg += "[WALDO INTELLIGENCE]\n" + waldoContext + "\n\n";
+    }
+    if (userStrategistContext && userStrategistContext.trim()) {
+      userMsg += "[STRATEGIST CONTEXT]\n" + userStrategistContext.trim() + "\n\n";
+    }
+    userMsg += "[Prospect] " + contactName + " at " + company + "\n";
+    userMsg += "[Audience mode] " + (audienceModeValue || "external") + "\n";
+    userMsg += "Write the outreach email for " + contactName + " at " + company + ".";
+
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 28000);
+      const res = await fetch("/api/claude", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: ctrl.signal,
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 800,
+          system: EMAIL_SYSTEM,
+          messages: [{ role: "user", content: userMsg }],
+        }),
+      });
+      clearTimeout(timer);
+      if (res.status !== 200) {
+        let errData;
+        try { errData = await res.json(); } catch { errData = null; }
+        const errMsg = errData?.error?.message
+          || (res.status === 429 ? "Rate limit hit — increase delay between calls" : "API error " + res.status);
+        return { text: "", error: errMsg };
+      }
+      const data = await res.json();
+      const rawText = data.content?.map(b => b.type === "text" ? b.text : "").filter(Boolean).join("\n") || "";
+      const validated = await validateCredentials(rawText, userStrategistContext);
+      return { text: sanitizeEmail(validated), error: null };
+    } catch (e) {
+      return { text: "", error: e.name === "AbortError" ? "Timed out" : e.message };
+    }
+  };
+
+  // Strip section markers before displaying. Matches [BJL], (BJL), [CRED], (CRED)
+  // with optional surrounding whitespace / trailing newline. The model occasionally
+  // substitutes parentheses for the square brackets specified in the prompt, so we
+  // accept both forms to keep markers from leaking into delivered emails.
+  const stripMarkers = (text) => text.replace(/[\[\(]\s*(?:BJL|CRED)\s*[\]\)]\s*\n?/gi, '');
+  const CRED_MARKER_RE = /[\[\(]\s*CRED\s*[\]\)]/i;
+  const validateCredentials = async (emailText, strategistCtx) => {
+    if (!strategistCtx || !strategistCtx.trim()) return stripMarkers(emailText);
+    // If the email has no CRED marker, Haiku can't identify the credential paragraph safely — skip validation
+    if (!CRED_MARKER_RE.test(emailText)) {
+      console.log('[validateCredentials] No CRED marker found — skipping to avoid stripping BJL content');
+      return stripMarkers(emailText);
+    }
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 6000);
+      // Extract only the CRED section for validation (accept [CRED] or (CRED))
+      const credMatch = emailText.match(/[\[\(]\s*CRED\s*[\]\)]\s*\n?([\s\S]*?)(?=\n\n[A-Z]|\nWould|\nWorth|\nBest|\nThanks|\[Your name\]|$)/i);
+      if (!credMatch) {
+        return stripMarkers(emailText);
+      }
+      const credParagraph = credMatch[1].trim();
+      const prompt = 'APPROVED SOURCE MATERIAL — the only text you may draw from:\n---\n' + strategistCtx + '\n---\n\nAGENCY CREDENTIAL PARAGRAPH TO REWRITE:\n---\n' + credParagraph + '\n---\n\nTask: Rewrite this paragraph so every specific claim, client name, and credential comes directly from the APPROVED SOURCE MATERIAL above. You may paraphrase but must not add, invent, or imply anything not in the source material. Keep it to two sentences maximum — this is an intro email. Return only the rewritten paragraph — no markers, no commentary, no subject line.';
+      const res = await fetch('/api/claude', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: ctrl.signal,
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 600,
+          system: 'You rewrite agency credential paragraphs to use only approved source material. Return only the rewritten paragraph.',
+          messages: [{ role: 'user', content: prompt }]
+        })
+      });
+      clearTimeout(timer);
+      // Strip markers from the full email regardless of validation result
+      const cleanEmail = stripMarkers(emailText);
+      if (!res.ok) return cleanEmail;
+      const data = await res.json();
+      const rewrittenCred = (data.content?.map(b => b.type === 'text' ? b.text : '').filter(Boolean).join('\n') || '').trim();
+      if (!rewrittenCred) return cleanEmail;
+      // Replace the original credential paragraph with the rewritten one in the clean email
+      const result = cleanEmail.replace(credParagraph, rewrittenCred);
+      return result;
+    } catch(e) {
+      console.error('[validateCredentials] Error:', e.name, e.message);
+      return stripMarkers(emailText);
+    }
+  };
+
+  // fetchBJLData is deprecated: /api/bjl-query is now an SSE streaming orchestrator, not a JSON fetch.
+  // The main send() flow uses queryBJL() below. Legacy callers (batch email, web-research etc.) get an
+  // empty string so they keep working without BJL data until they are rewired to the orchestrator.
+  const fetchBJLData = async () => '';
+
+  const buildDemoContext = () => {
+    const parts = [];
+    if (generation) parts.push(generation.split(" ")[0] + "s");
+    if (gender) parts.push(gender);
+    if (income) parts.push(income + " HHI");
+    return parts.length ? parts.join(", ") : null;
+  };
+
+  
+  // ── BATCH UPLOAD ──────────────────────────────────────────────────────────
+  const parseBatchFile = (file) => {
+    return new Promise((resolve, reject) => {
+      const isXLSX = file.name.match(/\.xlsx?$/i);
+      const reader = new FileReader();
+
+      // Shared contact extraction logic
+      const extractContacts = (headers, rows) => {
+        const h = headers.map(hh => String(hh || "").toLowerCase().trim());
+        const find = (...terms) => h.findIndex(hh => terms.some(t => hh.includes(t)));
+        const fullNameIdx   = find("full name");
+        const firstNameIdx  = find("first name", "firstname");
+        const lastNameIdx   = find("last name", "lastname");
+        const titleIdx      = find("title", "role", "position");
+        const companyIdx    = find("company", "org", "account");
+        const emailIdx      = find("email");
+        const descIdx       = find("description", "desc");
+        const industriesIdx = find("industries", "industry", "sector");
+        const brandsIdx     = find("associated brands", "brands");
+        const contextIdx    = find("context", "notes", "intel");
+        const hasName = fullNameIdx >= 0 || firstNameIdx >= 0;
+        if (!hasName && companyIdx < 0) {
+          throw new Error("Could not find Name or Company columns. Headers: " + h.slice(0,10).join(", "));
+        }
+        return rows.map(vals => {
+          const get = (i) => i >= 0 && vals[i] != null ? String(vals[i]).trim() : "";
+          const name = get(fullNameIdx) || [get(firstNameIdx), get(lastNameIdx)].filter(Boolean).join(" ");
+          const ctxParts = [
+            get(descIdx) ? "About: " + get(descIdx) : "",
+            get(industriesIdx) ? "Industries: " + get(industriesIdx) : "",
+            get(brandsIdx) ? "Brands: " + get(brandsIdx) : "",
+            get(contextIdx),
+          ].filter(Boolean);
+          return { name, company: get(companyIdx), role: get(titleIdx), email: get(emailIdx), context: ctxParts.join(" | ") };
+        }).filter(c => c.name || c.company);
+      };
+
+      if (isXLSX) {
+        reader.onload = (e) => {
+          try {
+            if (!window.XLSX) { reject("SheetJS not loaded — try refreshing the page."); return; }
+            const wb = window.XLSX.read(e.target.result, { type: "array" });
+            const ws = wb.Sheets[wb.SheetNames[0]];
+            const data = window.XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+            const nonEmpty = data.filter(r => r.some(c => c !== ""));
+            if (nonEmpty.length < 2) { reject("Spreadsheet needs a header row and at least one contact."); return; }
+            const headers = nonEmpty[0];
+            const rows = nonEmpty.slice(1);
+            const contacts = extractContacts(headers, rows);
+            if (!contacts.length) { reject("No contacts found after the header row."); return; }
+            resolve(contacts);
+          } catch(err) { reject("Could not parse Excel file: " + err.message); }
+        };
+        reader.onerror = () => reject("File read error");
+        reader.readAsArrayBuffer(file);
+        return;
+      }
+
+      // CSV path
+      reader.onload = (e) => {
+        try {
+          // CSV parsing — handles quoted fields with commas
+          const parseCSVLine = (line) => {
+            const cols = [];
+            let cur = "", inQ = false;
+            for (let i = 0; i < line.length; i++) {
+              const c = line[i];
+              if (c === '"' && !inQ) { inQ = true; }
+              else if (c === '"' && inQ && line[i+1] === '"') { cur += '"'; i++; }
+              else if (c === '"' && inQ) { inQ = false; }
+              else if (c === ',' && !inQ) { cols.push(cur.trim()); cur = ""; }
+              else { cur += c; }
+            }
+            cols.push(cur.trim());
+            return cols;
+          };
+
+          const text = e.target.result;
+          const lines = text.split(/\r?\n/).filter(l => l.trim());
+          if (lines.length < 2) { reject("File needs a header row and at least one contact."); return; }
+
+          const headers = parseCSVLine(lines[0]).map(h => h.toLowerCase().replace(/['"]/g,"").trim());
+
+          // Column index finders — ordered by preference
+          const find = (...terms) => headers.findIndex(h => terms.some(t => h.includes(t)));
+
+          // Support both simple CSVs and the Winmo/CRM export format
+          const fullNameIdx   = find("full name");
+          const firstNameIdx  = find("first name", "firstname");
+          const lastNameIdx   = find("last name", "lastname");
+          const titleIdx      = find("title", "role", "position");
+          const companyIdx    = find("company", "org", "account");
+          const emailIdx      = find("email");
+          const descIdx       = find("description", "desc");
+          const industriesIdx = find("industries", "industry", "sector");
+          const brandsIdx     = find("associated brands", "brands", "related brands");
+          const contextIdx    = find("context", "notes", "intel");
+
+          const hasAnyName = fullNameIdx >= 0 || firstNameIdx >= 0;
+          if (!hasAnyName && companyIdx < 0) {
+            reject("Could not find Name or Company columns. Headers: " + headers.join(", "));
+            return;
+          }
+
+          const contacts = lines.slice(1).map(line => {
+            const c = parseCSVLine(line);
+            const get = (i) => i >= 0 && c[i] ? c[i].trim() : "";
+
+            // Build name — prefer Full Name, fall back to First + Last
+            const name = get(fullNameIdx) || [get(firstNameIdx), get(lastNameIdx)].filter(Boolean).join(" ");
+
+            // Build context — combine Description, Industries, Associated Brands, and any Notes
+            const ctxParts = [
+              get(descIdx) ? "About: " + get(descIdx) : "",
+              get(industriesIdx) ? "Industries: " + get(industriesIdx) : "",
+              get(brandsIdx) ? "Brands: " + get(brandsIdx) : "",
+              get(contextIdx),
+            ].filter(Boolean);
+
+            return {
+              name,
+              company: get(companyIdx),
+              role: get(titleIdx),
+              email: get(emailIdx),
+              context: ctxParts.join(" | "),
+            };
+          }).filter(c => c.name || c.company);
+
+          if (!contacts.length) { reject("No contacts found after the header row."); return; }
+          resolve(contacts);
+        } catch(err) { reject("Could not parse file: " + err.message); }
+      };
+      reader.onerror = () => reject("File read error");
+      reader.readAsText(file);
+    });
+  };
+
+  // Map Waldo category strings to the nearest tool category option
+  const mapWaldoCategory = (cat) => {
+    if (!cat) return '';
+    const c = cat.toLowerCase();
+    if (c.includes('sports') || c.includes('entertainment') || c.includes('live event')) return 'Sports & Entertainment';
+    if (c.includes('motorsport') || c.includes('racing') || c.includes('nascar')) return 'Sports & Entertainment';
+    if (c.includes('theme park') || c.includes('amusement') || c.includes('attraction')) return 'Travel & Tourism / Hospitality';
+    if (c.includes('aquarium') || c.includes('zoo') || c.includes('conservation')) return 'Travel & Tourism / Hospitality';
+    if (c.includes('heritage') || c.includes('cultural') || c.includes('tourism')) return 'Travel & Tourism / Hospitality';
+    if (c.includes('hospitality') || c.includes('venue')) return 'Travel & Tourism / Hospitality';
+    if (c.includes('food') || c.includes('beverage') || c.includes('restaurant')) return 'Food & Beverage / CPG';
+    if (c.includes('financial') || c.includes('bank')) return 'Financial Services';
+    if (c.includes('health') || c.includes('wellness')) return 'Health & Wellness';
+    if (c.includes('tech') || c.includes('telecom')) return 'Technology / Telecom';
+    if (c.includes('retail') || c.includes('grocery')) return 'Retail / Grocery';
+    return 'Other';
+  };
+
+  const buildWaldoSystemContext = (account) => {
+    if (!account) return '';
+    const lines = [];
+    const isV2 = !!(account.deep_signals || account.top_signal?.exact_quote);
+
+    lines.push('=== WALDO PROSPECT INTELLIGENCE ===');
+    lines.push('');
+
+    // Strategic tension / primary brief
+    const tension = account.creative_tension || account.top_signal?.why_it_matters || '';
+    if (tension) {
+      lines.push('STRATEGIC TENSION (primary brief — the problem BJL data must speak to):');
+      lines.push(tension);
+      lines.push('');
+    }
+
+    // Urgency
+    const urgency = account.top_signal?.urgency || 'Building';
+    const urgencyGuidance = {
+      'Now': 'The email should feel timely and anchored to something happening right now. Reference the top signal directly if it strengthens the outreach.',
+      'Seasonal': 'Anchor the frame to the current moment without over-indexing on urgency.',
+      'Building': 'Frame the opportunity as forward-looking. Do not imply a crisis that does not exist.',
+    };
+    lines.push('URGENCY: ' + urgency + ' — ' + (urgencyGuidance[urgency] || ''));
+    lines.push('');
+
+    // Top signal with exact quote if available
+    lines.push('PRIMARY SIGNAL: ' + account.top_signal.headline);
+    if (account.top_signal.detail) lines.push('Detail: ' + account.top_signal.detail);
+    if (account.top_signal.exact_quote) {
+      lines.push('EXACT QUOTE FROM THEIR LEADERSHIP: \"' + account.top_signal.exact_quote + '\"');
+      lines.push('(If you use this quote, use it verbatim — these are their own words.)');
+    }
+    if (account.top_signal.why_it_matters) {
+      lines.push('Why it matters: ' + account.top_signal.why_it_matters);
+    }
+    lines.push('');
+
+    // Sharpened hook
+    const hook = account.sharpened_hook || account.suggested_hook || '';
+    if (hook) {
+      lines.push('SHARPENED HOOK (directional — this leads with their own language where possible; find your own expression grounded in BJL data, do not use verbatim):');
+      lines.push(hook);
+      lines.push('');
+    }
+
+    // PETERMAYER positioning
+    if (account.petermayer_relevance) {
+      lines.push('PETERMAYER POSITIONING FOR THIS ACCOUNT:');
+      lines.push(account.petermayer_relevance);
+      lines.push('');
+    }
+
+    // Deep signals (v2) or signal cluster (v1)
+    const deepSignals = account.deep_signals || [];
+    const signalCluster = account.signal_cluster || [];
+
+    if (deepSignals.length) {
+      lines.push('DEEP SIGNALS (background intelligence — use to inform which BJL findings are most relevant; do not reference signal metadata directly in email copy):');
+      deepSignals.forEach(s => {
+        lines.push('  [' + s.signal_type + '] ' + s.headline);
+        if (s.exact_quote) lines.push('    Exact quote: \"' + s.exact_quote + '\"');
+        if (s.why_it_matters) lines.push('    Why it matters: ' + s.why_it_matters);
+      });
+    } else if (signalCluster.length) {
+      const signalTypes = ['Consumer','Category','Business','Creative & Agency','Employee'];
+      const guidance = {
+        'Consumer': 'WEIGHT THESE: prioritize BJL findings about consumer behavior and joy drivers.',
+        'Category': 'WEIGHT THESE: pull category-level joy benchmarks from BJL.',
+        'Business': 'USE FOR CONTEXT ONLY.',
+        'Creative & Agency': 'NOTE INTERNALLY: sharpen angle without referencing explicitly.',
+        'Employee': 'USE FOR PERSONALIZATION: new leaders are most receptive to fresh perspective.',
+      };
+      lines.push('SIGNAL CLUSTER:');
+      signalTypes.forEach(type => {
+        const signals = signalCluster.filter(s => s.signal_type === type);
+        if (signals.length) {
+          lines.push('  [' + type + ' — ' + (guidance[type] || '') + ']');
+          signals.forEach(s => lines.push('    • ' + s.signal));
+        }
+      });
+    }
+
+    lines.push('');
+    lines.push('=== END WALDO INTELLIGENCE ===');
+    return lines.join('\n');
+  };
+
+  const parseWaldoJSON = (text) => {
+    try {
+      const raw = JSON.parse(text);
+      // Accept three formats:
+      // 1. { accounts: [...] } — standard pilot file
+      // 2. { ... single account object with id/company fields ... }
+      // 3. [ ...array of account objects... ]
+      let accounts;
+      if (Array.isArray(raw)) {
+        accounts = raw;
+      } else if (raw.accounts && Array.isArray(raw.accounts)) {
+        accounts = raw.accounts;
+      } else if (raw.company || raw.id) {
+        // Single account object — wrap it
+        accounts = [raw];
+      } else {
+        throw new Error('No accounts array found and could not detect a single account object');
+      }
+      // Normalize contacts field: v2 may use contact (string) for single-contact accounts
+      accounts = accounts.map(a => ({
+        ...a,
+        contacts: Array.isArray(a.contacts) ? a.contacts : (a.contact ? [a.contact] : []),
+      }));
+      return { pilot: raw.pilot || raw.company || 'Waldo Intelligence', accounts };
+    } catch(e) {
+      throw new Error('Invalid Waldo JSON: ' + e.message);
+    }
+  };
+
+  const pullWaldoInsights = async (account) => {
+    if (!account) return;
+    setWaldoInsightsPulling(true);
+    setWaldoInsightsReady(false);
+    setWaldoInsights('');
+
+    // Build the query the orchestrator will decompose. Mention the company,
+    // category, and strategic tension so retrieval pulls evidence relevant to
+    // this specific outreach. The orchestrator does the rest.
+    const tension = account.creative_tension || account.top_signal?.why_it_matters || '';
+    const queryParts = [
+      `Pull BJL findings for outreach to ${account.company}`,
+      account.category ? `(${account.category})` : '',
+      tension ? `. Strategic tension: ${tension}` : '',
+    ].filter(Boolean);
+    const query = queryParts.join(' ').trim();
+
+    // Stash the Waldo intel on strategistContext so the synthesis prompt sees
+    // the prospect's situation when picking which findings to surface.
+    const waldoCtx = buildWaldoSystemContext(account);
+    const combinedContext = [strategistContext?.trim(), waldoCtx].filter(Boolean).join('\n\n');
+
+    let streamedText = '';
+    let result = null;
+
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 55000);
+
+    try {
+      await queryBJL({
+        query,
+        intentHint: 'email_findings',
+        strategistContext: combinedContext || undefined,
+        waldoContext: account,
+        signal: ctrl.signal,
+        onChunk: (text) => {
+          streamedText += text;
+          setWaldoInsights(streamedText);
+        },
+        onDone: ({ evidence_counts } = {}) => {
+          result = { ok: true, evidence_counts };
+        },
+        onError: ({ message, phase } = {}) => {
+          result = { ok: false, message, phase };
+        },
+      });
+
+      if (!result || !result.ok) {
+        const msg = result?.message || 'Stream ended unexpectedly';
+        const phase = result?.phase ? ` [${result.phase}]` : '';
+        setWaldoInsights(
+          (streamedText ? streamedText + '\n\n' : '') +
+          `(Insights pull failed${phase}: ${msg}. You can still generate emails without pre-pulled insights, but they will lack BJL grounding.)`
+        );
+      }
+      setWaldoInsightsReady(true);
+    } catch (e) {
+      const isTimeout = e?.name === 'AbortError';
+      setWaldoInsights(
+        (streamedText ? streamedText + '\n\n' : '') +
+        (isTimeout
+          ? '(Request timed out. Try again, or proceed without pre-pulled insights.)'
+          : `(Connection error: ${e.message}. You can still generate emails without pre-pulled insights.)`)
+      );
+      setWaldoInsightsReady(true);
+    } finally {
+      clearTimeout(timer);
+      setWaldoInsightsPulling(false);
+    }
+  };
+
+  /**
+   * Pull BJL insights for a single account via the orchestrator.
+   * Returns { text: string, error: string | null }. Never throws.
+   *
+   * Shared helper used by runMultiAccountPull and also by the per-account
+   * "retry" button so a user can re-pull insights for one account after a
+   * batch failure without re-running the whole pull.
+   */
+  const pullInsightsForAccount = async (account) => {
+    if (!account) return { text: "", error: "No account provided" };
+
+    const tension = account.creative_tension || account.top_signal?.why_it_matters || '';
+    const queryParts = [
+      `Pull BJL findings for outreach to ${account.company}`,
+      account.category ? `(${account.category})` : '',
+      tension ? `. Strategic tension: ${tension}` : '',
+    ].filter(Boolean);
+    const query = queryParts.join(' ').trim();
+
+    const waldoCtx = buildWaldoSystemContext(account);
+    const combinedContext = [strategistContext?.trim(), waldoCtx].filter(Boolean).join('\n\n');
+
+    let streamed = '';
+    let result = null;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 55000);
+
+    try {
+      await queryBJL({
+        query,
+        intentHint: 'email_findings',
+        strategistContext: combinedContext || undefined,
+        waldoContext: account,
+        signal: ctrl.signal,
+        onChunk: (t) => { streamed += t; },
+        onDone: () => { result = { ok: true }; },
+        onError: ({ message, phase } = {}) => { result = { ok: false, message, phase }; },
+      });
+    } catch (e) {
+      clearTimeout(timer);
+      return { text: streamed, error: e.name === 'AbortError' ? 'Timed out' : e.message };
+    }
+    clearTimeout(timer);
+
+    if (!result || !result.ok) {
+      return {
+        text: streamed,
+        error: result?.message || 'Stream ended unexpectedly',
+      };
+    }
+    return { text: streamed, error: null };
+  };
+
+  /**
+   * Phase 1 of the multi-account workflow. Pull BJL insights for every
+   * account in the loaded Waldo file, sequentially. Skip-on-failure: if one
+   * account fails, record the error and continue. User can retry individual
+   * accounts from the UI afterward.
+   */
+  const runMultiAccountPull = async () => {
+    const accounts = waldoData?.accounts || [];
+    if (!accounts.length) return;
+
+    setAccountInsightsPulling(true);
+    setAccountInsightsProgress({ current: 0, total: accounts.length });
+
+    // Reset any previous insight state for these accounts
+    const initialState = {};
+    accounts.forEach(a => { initialState[a.id] = { text: '', ready: false, error: null }; });
+    setAccountInsights(initialState);
+
+    for (let i = 0; i < accounts.length; i++) {
+      const account = accounts[i];
+      setAccountInsightsProgress({ current: i, total: accounts.length });
+
+      const { text, error } = await pullInsightsForAccount(account);
+
+      setAccountInsights(prev => ({
+        ...prev,
+        [account.id]: { text, ready: !error, error },
+      }));
+
+      // Small pause between accounts to be kind to rate limits
+      if (i < accounts.length - 1) await new Promise(r => setTimeout(r, 2000));
+    }
+
+    setAccountInsightsProgress({ current: accounts.length, total: accounts.length });
+    setAccountInsightsPulling(false);
+  };
+
+  /**
+   * Retry the insight pull for a single account. Used by the per-account
+   * "Retry" button that appears next to accounts that failed in Phase 1.
+   */
+  const retryAccountInsights = async (account) => {
+    if (!account) return;
+    setAccountInsights(prev => ({
+      ...prev,
+      [account.id]: { text: '', ready: false, error: null },
+    }));
+    const { text, error } = await pullInsightsForAccount(account);
+    setAccountInsights(prev => ({
+      ...prev,
+      [account.id]: { text, ready: !error, error },
+    }));
+  };
+
+  /**
+   * Phase 3 of the multi-account workflow. Generate emails for every
+   * contact at every account, using that account's insights and the shared
+   * Email Instructions. Skip any account that has no insights ready (the
+   * BJL primacy rule means we don't generate without them).
+   */
+  const runMultiAccountGenerate = async () => {
+    const accounts = waldoData?.accounts || [];
+    if (!accounts.length) return;
+
+    setMultiAccountGenerating(true);
+    setMultiAccountResults([]);
+
+    const results = [];
+
+    // Compute total contacts across accounts that have insights ready
+    const eligibleAccounts = accounts.filter(a => accountInsights[a.id]?.ready);
+    const totalContacts = eligibleAccounts.reduce((n, a) => n + (a.contacts?.length || 0), 0);
+    let completed = 0;
+
+    for (const account of eligibleAccounts) {
+      const waldoCtx = buildWaldoSystemContext(account);
+      const insights = accountInsights[account.id]?.text || '';
+      const contacts = account.contacts || [];
+
+      for (const contact of contacts) {
+        const { text, error } = await generateOneEmail({
+          contactName: contact,
+          company: account.company,
+          waldoContext: waldoCtx,
+          insights,
+          userStrategistContext: strategistContext,
+          userEmailInstructions: multiAccountEmailInstructions,
+          audienceModeValue: audienceMode,
+        });
+
+        results.push({ company: account.company, contact, text, error });
+        setMultiAccountResults([...results]);
+        completed += 1;
+        setWaldoProgress(completed); // reuse the existing progress bar state
+
+        if (completed < totalContacts) await new Promise(r => setTimeout(r, 5000));
+      }
+
+      // Extra pause between accounts
+      await new Promise(r => setTimeout(r, 3000));
+    }
+
+    setMultiAccountGenerating(false);
+  };
+
+  /**
+   * Export multi-account results to a single CSV. Same shape as the existing
+   * exportWaldoCSV but pulls from multiAccountResults.
+   */
+  const exportMultiAccountCSV = () => {
+    const rows = [["Company", "Contact", "Subject", "Body", "Error"]];
+    multiAccountResults.forEach(({ company, contact, text, error }) => {
+      const subjectMatch = text.match(/Subject(?:[\s:line]*)?:?\s*(.+)/i);
+      const subject = subjectMatch ? subjectMatch[1].replace(/^[*_]+|[*_]+$/g, "").trim() : "";
+      const body = text.replace(/Subject(?:[\s:line]*)?:?\s*.+\n?/i, "").trim();
+      rows.push([company, contact, subject, body, error || ""]);
+    });
+    const csv = rows.map(r => r.map(c => '"' + String(c).replace(/"/g, '""') + '"').join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "bjl_multi_account_outreach.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const runWaldoBatch = async () => {
+    const accounts = waldoData?.accounts || [];
+    if (!accounts.length) return;
+    setWaldoRunning(true);
+    setWaldoResults([]);
+    setWaldoProgress(0);
+    const allResults = [];
+    const EMAIL_SYSTEM = buildEmailSystem(emailInstructions);
+    for (let ai = 0; ai < accounts.length; ai++) {
+      const account = accounts[ai];
+      const systemCtx = buildWaldoSystemContext(account);
+      // Pull insights for this account
+      // Pull insights for this account via the orchestrator (email_findings intent)
+      let insights = '';
+      try {
+        const acctTension = account.creative_tension || account.top_signal?.why_it_matters || '';
+        const acctQuery = [
+          `Pull BJL findings for outreach to ${account.company}`,
+          account.category ? `(${account.category})` : '',
+          acctTension ? `. Strategic tension: ${acctTension}` : '',
+        ].filter(Boolean).join(' ').trim();
+
+        const acctCombinedCtx = [strategistContext?.trim(), systemCtx].filter(Boolean).join('\n\n');
+
+        let streamed = '';
+        let acctResult = null;
+        const acctCtrl = new AbortController();
+        const acctTimer = setTimeout(() => acctCtrl.abort(), 55000);
+        await queryBJL({
+          query: acctQuery,
+          intentHint: 'email_findings',
+          strategistContext: acctCombinedCtx || undefined,
+          waldoContext: account,
+          signal: acctCtrl.signal,
+          onChunk: (t) => { streamed += t; },
+          onDone: () => { acctResult = { ok: true }; },
+          onError: ({ message } = {}) => { acctResult = { ok: false, message }; },
+        });
+        clearTimeout(acctTimer);
+        insights = (acctResult && acctResult.ok) ? streamed : '';
+      } catch (e) {
+        insights = '';
+      }
+
+      const accountResults = [];
+      for (let ci = 0; ci < account.contacts.length; ci++) {
+        const contact = account.contacts[ci];
+        setWaldoProgress(allResults.length + accountResults.length);
+        let userMsg = '';
+        if (insights) userMsg += '[BJL INSIGHTS — choose the single most relevant]\n' + insights + '\n\n';
+        userMsg += '[WALDO INTELLIGENCE]\n' + systemCtx + '\n\n';
+        userMsg += '[Prospect] ' + contact + ' at ' + account.company + '\n';
+        userMsg += '[Audience mode] external\n';
+        userMsg += 'Write the outreach email for ' + contact + ' at ' + account.company + '.';
+        try {
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), 28000);
+          const res = await fetch('/api/claude', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctrl.signal,
+            body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 800, system: EMAIL_SYSTEM, messages: [{ role: 'user', content: userMsg }] })
+          });
+          clearTimeout(timer);
+          const data = await res.json();
+          const text = res.status === 200 ? (data.content?.map(b => b.type === 'text' ? b.text : '').join('\n') || '') : '';
+          const error = res.status !== 200 ? (data?.error?.message || 'API error ' + res.status) : null;
+          const validatedText = await validateCredentials(text, strategistContext);
+        accountResults.push({ company: account.company, contact, text: sanitizeEmail(validatedText), error });
+        } catch(e) {
+          accountResults.push({ company: account.company, contact, text: '', error: e.name === 'AbortError' ? 'Timed out' : e.message });
+        }
+        if (ci < account.contacts.length - 1) await new Promise(r => setTimeout(r, 5000));
+      }
+      allResults.push(...accountResults);
+      setWaldoResults([...allResults]);
+      if (ai < accounts.length - 1) await new Promise(r => setTimeout(r, 8000));
+    }
+    setWaldoProgress(allResults.length);
+    setWaldoRunning(false);
+  };
+
+  const exportWaldoCSV = () => {
+    const rows = [['Company','Contact','Subject','Body','Error']];
+    waldoResults.forEach(({ company, contact, text, error }) => {
+      const subjectMatch = text.match(/Subject(?:[\s:line]*)?:?\s*(.+)/i);
+      const subject = subjectMatch ? subjectMatch[1].replace(/^[*_]+|[*_]+$/g,'').trim() : '';
+      const body = text.replace(/Subject(?:[\s:line]*)?:?\s*.+\n?/i,'').trim();
+      rows.push([company, contact, subject, body, error||'']);
+    });
+    const csv = rows.map(r => r.map(c => '"'+String(c).replace(/"/g,'""')+'"').join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = 'bjl_waldo_outreach.csv'; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const pullBatchInsights = async () => {
+    if (!batchIndustry.trim()) return;
+    setBatchInsightsPulling(true);
+    setBatchInsightsReady(false);
+    setBatchInsights('');
+    setBatchError(null);
+
+    const query = `Pull BJL findings for outreach to brands in this category: ${batchIndustry.trim()}. These findings will be used as the shared data layer for a batch of personalized outreach emails.`;
+
+    let streamedText = '';
+    let result = null;
+
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 55000);
+
+    try {
+      await queryBJL({
+        query,
+        intentHint: 'email_findings',
+        strategistContext: strategistContext?.trim() || undefined,
+        signal: ctrl.signal,
+        onChunk: (text) => {
+          streamedText += text;
+          setBatchInsights(streamedText);
+        },
+        onDone: ({ evidence_counts } = {}) => {
+          result = { ok: true, evidence_counts };
+        },
+        onError: ({ message, phase } = {}) => {
+          result = { ok: false, message, phase };
+        },
+      });
+
+      if (!result || !result.ok) {
+        const msg = result?.message || 'Stream ended unexpectedly';
+        const phase = result?.phase ? ` [${result.phase}]` : '';
+        setBatchError(`Insights pull failed${phase}: ${msg}`);
+        setBatchInsightsPulling(false);
+        return;
+      }
+      setBatchInsightsReady(true);
+    } catch (e) {
+      setBatchError(e.name === 'AbortError' ? 'Timed out pulling insights — try again' : e.message);
+    } finally {
+      clearTimeout(timer);
+      setBatchInsightsPulling(false);
+    }
+  };
+
+  const runBatch = async () => {
+    if (!batchContacts.length) return;
+    setBatchRunning(true);
+    setBatchResults([]);
+    setBatchProgress(0);
+    setBatchError(null);
+    const results = [];
+
+    // Lean system prompt for per-email calls — just the outreach rules, no data
+    const EMAIL_SYSTEM = buildEmailSystem(emailInstructions);
+    for (let i = 0; i < batchContacts.length; i++) {
+      const contact = batchContacts[i];
+      setBatchProgress(i);
+      const roleLabel = contact.role || recipientRole || "";
+      const prospectLabel = [contact.name, contact.company].filter(Boolean).join(" at ");
+
+      // Build a lean user message — insights passed inline, no large system prompt
+      let userMsg = "";
+      if (batchInsights.trim()) {
+        userMsg += "[SHARED INDUSTRY INSIGHTS — choose the single most relevant one]\n" + batchInsights.trim() + "\n\n";
+      }
+      userMsg += "[Prospect] " + prospectLabel;
+      if (roleLabel) userMsg += " | Role: " + roleLabel;
+      if (contact.context) userMsg += "\n[Context] " + contact.context;
+      if (strategistContext.trim()) userMsg += "\n[Additional context] " + strategistContext.trim();
+      if (audienceMode) userMsg += "\n[Audience mode] " + audienceMode;
+      if (batchEmailPrompt.trim()) userMsg += "\n\n[Email instructions]\n" + batchEmailPrompt.trim();
+      userMsg += "\n\nWrite the outreach email for " + prospectLabel + ".";
+
+      try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 28000);
+        const res = await fetch("/api/claude", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: ctrl.signal,
+          body: JSON.stringify({
+            model: "claude-sonnet-4-20250514",
+            max_tokens: 800,
+            system: EMAIL_SYSTEM,
+            messages: [{ role: "user", content: userMsg }]
+          })
+        });
+        clearTimeout(timer);
+        const data = await res.json();
+        if (res.status === 429) {
+          results.push({ contact, text: "", error: "Rate limit hit — increase delay or upgrade API tier" });
+        } else if (res.status !== 200) {
+          results.push({ contact, text: "", error: data?.error?.message || "API error " + res.status });
+        } else {
+          const text = data.content?.map(b => b.type === "text" ? b.text : "").filter(Boolean).join("\n") || "";
+          const validatedText = await validateCredentials(text, strategistContext);
+          results.push({ contact, text: sanitizeEmail(validatedText), error: null });
+        }
+      } catch(e) {
+        results.push({ contact, text: "", error: e.name === "AbortError" ? "Timed out" : e.message });
+      }
+      setBatchResults([...results]);
+      if (i < batchContacts.length - 1) await new Promise(r => setTimeout(r, batchDelay * 1000));
+    }
+    setBatchProgress(batchContacts.length);
+    setBatchRunning(false);
+  };
+
+  const exportBatchCSV = () => {
+    const rows = [["Name","Company","Role","Email","Subject","Body","Error"]];
+    batchResults.forEach(({ contact, text, error }) => {
+      const subjectMatch = text.match(/Subject(?:[\s:line]*)?:?\s*(.+)/i);
+      const subject = subjectMatch ? subjectMatch[1].replace(/^[*_]+|[*_]+$/g,"").trim() : "";
+      const body = text.replace(/Subject(?:[\s:line]*)?:?\s*.+\n?/i,"").trim();
+      rows.push([contact.name, contact.company, contact.role, contact.email||"", subject, body.replace(/\n/g,"\n"), error||""]);
+    });
+    const csv = rows.map(r => r.map(c => '"'+String(c).replace(/"/g,'""')+'"').join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = "bjl_outreach_batch.csv"; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+const buildUserMessage = (text) => {
+    const demoCtx = buildDemoContext();
+    const qt = QUERY_TYPES.find(q => q.value === queryType);
+    let msg = "";
+    if (showComposer && qt) msg += "[" + qt.label + "] ";
+    if (showComposer && queryType === "outreach_draft") {
+      if (audienceMode) msg += "[Audience: " + audienceMode + "] ";
+      if (recipientRole) msg += "[Recipient Role: " + recipientRole + "] ";
+      if (prospectName) msg += "[Prospect: " + prospectName + "] ";
+    } else {
+      if (showComposer && category) msg += "[Category: " + category + "] ";
+      if (showComposer && demoCtx) msg += "[Target: " + demoCtx + "] ";
+    }
+    if (showComposer && strategistContext.trim()) {
+      const ctxLabel = queryType === "outreach_draft"
+        ? "[PROSPECT CONTEXT — use this to personalize the outreach]"
+        : "[STRATEGIST CONTEXT — use this to sharpen which BJL findings are most relevant; treat as first-party intelligence from the team]";
+      msg += "\n\n" + ctxLabel + "\n" + strategistContext.trim() + "\n\n[END CONTEXT]\n\n";
+    }
+    // Inject Waldo account context for non-outreach_draft query types
+    if (waldoAccount && queryType !== "outreach_draft") {
+      const waldoCtx = buildWaldoSystemContext(waldoAccount);
+      if (waldoCtx) {
+        msg += "\n\n[WALDO PROSPECT INTELLIGENCE — use this as background context to sharpen which BJL findings are most relevant to this account]\n" + waldoCtx + "\n[END WALDO CONTEXT]\n\n";
+      }
+    }
+    msg += text;
+    return msg;
+  };
+
+  const isNewBrandQuery = (text) => {
+    const lower = text.toLowerCase();
+    // Suppress web research when Waldo account is loaded — already have rich intelligence
+    if (waldoAccount) return false;
+    return showComposer && queryType !== "data_pull" && (
+      queryType === "brand_lookup" ||
+      queryType === "outreach_angle" ||
+      queryType === "outreach_draft" ||
+      queryType === "audience_dive" ||
+      /\b(what do we know about|tell me about|we('re| are) pursuing|pursuing|pitch to [a-z]+|prospect|outreach)\b/.test(lower)
+    );
+  };
+
+  const runWebResearch = async (query) => {
+    const researchPrompt = `You are doing rapid brand research for PETERMAYER, an advertising agency preparing a prospect outreach. Search for current information and return a concise brief (150 words max) covering: brand positioning and tagline, primary target audience, current marketing approach or campaign, any recent news (agency changes, new products, challenges), and estimated ad spend tier if findable. Be specific and factual. Query: "${query}"`;
+    try {
+      const webCtrl = new AbortController();
+      const webTimer = setTimeout(() => webCtrl.abort(), 15000);
+      let res;
+      try {
+        res = await fetch("/api/claude", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: webCtrl.signal,
+          body: JSON.stringify({
+            model: "claude-sonnet-4-20250514",
+            max_tokens: 400,
+            tools: [{ type: "web_search_20250305", name: "web_search" }],
+            messages: [{ role: "user", content: researchPrompt }],
+          }),
+        });
+      } finally { clearTimeout(webTimer); }
+      const data = await res.json();
+      const textBlocks = (data.content || []).filter(b => b.type === "text").map(b => b.text).join(" ");
+      return textBlocks.trim() || null;
+    } catch(e) {
+      return null;
+    }
+  };
+
+  // send() now streams through the v2 orchestrator at /api/bjl-query.
+  // The orchestrator does decompose → retrieve → synthesize in one SSE call,
+  // so we no longer pre-fetch BJL data or hit /api/claude for the main flow.
+  const send = async (textOverride) => {
+    const rawText = (textOverride || input).trim();
+    if (!rawText || loading) return;
+
+    const isNewBrand = isNewBrandQuery(rawText);
+    const userContent = showComposer && !textOverride ? buildUserMessage(rawText) : rawText;
+    const userMsg = { role:"user", content:userContent, time:ts() };
+    const assistantMsg = { role:"assistant", content:"", time:ts() };
+
+    const newMessages = [...messages, userMsg, assistantMsg];
+    setMessages(newMessages);
+    setInput("");
+    setLoading(true);
+    setError(null);
+    setShowComposer(false);
+    scrollToBottom();
+
+    // Roll prior conversation into strategistContext so the orchestrator has follow-up context.
+    // (The orchestrator takes a single query; multi-turn memory is not part of its contract.)
+    const priorForContext = messages.slice(-MAX_HISTORY_MSGS + 1);
+    const priorBlock = priorForContext.length > 0
+      ? "[PRIOR CONVERSATION]\n" + priorForContext
+          .map(m => (m.role === "user" ? "User: " : "Assistant: ") + m.content)
+          .join("\n\n")
+      : "";
+    let combinedContext = [strategistContext?.trim(), priorBlock]
+      .filter(Boolean).join("\n\n");
+
+    // Web research pre-step for new brand/outreach queries (folded into strategistContext)
+    if (isNewBrand) {
+      setLoadingLabel("Researching brand...");
+      try {
+        const research = await runWebResearch(rawText);
+        if (research) {
+          combinedContext = (combinedContext ? combinedContext + "\n\n" : "")
+            + "[EXTERNAL BRAND RESEARCH — informative only; ground all insights in the BJL evidence]\n"
+            + research;
+        }
+      } catch (e) { /* web research is best-effort */ }
+    }
+
+    // Phase labels shown next to the spinner via loadingLabel UI.
+    const phaseLabels = {
+      decomposing:  "Reading your query...",
+      retrieving:   "Searching BJL...",
+      synthesizing: "Writing the brief...",
+    };
+
+    // Stream: append each chunk to the last (assistant) message.
+    let streamedText = "";
+    let result = null; // { ok: true, evidence_counts } | { ok: false, message, phase }
+
+    const appendToAssistant = (delta) => {
+      streamedText += delta;
+      setMessages(prev => {
+        if (prev.length === 0) return prev;
+        const copy = prev.slice();
+        const last = copy[copy.length - 1];
+        if (last && last.role === "assistant") {
+          copy[copy.length - 1] = { ...last, content: streamedText };
+        }
+        return copy;
+      });
+      scrollToBottom();
+    };
+
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 55000); // client-side ceiling
+
+    try {
+      await queryBJL({
+        query: userContent,
+        intentHint: queryType,
+        strategistContext: combinedContext || undefined,
+        waldoContext: waldoAccount || waldoData || undefined,
+        signal: ctrl.signal,
+        onStatus: ({ phase }) => {
+          setLoadingLabel(phaseLabels[phase] || phase || null);
+        },
+        onChunk: (text) => { appendToAssistant(text); },
+        onDone: ({ evidence_counts } = {}) => {
+          // Persist history snapshot including the streamed assistant message.
+          setMessages(prev => { saveHistory(prev); return prev; });
+          result = { ok: true, evidence_counts };
+        },
+        onError: ({ message, phase } = {}) => {
+          result = { ok: false, message, phase };
+        },
+      });
+
+      if (!result) {
+        setError("Stream ended unexpectedly. Please try again.");
+      } else if (!result.ok) {
+        setError(`${result.phase ? "[" + result.phase + "] " : ""}${result.message || "Request failed"}`);
+      }
+
+      if (!result || !result.ok) {
+        // Drop the empty assistant shell if synthesis produced nothing
+        setMessages(prev => {
+          if (prev.length > 0 && prev[prev.length - 1].role === "assistant" && !prev[prev.length - 1].content) {
+            return prev.slice(0, -1);
+          }
+          return prev;
+        });
+      }
+    } catch (e) {
+      const isTimeout = e?.name === "AbortError";
+      setError(isTimeout
+        ? "Request timed out — the server is warming up. Try again in a few seconds."
+        : "Connection error — please try again.");
+      setMessages(prev => {
+        if (prev.length > 0 && prev[prev.length - 1].role === "assistant" && !prev[prev.length - 1].content) {
+          return prev.slice(0, -1);
+        }
+        return prev;
+      });
+    } finally {
+      clearTimeout(timer);
+      setLoading(false);
+      setLoadingLabel(null);
+    }
+  };
+
+  const handleFollowUpClick = (e) => {
+    const btn = e.target.closest("[data-followup]");
+    if (btn) send(btn.dataset.followup);
+  };
+
+  const clearSession = async () => {
+    setMessages([]);
+    setShowComposer(true);
+    setWaldoData(null);
+    setWaldoAccount(null);
+    setWaldoContacts([]);
+    setWaldoResults([]);
+    setWaldoInsights('');
+    setWaldoInsightsReady(false);
+    setBatchContacts([]);
+    setBatchResults([]);
+    setBatchInsights('');
+    setBatchInsightsReady(false);
+    setBatchMode(false);
+    setStrategistContext('');
+    setEmailInstructions('');
+    setAccountInsights({});
+    setAccountInsightsPulling(false);
+    setAccountInsightsProgress({ current: 0, total: 0 });
+    setMultiAccountEmailInstructions('');
+    setMultiAccountExpanded({});
+    setMultiAccountGenerating(false);
+    setMultiAccountResults([]);
+    setShowEmailInstructions(false);
+    try { await window.storage.delete(CONVERSATION_STORAGE_KEY); } catch(e) {}
+  };
+
+  const lbl = { display:"block",fontSize:10,letterSpacing:".1em",textTransform:"uppercase",color:"var(--color-text-tertiary)",marginBottom:6 };
+  const selStyle = { width:"100%",background:"var(--color-background-secondary)",border:"1px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",color:"var(--color-text-primary)",padding:"8px 11px",fontSize:12,fontFamily:"var(--font-sans)",cursor:"pointer" };
+  const demoCtx = buildDemoContext();
+  const selectedQT = QUERY_TYPES.find(q => q.value === queryType);
+
+  if (!storageReady) return (
+    <div style={{ padding:40,textAlign:"center",color:"var(--color-text-tertiary)",fontSize:13 }}>Loading...</div>
+  );
+
+  return (
+    <div style={{ fontFamily:"var(--font-sans)",color:"var(--color-text-primary)",display:"flex",flexDirection:"column",height:"100%",minHeight:500 }}>
+      <style>{"@keyframes bjlp{0%,80%,100%{opacity:.15;transform:scale(.7)}40%{opacity:1;transform:scale(1.2)}} * { box-sizing:border-box } textarea:focus{outline:none;border-color:#E8C547!important} select{cursor:pointer}"}</style>
+
+      {/* Header */}
+      <div style={{ borderBottom:"1px solid var(--color-border-tertiary)",padding:"12px 18px",display:"flex",alignItems:"center",flexShrink:0 }}>
+        <div>
+          <div style={{ display:"flex",alignItems:"center",gap:7,marginBottom:2 }}>
+            <span style={{ fontSize:10,letterSpacing:".2em",textTransform:"uppercase",color:"#E8C547",fontWeight:500 }}>PETERMAYER</span>
+            <span style={{ color:"var(--color-border-secondary)" }}>|</span>
+            <span style={{ fontSize:10,letterSpacing:".1em",textTransform:"uppercase",color:"var(--color-text-tertiary)" }}>Brand Joy Lab</span>
+          </div>
+          <div style={{ fontSize:16,fontWeight:400 }}>Intelligence Engine</div>
+        </div>
+        <div style={{ marginLeft:"auto",display:"flex",alignItems:"center",gap:12 }}>
+          {messages.length > 0 && (
+            <button onClick={() => {
+              const assistantMsgs = messages.filter(m => m.role === "assistant");
+              if (!assistantMsgs.length) return;
+              const last = assistantMsgs[assistantMsgs.length - 1];
+              const userMsg = messages[messages.indexOf(last) - 1];
+              const query = userMsg ? userMsg.content.split("[STRATEGIST CONTEXT")[0].trim() : "";
+              const formatContent = (text) => text
+                .split("\n")
+                .map(line => {
+                  if (!line.trim()) return "<div style='height:8px'></div>";
+                  if (/^#{1,3}\s/.test(line)) return `<h3 style='color:#b8941f;font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin:20px 0 6px;font-weight:600'>${line.replace(/^#+\s/,"")}</h3>`;
+                  if (/^[-•]\s/.test(line)) return `<div style='display:flex;gap:8px;margin-bottom:5px'><span style='color:#b8941f;flex-shrink:0'>◆</span><span>${line.replace(/^[-•]\s/,"").replace(/\*\*(.*?)\*\*/g,"<strong>$1</strong>")}</span></div>`;
+                  if (/^\d+\.\s/.test(line)) return `<div style='display:flex;gap:8px;margin-bottom:5px'><span style='color:#b8941f;flex-shrink:0;min-width:16px'>${line.match(/^\d+/)[0]}.</span><span>${line.replace(/^\d+\.\s*/,"").replace(/\*\*(.*?)\*\*/g,"<strong>$1</strong>")}</span></div>`;
+                  return `<p style='margin:0 0 6px;line-height:1.65'>${line.replace(/\*\*(.*?)\*\*/g,"<strong>$1</strong>")}</p>`;
+                }).join("");
+              const html = `<!DOCTYPE html><html><head><meta charset='utf-8'><title>BJL Insight — ${new Date().toLocaleDateString()}</title><style>
+                @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap');
+                * { box-sizing: border-box; margin: 0; padding: 0; }
+                body { font-family: 'Inter', sans-serif; font-size: 13px; color: #1a1a1a; background: #fff; padding: 48px 56px; max-width: 800px; margin: 0 auto; }
+                .header { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid #1a1a1a; padding-bottom: 16px; margin-bottom: 28px; }
+                .header-left .brand { font-size: 9px; letter-spacing: .2em; text-transform: uppercase; color: #b8941f; font-weight: 600; margin-bottom: 4px; }
+                .header-left .title { font-size: 20px; font-weight: 300; color: #1a1a1a; }
+                .header-right { text-align: right; font-size: 10px; color: #888; letter-spacing: .05em; }
+                .query-block { background: #f7f5f0; border-left: 3px solid #b8941f; padding: 12px 16px; margin-bottom: 24px; border-radius: 0 4px 4px 0; }
+                .query-label { font-size: 9px; letter-spacing: .15em; text-transform: uppercase; color: #b8941f; font-weight: 600; margin-bottom: 4px; }
+                .query-text { font-size: 13px; color: #1a1a1a; line-height: 1.5; }
+                .response { line-height: 1.65; color: #1a1a1a; }
+                .footer { border-top: 1px solid #e0e0e0; margin-top: 40px; padding-top: 14px; display: flex; justify-content: space-between; font-size: 10px; color: #aaa; letter-spacing: .05em; }
+                @media print { body { padding: 32px 40px; } }
+              </style></head><body>
+                <div class='header'>
+                  <div class='header-left'>
+                    <div class='brand'>PETERMAYER · Brand Joy Lab</div>
+                    <div class='title'>Intelligence Engine</div>
+                  </div>
+                  <div class='header-right'>${new Date().toLocaleDateString("en-US",{year:"numeric",month:"long",day:"numeric"})}</div>
+                </div>
+                ${query ? `<div class='query-block'><div class='query-label'>Query</div><div class='query-text'>${query}</div></div>` : ""}
+                <div class='response'>${formatContent(last.content)}</div>
+                <div class='footer'>
+                  <span>Brand Joy Lab · n=12,663 · Aug 2023–Mar 2026</span>
+                  <span>PETERMAYER CONFIDENTIAL</span>
+                </div>
+              </body></html>`;
+              const win = window.open("","_blank","width=900,height=700");
+              win.document.write(html);
+              win.document.close();
+              win.focus();
+              setTimeout(() => { win.print(); }, 600);
+            }}
+              style={{ background:"none",border:"1px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",color:"var(--color-text-tertiary)",padding:"5px 11px",fontSize:11,cursor:"pointer",fontFamily:"inherit",letterSpacing:".05em",textTransform:"uppercase",transition:"all .15s" }}
+              onMouseEnter={e => e.currentTarget.style.borderColor="#E8C54766"}
+              onMouseLeave={e => e.currentTarget.style.borderColor="var(--color-border-tertiary)"}>
+              Export PDF
+            </button>
+          )}
+          <button onClick={clearSession}
+              style={{ background:"none",border:"1px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",color:"var(--color-text-tertiary)",padding:"5px 11px",fontSize:11,cursor:"pointer",fontFamily:"inherit",letterSpacing:".05em",textTransform:"uppercase",transition:"all .15s" }}
+              onMouseEnter={e => e.currentTarget.style.borderColor="#E8C54766"}
+              onMouseLeave={e => e.currentTarget.style.borderColor="var(--color-border-tertiary)"}>
+              New Session
+            </button>
+          <div style={{ textAlign:"right" }}>
+            <div style={{ fontSize:10,color:"var(--color-text-tertiary)",textTransform:"uppercase",letterSpacing:".07em" }}>n=12,663 · Aug 2023–Mar 2026</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Conversation area */}
+      <div style={{ flex:1,overflowY:"auto",padding:"20px 18px 8px" }} onClick={handleFollowUpClick}>
+        {messages.length === 0 && (
+          <div style={{ padding:"32px 0 16px",textAlign:"center" }}>
+            <p style={{ fontSize:13,color:"var(--color-text-tertiary)",lineHeight:1.7,maxWidth:420,margin:"0 auto 20px" }}>
+              Ask about any brand, category, or audience. Every answer draws from verified BJL data — quantitative scores, demographic cross-tabs, and 25,430 real consumer verbatims.
+            </p>
+            <div style={{ display:"flex",flexWrap:"wrap",gap:8,justifyContent:"center" }}>
+              {[
+                "What does BJL tell us about financial services brands?",
+                "What is the joy profile of Millennial women around food?",
+                "We are pursuing IKEA. What is our angle?",
+                "What do consumers say about financial planning in their own words?",
+                "Top stats on fandom and brand engagement",
+                "How does vacation joy differ by income level?",
+              ].map(q => (
+                <button key={q} onClick={() => send(q)}
+                  style={{ background:"var(--color-background-secondary)",border:"1px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",color:"var(--color-text-tertiary)",padding:"8px 13px",fontSize:12,cursor:"pointer",fontFamily:"inherit",lineHeight:1.4,transition:"all .15s",maxWidth:240,textAlign:"left" }}
+                  onMouseEnter={e => { e.currentTarget.style.borderColor="#E8C54766"; e.currentTarget.style.color="var(--color-text-primary)"; }}
+                  onMouseLeave={e => { e.currentTarget.style.borderColor="var(--color-border-tertiary)"; e.currentTarget.style.color="var(--color-text-tertiary)"; }}>
+                  {q}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {messages.map((msg, i) => <MsgBubble key={i} msg={msg} />)}
+
+        {loading && (
+          <div style={{ marginBottom:16 }}>
+            <div style={{ background:"var(--color-background-secondary)",border:"1px solid var(--color-border-tertiary)",borderRadius:"4px var(--border-radius-lg) var(--border-radius-lg) var(--border-radius-lg)",padding:"14px 18px",display:"inline-flex",gap:8,alignItems:"center" }}>
+              <Dot delay={0} /><Dot delay={0.18} /><Dot delay={0.36} />
+              {loadingLabel && <span style={{fontSize:11,color:"var(--color-text-tertiary)",fontFamily:"var(--font-mono)",marginLeft:4}}>{loadingLabel}</span>}
+            </div>
+          </div>
+        )}
+
+        {error && (
+          <div style={{ padding:"10px 14px",background:"var(--color-background-danger)",border:"1px solid var(--color-border-danger)",borderRadius:"var(--border-radius-md)",color:"var(--color-text-danger)",fontSize:12,marginBottom:12 }}>{error}</div>
+        )}
+
+        <div ref={bottomRef} />
+      </div>
+
+      {/* Composer */}
+      <div style={{ borderTop:"1px solid var(--color-border-tertiary)",padding:"12px 18px",flexShrink:0 }}>
+
+        {/* Structured controls — shown when starting a new topic */}
+        {showComposer && (
+          <div style={{ marginBottom:10,padding:"12px",background:"var(--color-background-secondary)",border:"1px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-lg)" }}>
+
+            {/* Query type + Category row */}
+            <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10 }}>
+              <div>
+                <label style={lbl}>Query Type</label>
+                <div style={{ display:"flex",gap:5,flexWrap:"wrap" }}>
+                  {QUERY_TYPES.map(q => (
+                    <button key={q.value}
+                      style={{ padding:"5px 10px",borderRadius:"var(--border-radius-md)",border:"1px solid var(--color-border-tertiary)",background:queryType===q.value?"#E8C547":"var(--color-background-secondary)",color:queryType===q.value?"#0c0b09":"var(--color-text-tertiary)",fontSize:10,letterSpacing:".06em",cursor:"pointer",textTransform:"uppercase",fontFamily:"inherit",fontWeight:queryType===q.value?500:400,transition:"all .15s" }}
+                      onClick={() => setQueryType(q.value)}>{q.label}</button>
+                  ))}
+                </div>
+              </div>
+              {waldoAccount && queryType !== "outreach_draft" && (
+                <div style={{marginBottom:8,padding:"6px 10px",background:"var(--color-background-tertiary)",border:"1px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",display:"flex",alignItems:"center",gap:8}}>
+                  <span style={{fontSize:9,padding:"2px 6px",borderRadius:99,background:"#4A9FE820",color:"#6DC8F0",border:"1px solid #4A9FE840",letterSpacing:".07em",textTransform:"uppercase",flexShrink:0}}>Waldo</span>
+                  <span style={{fontSize:11,color:"var(--color-text-secondary)"}}>{waldoAccount.company} intelligence active</span>
+                  <button onClick={()=>{setWaldoAccount(null);setWaldoContacts([]);setWaldoInsights("");setWaldoInsightsReady(false);}} style={{marginLeft:"auto",background:"none",border:"none",color:"var(--color-text-tertiary)",cursor:"pointer",fontSize:13,lineHeight:1,padding:0}}>×</button>
+                </div>
+              )}
+              {queryType !== "outreach_draft" && (
+                <div>
+                  <label style={lbl}>Category</label>
+                  <select style={{...selStyle,fontSize:12}} value={category} onChange={e => setCategory(e.target.value)}>
+                    <option value="">Any category</option>
+                    {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+              )}
+              {queryType === "outreach_draft" && (
+                <div>
+                  <label style={lbl}>Audience</label>
+                  <div style={{ display:"flex",gap:6,marginTop:2 }}>
+                    {["external","internal"].map(m => (
+                      <button key={m}
+                        style={{ flex:1,padding:"6px 10px",borderRadius:"var(--border-radius-md)",border:"1px solid var(--color-border-tertiary)",background:audienceMode===m?"#E8C547":"var(--color-background-secondary)",color:audienceMode===m?"#0c0b09":"var(--color-text-tertiary)",fontSize:11,letterSpacing:".06em",cursor:"pointer",textTransform:"uppercase",fontFamily:"inherit",fontWeight:audienceMode===m?500:400,transition:"all .15s" }}
+                        onClick={() => setAudienceMode(m)}>{m}</button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Outreach Draft extra fields */}
+            {queryType === "outreach_draft" && (
+              <div>
+                {/* Waldo JSON upload */}
+                <div style={{marginBottom:10}}>
+                  <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                    <input type="file" accept=".json" id="waldo-file-input" style={{display:"none"}}
+                      onChange={e=>{
+                        const f=e.target.files[0];
+                        if(!f) return;
+                        const reader=new FileReader();
+                        reader.onload=ev=>{
+                          try {
+                            const data=parseWaldoJSON(ev.target.result);
+                            setWaldoData(data);
+                            setWaldoAccount(null);
+                            setWaldoContacts([]);
+                            setWaldoResults([]);
+                            setWaldoInsights('');
+                            setWaldoInsightsReady(false);
+                          } catch(err) { alert('Could not parse Waldo JSON: '+err.message); }
+                        };
+                        reader.readAsText(f);
+                      }}/>
+                    <label htmlFor={waldoAccount?"":"waldo-file-input"}
+                      onClick={waldoAccount?()=>{setWaldoAccount(null);setWaldoContacts([]);setWaldoInsights("");setWaldoInsightsReady(false);setWaldoResults([]);}:undefined}
+                      style={{padding:"5px 12px",borderRadius:"var(--border-radius-md)",background:waldoData?"var(--color-background-secondary)":"#E8C54718",color:waldoData?(waldoAccount?"#6DC8F0":"var(--color-text-tertiary)"):"#E8C547",fontSize:11,cursor:"pointer",whiteSpace:"nowrap",border:waldoData?(waldoAccount?"1px solid #4A9FE840":"1px solid var(--color-border-tertiary)"):"1px solid #E8C54744"}}>
+                      {waldoData ? (waldoAccount ? "← " + waldoAccount.company.split(" ").slice(0,3).join(" ") : waldoData.accounts?.length + " accounts loaded") : "⊕ Load Waldo JSON"}
+                    </label>
+                    {waldoData && !waldoAccount && (
+                      <select
+                        style={{...selStyle,flex:1,fontSize:11}}
+                        value=""
+                        onChange={e=>{
+                          const acct=waldoData.accounts.find(a=>String(a.id)===e.target.value);
+                          if(acct){
+                            setWaldoAccount(acct);
+                            setWaldoContacts([]);
+                            setWaldoInsights('');
+                            setWaldoInsightsReady(false);
+                            setWaldoResults([]);
+                            setBatchMode(false);
+                          }
+                        }}>
+                        <option value="">Select a prospect…</option>
+                        {waldoData.accounts.map(a=>(
+                          <option key={a.id} value={String(a.id)}>{a.company}</option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+
+              {waldoData && !waldoAccount && (
+                <div style={{marginTop:16,borderTop:"1px solid var(--color-border-tertiary)",paddingTop:16}}>
+
+                  {/* Section header */}
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+                    <div>
+                      <p style={{fontSize:11,letterSpacing:".1em",textTransform:"uppercase",color:"#E8C547",margin:0,fontWeight:500}}>Multi-Account Batch</p>
+                      <p style={{fontSize:11,color:"var(--color-text-tertiary)",margin:"3px 0 0"}}>Pull insights for all {waldoData.accounts.length} accounts, review, then generate emails for every contact.</p>
+                    </div>
+                  </div>
+
+                  {/* Phase 1: Pull Insights button + progress */}
+                  <div style={{marginBottom:12}}>
+                    {!accountInsightsPulling && Object.keys(accountInsights).length === 0 && (
+                      <button onClick={runMultiAccountPull}
+                        style={{padding:"7px 14px",background:"#E8C547",color:"#0c0b09",border:"none",borderRadius:"var(--border-radius-md)",fontSize:11,fontWeight:500,cursor:"pointer",fontFamily:"inherit"}}>
+                        Pull BJL Insights for all {waldoData.accounts.length} accounts
+                      </button>
+                    )}
+                    {accountInsightsPulling && (
+                      <div>
+                        <div style={{height:4,background:"var(--color-background-tertiary)",borderRadius:2,marginBottom:6}}>
+                          <div style={{height:"100%",background:"#E8C547",borderRadius:2,width:(accountInsightsProgress.current/Math.max(1,accountInsightsProgress.total)*100)+"%",transition:"width .5s"}}/>
+                        </div>
+                        <p style={{fontSize:11,color:"var(--color-text-tertiary)"}}>Pulling insights… {accountInsightsProgress.current} of {accountInsightsProgress.total} accounts complete</p>
+                      </div>
+                    )}
+                    {!accountInsightsPulling && Object.keys(accountInsights).length > 0 && (
+                      <div style={{display:"flex",alignItems:"center",gap:8}}>
+                        <p style={{fontSize:11,color:"var(--color-text-secondary)",margin:0}}>
+                          Insights ready for {waldoData.accounts.filter(a=>accountInsights[a.id]?.ready).length} of {waldoData.accounts.length} accounts
+                        </p>
+                        <button onClick={runMultiAccountPull}
+                          style={{padding:"3px 9px",background:"none",border:"1px solid var(--color-border-tertiary)",color:"var(--color-text-tertiary)",fontSize:10,cursor:"pointer",fontFamily:"inherit",borderRadius:"var(--border-radius-sm)"}}>
+                          Re-pull all
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Phase 2a: Per-account insight review (collapsible) */}
+                  {Object.keys(accountInsights).length > 0 && (
+                    <div style={{marginBottom:14}}>
+                      {waldoData.accounts.map(a => {
+                        const state = accountInsights[a.id] || { text: '', ready: false, error: null };
+                        const expanded = !!multiAccountExpanded[a.id];
+                        return (
+                          <div key={a.id} style={{marginBottom:6,border:"1px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",overflow:"hidden"}}>
+                            <button onClick={()=>setMultiAccountExpanded(prev=>({...prev,[a.id]:!prev[a.id]}))}
+                              style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",padding:"9px 12px",background:"var(--color-background-tertiary)",border:"none",cursor:"pointer",fontFamily:"inherit",color:"var(--color-text-primary)"}}>
+                              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                                <span style={{fontSize:10,color:state.ready?"#8BC34A":(state.error?"#E87070":"var(--color-text-tertiary)")}}>
+                                  {state.ready?"✓":(state.error?"⚠":"…")}
+                                </span>
+                                <span style={{fontSize:12,fontWeight:500}}>{a.company}</span>
+                                <span style={{fontSize:10,color:"var(--color-text-tertiary)"}}>{(a.contacts||[]).length} contacts</span>
+                              </div>
+                              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                                {state.error && (
+                                  <span onClick={(e)=>{e.stopPropagation();retryAccountInsights(a);}}
+                                    style={{fontSize:10,padding:"2px 8px",borderRadius:"var(--border-radius-sm)",background:"var(--color-background-secondary)",border:"1px solid var(--color-border-tertiary)",color:"var(--color-text-secondary)",cursor:"pointer"}}>
+                                    Retry
+                                  </span>
+                                )}
+                                <span style={{fontSize:10,transform:expanded?"rotate(180deg)":"none",transition:"transform .15s",color:"var(--color-text-tertiary)"}}>▼</span>
+                              </div>
+                            </button>
+                            {expanded && (
+                              <div style={{padding:"10px 12px",background:"var(--color-background-secondary)"}}>
+                                {state.error ? (
+                                  <p style={{fontSize:11,color:"#E87070",margin:0}}>Pull failed: {state.error}</p>
+                                ) : (
+                                  <textarea value={state.text}
+                                    onChange={e=>setAccountInsights(prev=>({...prev,[a.id]:{...state,text:e.target.value}}))}
+                                    style={{width:"100%",minHeight:140,background:"var(--color-background-tertiary)",border:"1px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",color:"var(--color-text-secondary)",padding:"10px 12px",fontSize:11,fontFamily:"var(--font-sans)",lineHeight:1.6,resize:"vertical",boxSizing:"border-box"}}/>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* Phase 2b: Shared Email Instructions */}
+                  {Object.values(accountInsights).some(s => s?.ready) && (
+                    <div style={{marginBottom:12}}>
+                      <label style={lbl}>Email instructions — applies to every email in the batch</label>
+                      <textarea value={multiAccountEmailInstructions}
+                        onChange={e=>setMultiAccountEmailInstructions(e.target.value)}
+                        placeholder="Paste your email instructions here. These apply across all accounts — the BJL insights and Waldo intelligence are per-account, the cadence/structure/tone instructions are shared."
+                        style={{width:"100%",minHeight:120,background:"var(--color-background-tertiary)",border:"1px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",color:"var(--color-text-primary)",padding:"10px 12px",fontSize:12,fontFamily:"var(--font-sans)",lineHeight:1.6,resize:"vertical",boxSizing:"border-box",marginTop:4}}/>
+                    </div>
+                  )}
+
+                  {/* Phase 3: Generate all emails */}
+                  {Object.values(accountInsights).some(s => s?.ready) && (
+                    <div>
+                      {!multiAccountGenerating ? (
+                        <div style={{display:"flex",gap:8}}>
+                          <button onClick={runMultiAccountGenerate}
+                            style={{flex:1,padding:"8px",background:"#E8C547",color:"#0c0b09",border:"none",borderRadius:"var(--border-radius-md)",fontSize:12,fontWeight:500,cursor:"pointer",fontFamily:"inherit"}}>
+                            Generate emails for {waldoData.accounts.filter(a=>accountInsights[a.id]?.ready).reduce((n,a)=>n+(a.contacts?.length||0),0)} contacts across {waldoData.accounts.filter(a=>accountInsights[a.id]?.ready).length} accounts
+                          </button>
+                          {multiAccountResults.length > 0 && (
+                            <button onClick={exportMultiAccountCSV}
+                              style={{padding:"8px 14px",background:"var(--color-background-secondary)",color:"var(--color-text-secondary)",border:"1px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>
+                              Export CSV
+                            </button>
+                          )}
+                        </div>
+                      ) : (
+                        <div>
+                          <div style={{height:4,background:"var(--color-background-tertiary)",borderRadius:2,marginBottom:8}}>
+                            <div style={{height:"100%",background:"#E8C547",borderRadius:2,width:(waldoProgress/Math.max(1,waldoData.accounts.filter(a=>accountInsights[a.id]?.ready).reduce((n,a)=>n+(a.contacts?.length||0),0))*100)+"%",transition:"width .3s"}}/>
+                          </div>
+                          <p style={{fontSize:11,color:"var(--color-text-tertiary)",textAlign:"center"}}>{multiAccountResults.length} emails complete…</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Results table */}
+                  {multiAccountResults.length > 0 && !multiAccountGenerating && (
+                    <div style={{marginTop:14}}>
+                      <p style={{fontSize:10,color:"var(--color-text-tertiary)",letterSpacing:".07em",textTransform:"uppercase",marginBottom:8}}>
+                        Results — {multiAccountResults.filter(r=>!r.error).length}/{multiAccountResults.length} succeeded
+                      </p>
+                      {multiAccountResults.map((r,i) => (
+                        <div key={i} style={{marginBottom:8,border:"1px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",padding:"10px 12px"}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                            <span style={{fontSize:11,fontWeight:500,color:"var(--color-text-primary)"}}>{r.contact} <span style={{color:"var(--color-text-tertiary)",fontWeight:400}}>· {r.company}</span></span>
+                            {r.error
+                              ? <span style={{fontSize:10,color:"#E87070"}}>Failed: {r.error}</span>
+                              : <button onClick={()=>navigator.clipboard.writeText(r.text)} style={{background:"none",border:"1px solid var(--color-border-tertiary)",borderRadius:4,color:"var(--color-text-tertiary)",fontSize:10,cursor:"pointer",padding:"2px 8px",fontFamily:"inherit"}}>Copy</button>
+                            }
+                          </div>
+                          {!r.error && <pre style={{fontSize:11,color:"var(--color-text-secondary)",whiteSpace:"pre-wrap",lineHeight:1.6,margin:0,fontFamily:"var(--font-sans)"}}>{r.text}</pre>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                </div>
+              )}
+                </div>
+
+                {/* Batch toggle — hidden when a Waldo account is active */}
+                {!waldoAccount && (
+                <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10 }}>
+                  <span style={{ fontSize:11,letterSpacing:".07em",textTransform:"uppercase",color:"var(--color-text-tertiary)" }}>Mode</span>
+                  <div style={{ display:"flex",gap:6 }}>
+                    {[["single","Single"], ["batch","Batch Upload"], ["waldo","Waldo"]].map(([m,label]) => (
+                      <button key={m}
+                        style={{ padding:"5px 12px",borderRadius:"var(--border-radius-md)",border:"1px solid var(--color-border-tertiary)",background:(!batchMode&&!waldoAccount&&m==="single")||(batchMode&&m==="batch")||(waldoAccount&&m==="waldo")?"#E8C547":"var(--color-background-secondary)",color:(!batchMode&&!waldoAccount&&m==="single")||(batchMode&&m==="batch")||(waldoAccount&&m==="waldo")?"#0c0b09":"var(--color-text-tertiary)",fontSize:10,letterSpacing:".06em",cursor:"pointer",textTransform:"uppercase",fontFamily:"inherit",fontWeight:(!batchMode&&!waldoAccount&&m==="single")||(batchMode&&m==="batch")||(waldoAccount&&m==="waldo")?500:400,transition:"all .15s" }}
+                        onClick={() => {
+                          setBatchMode(m==="batch");
+                          setBatchContacts([]); setBatchResults([]); setBatchError(null); setBatchEmailPrompt(""); setBatchInsights(""); setBatchInsightsReady(false);
+                          if (m !== "waldo") { setWaldoAccount(null); setWaldoContacts([]); setWaldoResults([]); setWaldoInsights(""); setWaldoInsightsReady(false); }
+                        }}>{label}</button>
+                    ))}
+                  </div>
+                </div>
+                )}
+
+                {/* Waldo mode */}
+                {!batchMode && waldoAccount && (
+                  <div>
+                    {/* Header row: company + urgency badge */}
+                    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+                      <div>
+                        <p style={{fontSize:13,fontWeight:500,color:"var(--color-text-primary)",margin:0}}>{waldoAccount.company}</p>
+                        <p style={{fontSize:11,color:"var(--color-text-tertiary)",margin:"2px 0 0"}}>{waldoAccount.category}</p>
+                      </div>
+                      <div style={{display:"flex",alignItems:"center",gap:8}}>
+                        <span style={{fontSize:10,letterSpacing:".1em",textTransform:"uppercase",padding:"3px 9px",borderRadius:99,fontWeight:500,
+                          background: waldoAccount.top_signal.urgency==="Now"?"#E8474720":waldoAccount.top_signal.urgency==="Seasonal"?"#E8C54720":"#4A9FE820",
+                          color: waldoAccount.top_signal.urgency==="Now"?"#E87070":waldoAccount.top_signal.urgency==="Seasonal"?"#E8C547":"#6DC8F0",
+                          border: `1px solid ${waldoAccount.top_signal.urgency==="Now"?"#E8474740":waldoAccount.top_signal.urgency==="Seasonal"?"#E8C54740":"#4A9FE840"}`
+                        }}>
+                          {waldoAccount.top_signal.urgency}
+                        </span>
+                        <button onClick={()=>{setWaldoAccount(null);setWaldoContacts([]);setWaldoInsights("");setWaldoInsightsReady(false);setWaldoResults([]);}}
+                          style={{background:"none",border:"none",color:"var(--color-text-tertiary)",cursor:"pointer",fontSize:16,lineHeight:1,padding:"0 2px"}}>×</button>
+                      </div>
+                    </div>
+
+                    {/* Strategic Tension */}
+                    <div style={{marginBottom:10,padding:"10px 12px",background:"var(--color-background-tertiary)",border:"1px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)"}}>
+                      <p style={{fontSize:10,letterSpacing:".09em",textTransform:"uppercase",color:"#E8C547",marginBottom:5,fontWeight:500}}>Strategic Tension</p>
+                      <p style={{fontSize:12,color:"var(--color-text-secondary)",lineHeight:1.6,margin:0}}>{waldoAccount.creative_tension}</p>
+                    </div>
+
+                    {/* Waldo's Suggested Angle */}
+                    <div style={{marginBottom:10,padding:"10px 12px",background:"var(--color-background-tertiary)",border:"1px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)"}}>
+                      <p style={{fontSize:10,letterSpacing:".09em",textTransform:"uppercase",color:"var(--color-text-tertiary)",marginBottom:5,fontWeight:500}}>Waldo's Suggested Angle</p>
+                      <p style={{fontSize:12,color:"var(--color-text-secondary)",lineHeight:1.6,margin:0,fontStyle:"italic"}}>{waldoAccount.suggested_hook}</p>
+                    </div>
+
+                    {/* Top Signal */}
+                    <div style={{marginBottom:10,padding:"10px 12px",background:"var(--color-background-tertiary)",border:"1px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)"}}>
+                      <p style={{fontSize:10,letterSpacing:".09em",textTransform:"uppercase",color:"var(--color-text-tertiary)",marginBottom:5,fontWeight:500}}>Top Signal <span style={{color:"var(--color-text-tertiary)",fontWeight:400}}>· {waldoAccount.top_signal.signal_type||""}</span></p>
+                      <p style={{fontSize:12,color:"var(--color-text-primary)",fontWeight:500,margin:"0 0 4px"}}>{waldoAccount.top_signal.headline}</p>
+                      {waldoAccount.top_signal.exact_quote && (
+                        <p style={{fontSize:12,color:"#E8C547",fontStyle:"italic",margin:"0 0 4px",borderLeft:"2px solid #E8C54744",paddingLeft:8}}>"{waldoAccount.top_signal.exact_quote}"</p>
+                      )}
+                      {waldoAccount.top_signal.why_it_matters && (
+                        <p style={{fontSize:11,color:"var(--color-text-secondary)",lineHeight:1.55,margin:"4px 0 0"}}>{waldoAccount.top_signal.why_it_matters}</p>
+                      )}
+                    </div>
+
+                    {/* Supporting Signals (collapsible) — handles v1 signal_cluster and v2 deep_signals */}
+                    {((waldoAccount.deep_signals||waldoAccount.signal_cluster)||[]).length > 0 && (
+                    <div style={{marginBottom:10}}>
+                      <button onClick={()=>setShowWaldoSignals(v=>!v)}
+                        style={{background:"none",border:"none",color:"var(--color-text-tertiary)",cursor:"pointer",fontSize:10,letterSpacing:".09em",textTransform:"uppercase",fontFamily:"inherit",padding:"0 0 5px",display:"flex",alignItems:"center",gap:5}}>
+                        <span>◎</span>{waldoAccount.deep_signals ? "Deep Signals" : "Supporting Signals"} ({(waldoAccount.deep_signals||waldoAccount.signal_cluster||[]).length})
+                        <span style={{fontSize:9,transform:showWaldoSignals?"rotate(180deg)":"none",transition:"transform .2s",display:"inline-block"}}>▼</span>
+                      </button>
+                      {showWaldoSignals && (
+                        <div style={{padding:"8px 10px",background:"var(--color-background-tertiary)",border:"1px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)"}}>
+                          {(waldoAccount.deep_signals||waldoAccount.signal_cluster||[]).map((s,i)=>{
+                            const arr = waldoAccount.deep_signals||waldoAccount.signal_cluster||[];
+                            return (
+                              <div key={i} style={{marginBottom:i<arr.length-1?10:0}}>
+                                <div style={{display:"flex",gap:8,alignItems:"flex-start",marginBottom:s.exact_quote||s.why_it_matters?4:0}}>
+                                  <span style={{fontSize:9,padding:"2px 6px",borderRadius:99,background:"var(--color-background-secondary)",color:"var(--color-text-tertiary)",border:"1px solid var(--color-border-tertiary)",whiteSpace:"nowrap",flexShrink:0,marginTop:1}}>{s.signal_type}</span>
+                                  <p style={{fontSize:11,color:"var(--color-text-secondary)",lineHeight:1.5,margin:0,fontWeight:500}}>{s.headline||s.signal}</p>
+                                </div>
+                                {s.exact_quote && (
+                                  <p style={{fontSize:11,color:"#E8C547",fontStyle:"italic",margin:"3px 0 3px 8px",borderLeft:"2px solid #E8C54744",paddingLeft:8}}>"{s.exact_quote}"</p>
+                                )}
+                                {s.why_it_matters && (
+                                  <p style={{fontSize:10,color:"var(--color-text-tertiary)",lineHeight:1.5,margin:"2px 0 0 8px"}}>{s.why_it_matters}</p>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                    )}
+
+                    {/* Recipient selector (multi-select from contacts array) */}
+                    <div style={{marginBottom:10}}>
+                      <label style={{...lbl,display:"block",marginBottom:5}}>Recipients — select contacts to email</label>
+                      <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+                        {(waldoAccount.contacts||[]).map(contact=>(
+                          <button key={contact}
+                            style={{padding:"4px 10px",borderRadius:"var(--border-radius-md)",border:"1px solid var(--color-border-tertiary)",background:waldoContacts.includes(contact)?"#E8C547":"var(--color-background-secondary)",color:waldoContacts.includes(contact)?"#0c0b09":"var(--color-text-tertiary)",fontSize:11,cursor:"pointer",fontFamily:"inherit",transition:"all .15s"}}
+                            onClick={()=>setWaldoContacts(prev=>prev.includes(contact)?prev.filter(c=>c!==contact):[...prev,contact])}>
+                            {contact}
+                          </button>
+                        ))}
+                        <button onClick={()=>setWaldoContacts(waldoContacts.length===waldoAccount.contacts.length?[]:waldoAccount.contacts||[])}
+                          style={{padding:"4px 10px",borderRadius:"var(--border-radius-md)",border:"1px solid var(--color-border-tertiary)",background:"none",color:"var(--color-text-tertiary)",fontSize:10,cursor:"pointer",fontFamily:"inherit",letterSpacing:".05em"}}>
+                          {waldoContacts.length===waldoAccount.contacts?.length?"Deselect all":"Select all"}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Pull BJL Insights */}
+                    <div style={{marginBottom:10}}>
+                        <button onClick={()=>pullWaldoInsights(waldoAccount)} disabled={waldoInsightsPulling}
+                          style={{padding:"7px 14px",background:waldoInsightsReady?"var(--color-background-secondary)":"#E8C547",color:waldoInsightsReady?"var(--color-text-secondary)":"#0c0b09",border:waldoInsightsReady?"1px solid var(--color-border-tertiary)":"none",borderRadius:"var(--border-radius-md)",fontSize:11,fontWeight:500,cursor:"pointer",fontFamily:"inherit",opacity:waldoInsightsPulling?0.5:1}}>
+                          {waldoInsightsPulling?"Pulling BJL insights…":waldoInsightsReady?"✓ BJL insights ready — re-pull":"Pull BJL Insights"}
+                        </button>
+                        {waldoInsights&&(
+                          <div style={{marginTop:8}}>
+                            <textarea value={waldoInsights} onChange={e=>setWaldoInsights(e.target.value)}
+                              style={{width:"100%",minHeight:110,background:"var(--color-background-tertiary)",border:"1px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",color:"var(--color-text-secondary)",padding:"10px 12px",fontSize:11,fontFamily:"var(--font-sans)",lineHeight:1.6,resize:"vertical",boxSizing:"border-box"}}/>
+                            <p style={{fontSize:10,color:"var(--color-text-tertiary)",marginTop:3}}>You can edit these insights before generating.</p>
+                          </div>
+                        )}
+                      </div>
+
+                    {/* Generate buttons */}
+                    {waldoContacts.length>0&&(
+                      <div>
+                        {waldoRunning?(
+                          <div>
+                            <div style={{height:4,background:"var(--color-background-tertiary)",borderRadius:2,marginBottom:8}}>
+                              <div style={{height:"100%",background:"#E8C547",borderRadius:2,width:(waldoProgress/(waldoContacts.length||1)*100)+"%",transition:"width .3s"}}/>
+                            </div>
+                            <p style={{fontSize:11,color:"var(--color-text-tertiary)",textAlign:"center"}}>{waldoProgress} of {waldoContacts.length} complete…</p>
+                          </div>
+                        ):(
+                          <div style={{display:"flex",gap:8,marginBottom:12}}>
+                            <button onClick={async()=>{
+                              setWaldoRunning(true);
+                              setWaldoResults([]);
+                              setWaldoProgress(0);
+                              const results=[];
+                              const EMAIL_SYSTEM = buildEmailSystem(emailInstructions);
+                              const systemCtx=buildWaldoSystemContext(waldoAccount);
+                              for(let i=0;i<waldoContacts.length;i++){
+                                const contact=waldoContacts[i];
+                                setWaldoProgress(i);
+                                let userMsg='';
+                                if(waldoInsights) userMsg+='[BJL INSIGHTS — choose the single most relevant]\n'+waldoInsights+'\n\n';
+                                userMsg+='[WALDO INTELLIGENCE]\n'+systemCtx+'\n\n';
+                                userMsg+='[Prospect] '+contact+' at '+waldoAccount.company+'\n[Audience mode] external\nWrite the outreach email for '+contact+' at '+waldoAccount.company+'.';
+                                try{
+                                  const ctrl=new AbortController();
+                                  const timer=setTimeout(()=>ctrl.abort(),28000);
+                                  const res=await fetch('/api/claude',{method:'POST',headers:{'Content-Type':'application/json'},signal:ctrl.signal,body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:800,system:EMAIL_SYSTEM,messages:[{role:'user',content:userMsg}]})});
+                                  clearTimeout(timer);
+                                  const data=await res.json();
+                                  const text=res.status===200?(data.content?.map(b=>b.type==='text'?b.text:'').join('\n')||''):'';
+                                  const error=res.status!==200?(data?.error?.message||'API error '+res.status):null;
+                                  const validatedText = await validateCredentials(text, strategistContext);
+                                results.push({company:waldoAccount.company,contact,text:sanitizeEmail(validatedText),error});
+                                }catch(e){results.push({company:waldoAccount.company,contact,text:'',error:e.name==='AbortError'?'Timed out':e.message});}
+                                setWaldoResults([...results]);
+                                if(i<waldoContacts.length-1) await new Promise(r=>setTimeout(r,5000));
+                              }
+                              setWaldoProgress(waldoContacts.length);
+                              setWaldoRunning(false);
+                            }}
+                              style={{flex:1,padding:"8px",background:"#E8C547",color:"#0c0b09",border:"none",borderRadius:"var(--border-radius-md)",fontSize:12,fontWeight:500,cursor:"pointer",fontFamily:"inherit"}}>
+                              Generate {waldoContacts.length === waldoAccount?.contacts?.length ? "all" : waldoContacts.length} email{waldoContacts.length>1?"s":""} for {waldoAccount?.company?.split(" ").slice(0,2).join(" ")}
+                            </button>
+                            {waldoResults.length>0&&(
+                              <button onClick={exportWaldoCSV}
+                                style={{padding:"8px 14px",background:"var(--color-background-secondary)",color:"var(--color-text-secondary)",border:"1px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>
+                                Export CSV
+                              </button>
+                            )}
+                          </div>
+                        )}
+                        {waldoResults.length>0&&!waldoRunning&&(
+                          <div>
+                            <p style={{fontSize:10,color:"var(--color-text-tertiary)",letterSpacing:".07em",textTransform:"uppercase",marginBottom:8}}>Results — {waldoResults.filter(r=>!r.error).length}/{waldoResults.length} succeeded</p>
+                            {waldoResults.map((r,i)=>(
+                              <div key={i} style={{marginBottom:8,border:"1px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",padding:"10px 12px"}}>
+                                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                                  <span style={{fontSize:11,fontWeight:500,color:"var(--color-text-primary)"}}>{r.contact}</span>
+                                  {r.error
+                                    ?<span style={{fontSize:10,color:"#E87070"}}>Failed: {r.error}</span>
+                                    :<button onClick={()=>navigator.clipboard.writeText(r.text)} style={{background:"none",border:"1px solid var(--color-border-tertiary)",borderRadius:4,color:"var(--color-text-tertiary)",fontSize:10,cursor:"pointer",padding:"2px 8px",fontFamily:"inherit"}}>Copy</button>}
+                                </div>
+                                {!r.error&&<pre style={{fontSize:11,color:"var(--color-text-secondary)",whiteSpace:"pre-wrap",lineHeight:1.6,margin:0,fontFamily:"var(--font-sans)"}}>{r.text}</pre>}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {batchMode && (
+                  <div>
+                    <div style={{marginBottom:14}}>
+                      <p style={{fontSize:10,color:"var(--color-text-tertiary)",letterSpacing:".07em",textTransform:"uppercase",marginBottom:6}}>Step 1 — Upload contacts</p>
+                      <div style={{border:"1px dashed var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",padding:"14px",textAlign:"center"}}
+                        onDragOver={e=>e.preventDefault()}
+                        onDrop={e=>{e.preventDefault();const f=e.dataTransfer.files[0];if(f)parseBatchFile(f).then(c=>{setBatchContacts(c);setBatchError(null);setBatchInsightsReady(false);setBatchInsights("");}).catch(setBatchError);}}>
+                        <input type="file" accept=".csv,.xlsx,.xls" id="bfi" style={{display:"none"}}
+                          onChange={e=>{const f=e.target.files[0];if(f)parseBatchFile(f).then(c=>{setBatchContacts(c);setBatchError(null);setBatchInsightsReady(false);setBatchInsights("");}).catch(setBatchError);}} />
+                        <label htmlFor="bfi" style={{cursor:"pointer",color:"var(--color-text-tertiary)",fontSize:12}}>
+                          {batchContacts.length>0
+                            ?<span style={{color:"#E8C547"}}>{batchContacts.length} contacts loaded — click to replace</span>
+                            :<span>Drop a CSV or Excel file here, or <span style={{textDecoration:"underline"}}>click to upload</span></span>}
+                        </label>
+                      </div>
+                      {batchError&&<p style={{color:"#E87070",fontSize:11,marginTop:6}}>{String(batchError)}</p>}
+                      <p style={{fontSize:10,color:"var(--color-text-tertiary)",marginTop:6,lineHeight:1.5}}>Winmo and CRM exports work directly. Auto-detected: Full Name, Company Name, Title, Email, Description, Industries, Associated Brands.</p>
+                    </div>
+                    {batchContacts.length>0&&(
+                      <div style={{maxHeight:100,overflowY:"auto",border:"1px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",marginBottom:14}}>
+                        <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+                          <thead><tr style={{borderBottom:"1px solid var(--color-border-tertiary)"}}>
+                            {["Name","Company","Role","Email"].map(h=><th key={h} style={{padding:"3px 8px",textAlign:"left",color:"var(--color-text-tertiary)",fontWeight:400,textTransform:"uppercase",fontSize:10}}>{h}</th>)}
+                          </tr></thead>
+                          <tbody>{batchContacts.map((c,i)=>(
+                            <tr key={i} style={{borderBottom:"1px solid var(--color-border-tertiary)"}}>
+                              <td style={{padding:"3px 8px",color:"var(--color-text-primary)"}}>{c.name}</td>
+                              <td style={{padding:"3px 8px",color:"var(--color-text-secondary)"}}>{c.company}</td>
+                              <td style={{padding:"3px 8px",color:"var(--color-text-secondary)",maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.role}</td>
+                              <td style={{padding:"3px 8px",color:"var(--color-text-tertiary)"}}>{c.email}</td>
+                            </tr>
+                          ))}</tbody>
+                        </table>
+                      </div>
+                    )}
+                    {batchContacts.length>0&&(
+                      <div style={{marginBottom:14,padding:"12px",background:"var(--color-background-tertiary)",borderRadius:"var(--border-radius-md)",border:"1px solid var(--color-border-tertiary)"}}>
+                        <p style={{fontSize:10,color:"var(--color-text-tertiary)",letterSpacing:".07em",textTransform:"uppercase",marginBottom:8}}>Step 2 — Pull BJL insights</p>
+                        <p style={{fontSize:11,color:"var(--color-text-secondary)",marginBottom:8,lineHeight:1.5}}>Describe who you are reaching out to. One pull generates shared findings used across all emails.</p>
+                        <input type="text" value={batchIndustry} onChange={e=>{setBatchIndustry(e.target.value);setBatchInsightsReady(false);}}
+                          placeholder="e.g. amusement parks, zoos and family attractions in the Southeast"
+                          style={{width:"100%",background:"var(--color-background-secondary)",border:"1px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",color:"var(--color-text-primary)",padding:"8px 11px",fontSize:12,fontFamily:"var(--font-sans)",marginBottom:8,boxSizing:"border-box"}} />
+                        <button onClick={pullBatchInsights} disabled={!batchIndustry.trim()||batchInsightsPulling}
+                          style={{padding:"7px 14px",background:batchInsightsReady?"var(--color-background-secondary)":"#E8C547",color:batchInsightsReady?"var(--color-text-secondary)":"#0c0b09",border:batchInsightsReady?"1px solid var(--color-border-tertiary)":"none",borderRadius:"var(--border-radius-md)",fontSize:11,fontWeight:500,cursor:"pointer",fontFamily:"inherit",opacity:!batchIndustry.trim()||batchInsightsPulling?0.5:1}}>
+                          {batchInsightsPulling?"Pulling…":batchInsightsReady?"✓ Ready — re-pull":"Pull BJL Insights"}
+                        </button>
+                        {batchInsights&&(
+                          <div style={{marginTop:10}}>
+                            <textarea value={batchInsights} onChange={e=>setBatchInsights(e.target.value)}
+                              style={{width:"100%",minHeight:140,background:"var(--color-background-primary)",border:"1px solid var(--color-border-secondary)",borderRadius:"var(--border-radius-md)",color:"var(--color-text-secondary)",padding:"10px 12px",fontSize:11,fontFamily:"var(--font-sans)",lineHeight:1.6,resize:"vertical",boxSizing:"border-box",marginTop:4}} />
+                            <p style={{fontSize:10,color:"var(--color-text-tertiary)",marginTop:4}}>You can edit these findings before generating.</p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {batchInsightsReady&&(
+                      <div>
+                        <p style={{fontSize:10,color:"var(--color-text-tertiary)",letterSpacing:".07em",textTransform:"uppercase",marginBottom:8}}>Step 3 — Configure and generate</p>
+                        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10,flexWrap:"wrap"}}>
+                          <span style={{fontSize:10,color:"var(--color-text-tertiary)",whiteSpace:"nowrap"}}>API speed</span>
+                          {[{label:"Starter",delay:8},{label:"Tier 1",delay:3},{label:"Tier 2",delay:1}].map(({label,delay})=>(
+                            <button key={delay} onClick={()=>setBatchDelay(delay)}
+                              style={{padding:"4px 10px",borderRadius:"var(--border-radius-md)",border:"1px solid var(--color-border-tertiary)",background:batchDelay===delay?"#E8C547":"var(--color-background-secondary)",color:batchDelay===delay?"#0c0b09":"var(--color-text-tertiary)",fontSize:10,cursor:"pointer",textTransform:"uppercase",fontFamily:"inherit",fontWeight:batchDelay===delay?500:400}}>{label}</button>
+                          ))}
+                          <span style={{fontSize:10,color:"var(--color-text-tertiary)"}}>~{Math.ceil(batchContacts.length*batchDelay/60)} min for {batchContacts.length} contacts</span>
+                        </div>
+                        <div style={{marginBottom:10}}>
+                          <label style={{...lbl,display:"block",marginBottom:4}}>Email instructions</label>
+                          <textarea value={batchEmailPrompt} onChange={e=>setBatchEmailPrompt(e.target.value)}
+                            placeholder={"Describe what this email should do.\n\nExamples:\n— Email 1 of 3: Friendly intro, open with the most relevant BJL finding.\n— Email 2 of 3: Kennedy Space Center follow-up.\n— Email 3 of 3: Tease the travel POV piece."}
+                            style={{width:"100%",minHeight:90,background:"var(--color-background-tertiary)",border:"1px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",color:"var(--color-text-primary)",padding:"10px 12px",fontSize:12,fontFamily:"var(--font-sans)",lineHeight:1.6,resize:"vertical",boxSizing:"border-box"}} />
+                        </div>
+                        {batchRunning?(
+                          <div>
+                            <div style={{height:4,background:"var(--color-background-tertiary)",borderRadius:2,marginBottom:8}}>
+                              <div style={{height:"100%",background:"#E8C547",borderRadius:2,width:batchContacts.length?(batchProgress/batchContacts.length*100)+"%":"0%",transition:"width .3s"}}/>
+                            </div>
+                            <p style={{fontSize:11,color:"var(--color-text-tertiary)",textAlign:"center"}}>{batchProgress} of {batchContacts.length} complete…</p>
+                          </div>
+                        ):(
+                          <div style={{display:"flex",gap:8}}>
+                            <button onClick={runBatch}
+                              style={{flex:1,padding:"8px",background:"#E8C547",color:"#0c0b09",border:"none",borderRadius:"var(--border-radius-md)",fontSize:12,fontWeight:500,cursor:"pointer",fontFamily:"inherit"}}>
+                              Generate {batchContacts.length} Email{batchContacts.length>1?"s":""}
+                            </button>
+                            {batchResults.length>0&&(
+                              <button onClick={exportBatchCSV}
+                                style={{padding:"8px 14px",background:"var(--color-background-secondary)",color:"var(--color-text-secondary)",border:"1px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>
+                                Export CSV
+                              </button>
+                            )}
+                          </div>
+                        )}
+                        {batchResults.length>0&&!batchRunning&&(
+                          <div style={{marginTop:12}}>
+                            <p style={{fontSize:10,color:"var(--color-text-tertiary)",letterSpacing:".07em",textTransform:"uppercase",marginBottom:8}}>Results — {batchResults.filter(r=>!r.error).length}/{batchResults.length} succeeded</p>
+                            {batchResults.map((r,i)=>(
+                              <div key={i} style={{marginBottom:8,border:"1px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",padding:"10px 12px"}}>
+                                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                                  <span style={{fontSize:11,fontWeight:500,color:"var(--color-text-primary)"}}>{r.contact.name}{r.contact.company?" · "+r.contact.company:""}</span>
+                                  {r.error
+                                    ?<span style={{fontSize:10,color:"#E87070"}}>Failed: {r.error==="Failed to fetch"?"Connection error":r.error}</span>
+                                    :<button onClick={()=>navigator.clipboard.writeText(r.text)} style={{background:"none",border:"1px solid var(--color-border-tertiary)",borderRadius:4,color:"var(--color-text-tertiary)",fontSize:10,cursor:"pointer",padding:"2px 8px",fontFamily:"inherit"}}>Copy</button>}
+                                </div>
+                                {!r.error&&<pre style={{fontSize:11,color:"var(--color-text-secondary)",whiteSpace:"pre-wrap",lineHeight:1.6,margin:0,fontFamily:"var(--font-sans)"}}>{r.text}</pre>}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {!batchMode&&!waldoAccount&&queryType==="outreach_draft"&&(
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+                    <div>
+                      <label style={lbl}>Prospect / Company</label>
+                      <input type="text" value={prospectName} onChange={e=>setProspectName(e.target.value)}
+                        placeholder="e.g. Athletic Brewing, Regions Bank"
+                        style={{width:"100%",background:"var(--color-background-tertiary)",border:"1px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",color:"var(--color-text-primary)",padding:"8px 11px",fontSize:12,fontFamily:"var(--font-sans)"}} />
+                    </div>
+                    <div>
+                      <label style={lbl}>Recipient Role</label>
+                      <select style={selStyle} value={recipientRole} onChange={e=>setRecipientRole(e.target.value)}>
+                        <option value="">Select role (optional)</option>
+                        <option value="CMO">CMO</option>
+                        <option value="VP Marketing">VP Marketing</option>
+                        <option value="VP Fan Experience / Guest Experience">VP Fan / Guest Experience</option>
+                        <option value="Corporate Partnerships">Corporate Partnerships</option>
+                        <option value="Brand Manager">Brand Manager</option>
+                        <option value="Other">Other</option>
+                      </select>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Demographics (non-outreach modes only) */}
+            {queryType !== "outreach_draft" && (
+              <div>
+                <button onClick={() => setShowDemo(v => !v)}
+                  style={{ background:"none",border:"none",color:demoCtx?"#E8C547":"var(--color-text-tertiary)",fontSize:11,letterSpacing:".07em",textTransform:"uppercase",cursor:"pointer",fontFamily:"inherit",padding:"0 0 6px",display:"flex",alignItems:"center",gap:6 }}>
+                  <span>◎</span>
+                  {demoCtx ? "Target: " + demoCtx : "Add demographic target"}
+                  <span style={{ fontSize:9,display:"inline-block",transform:showDemo?"rotate(180deg)":"none",transition:"transform .2s" }}>▼</span>
+                </button>
+                {showDemo && (
+                  <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginTop:4 }}>
+                    <div>
+                      <label style={lbl}>Generation</label>
+                      <select style={selStyle} value={generation} onChange={e => setGeneration(e.target.value)}>
+                        <option value="">All</option>
+                        {GENERATIONS.map(g => <option key={g} value={g}>{g}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label style={lbl}>Gender</label>
+                      <select style={selStyle} value={gender} onChange={e => setGender(e.target.value)}>
+                        <option value="">All</option>
+                        {GENDERS.map(g => <option key={g} value={g}>{g}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label style={lbl}>Income</label>
+                      <select style={selStyle} value={income} onChange={e => setIncome(e.target.value)}>
+                        <option value="">All</option>
+                        {INCOMES.map(i => <option key={i} value={i}>{i}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Strategist Context / Prospect Context */}
+            <div style={{ marginTop:10 }}>
+              <button onClick={() => setShowContext(v => !v)}
+                style={{ background:"none",border:"none",color:strategistContext.trim()?"#E8C547":"var(--color-text-tertiary)",fontSize:11,letterSpacing:".07em",textTransform:"uppercase",cursor:"pointer",fontFamily:"inherit",padding:"0 0 6px",display:"flex",alignItems:"center",gap:6 }}>
+                <span>◈</span>
+                {strategistContext.trim()
+                  ? (queryType === "outreach_draft" ? "Prospect context added" : "Strategist context added")
+                  : (queryType === "outreach_draft" ? "What do you know about this prospect?" : "Add strategist context")}
+                <span style={{ fontSize:9,display:"inline-block",transform:showContext?"rotate(180deg)":"none",transition:"transform .2s" }}>▼</span>
+              </button>
+              {showContext && (
+                <div>
+                  <textarea
+                    value={strategistContext}
+                    onChange={e => setStrategistContext(e.target.value)}
+                    placeholder={queryType === "outreach_draft"
+                      ? "What you know about this account: recent news, agency review status, mutual connections, the agency credentials you want surfaced. This is intel, not instructions."
+                      : "Paste store visit journals, MRI findings, competitive audits, or any other first-party intelligence. The tool uses this to sharpen which BJL data is most relevant."}
+                    style={{ width:"100%",minHeight:100,background:"var(--color-background-tertiary)",border:"1px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",color:"var(--color-text-primary)",padding:"10px 12px",fontSize:12,fontFamily:"var(--font-sans)",lineHeight:1.6,resize:"vertical",boxSizing:"border-box",marginTop:6 }}
+                  />
+                  {strategistContext.trim() && (
+                    <button onClick={() => setStrategistContext("")}
+                      style={{ background:"none",border:"none",color:"var(--color-text-tertiary)",fontSize:10,cursor:"pointer",fontFamily:"inherit",padding:"4px 0",letterSpacing:".05em" }}>
+                      Clear context
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Email Instructions — only shown for outreach_draft */}
+            {queryType === "outreach_draft" && (
+              <div style={{ marginTop:10 }}>
+                <button onClick={() => setShowEmailInstructions(v => !v)}
+                  style={{ background:"none",border:"none",color:emailInstructions.trim()?"#E8C547":"var(--color-text-tertiary)",fontSize:11,letterSpacing:".07em",textTransform:"uppercase",cursor:"pointer",fontFamily:"inherit",padding:"0 0 6px",display:"flex",alignItems:"center",gap:6 }}>
+                  <span>✎</span>
+                  {emailInstructions.trim() ? "Email instructions set" : "Add email instructions (cadence, structure, links)"}
+                  <span style={{ fontSize:9,display:"inline-block",transform:showEmailInstructions?"rotate(180deg)":"none",transition:"transform .2s" }}>▼</span>
+                </button>
+                {showEmailInstructions && (
+                  <div>
+                    <textarea
+                      value={emailInstructions}
+                      onChange={e => setEmailInstructions(e.target.value)}
+                      placeholder={"How should this email be structured? What stage of the cadence? What links should it include?\n\nExamples:\n— Email 2 of 3: brief callback to prior note, then a relevant case study link, then a soft close. 4-6 sentences in the body.\n— Post-meeting follow-up: thank them, recap one thing they said, offer a next step.\n— Re-engagement: acknowledge time has passed, share something new since we last spoke.\n\nIf left blank, the default three-part structure (HOOK → BJL BRIDGE → CRED) will be used."}
+                      style={{ width:"100%",minHeight:120,background:"var(--color-background-tertiary)",border:"1px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",color:"var(--color-text-primary)",padding:"10px 12px",fontSize:12,fontFamily:"var(--font-sans)",lineHeight:1.6,resize:"vertical",boxSizing:"border-box",marginTop:6 }}
+                    />
+                    {emailInstructions.trim() && (
+                      <button onClick={() => setEmailInstructions("")}
+                        style={{ background:"none",border:"none",color:"var(--color-text-tertiary)",fontSize:10,cursor:"pointer",fontFamily:"inherit",padding:"4px 0",letterSpacing:".05em" }}>
+                        Clear instructions
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Input row */}
+        <div style={{ display:"flex",gap:8,alignItems:"flex-end" }}>
+          {messages.length > 0 && !showComposer && (
+            <button onClick={() => setShowComposer(true)}
+              style={{ flexShrink:0,background:"none",border:"1px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",color:"var(--color-text-tertiary)",padding:"9px 11px",fontSize:11,cursor:"pointer",fontFamily:"inherit",transition:"all .15s",letterSpacing:".05em",textTransform:"uppercase" }}
+              onMouseEnter={e => e.currentTarget.style.borderColor="#E8C54766"}
+              onMouseLeave={e => e.currentTarget.style.borderColor="var(--color-border-tertiary)"}>
+              + New topic
+            </button>
+          )}
+          <textarea ref={textareaRef}
+            value={input} onChange={e => setInput(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
+            placeholder={selectedQT ? selectedQT.placeholder : "Ask a follow-up..."}
+            rows={1}
+            style={{ flex:1,background:"var(--color-background-secondary)",border:"1px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-md)",color:"var(--color-text-primary)",padding:"9px 13px",fontSize:13,fontFamily:"var(--font-sans)",lineHeight:1.5,resize:"none",transition:"border-color .18s" }} />
+          <button onClick={() => send()} disabled={!input.trim() || loading}
+            style={{ flexShrink:0,background:"#E8C547",color:"#0c0b09",border:"none",padding:"9px 18px",fontSize:12,fontWeight:500,letterSpacing:".08em",textTransform:"uppercase",cursor:"pointer",borderRadius:"var(--border-radius-md)",transition:"all .15s",fontFamily:"inherit",opacity:(!input.trim()||loading)?0.35:1 }}>
+            Send
+          </button>
+        </div>
+        <p style={{ fontSize:10,color:"var(--color-text-tertiary)",margin:"6px 0 0" }}>
+          Enter to send · Shift+Enter for new line · Session saved automatically
+        </p>
+      </div>
+    </div>
+  );
+}
+
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(React.createElement(BJLTool));
+  </script>
+</body>
+</html>

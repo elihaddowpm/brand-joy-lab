@@ -3,10 +3,23 @@
 Strategic intelligence tool for PETERMAYER, powered by the Brand Joy Lab (BJL) dataset.
 
 The frontend is a single-page React app (`index.html`) that uses runtime Babel — no build step.
-The backend is a Netlify serverless function that orchestrates decompose → retrieve → synthesize
-in a single Server-Sent Events stream.
+The backend is a triage-aware three-stage Netlify serverless pipeline (Haiku triage → Sonnet
+investigation → Sonnet synthesis), polled from the frontend via a job-queue pattern.
 
-## Architecture
+> **Note**: this README's "Architecture" section below describes the legacy V1 system and is
+> partially stale. The current architecture replaced V1's SSE streaming with a polling pattern
+> (PR #1, commits `5210d9a`..`a4eeeb0`) and the V1 frontend was archived to `archive/index_v1.html`
+> in PR #4. The current canonical references are:
+> - **Schema reference**: `docs/schema_doc.md` (loaded by the bg fn at startup)
+> - **Prompts**: `prompts/triage_prompt.md`, `prompts/investigator_prompt_v3.md`,
+>   `prompts/synthesizer_prompt_v3.md`
+> - **Functions**: `netlify/functions/bjl-query.js` (sync enqueuer),
+>   `netlify/functions/bjl-query-background.js` (agent loop, 15-min ceiling),
+>   `netlify/functions/bjl-query-status.js` (poller + watchdog)
+>
+> A full README rewrite to describe the V2 architecture is a separate housekeeping task.
+
+## Architecture (LEGACY — describes archived V1)
 
 ```
 index.html                     static, loads React + Babel from CDN, inlines JSX
@@ -19,7 +32,10 @@ src/
 BJL_Intelligence_Tool_v5.jsx   historical JSX source (pre-orchestrator); for reference only
 ```
 
-Flow per query:
+The `src/` directory was removed in commit `ad27618` when its contents became orphaned by the
+V1→V2 architecture transition. The block above is preserved as a snapshot of what V1 looked like.
+
+Flow per query (V1):
 
 1. **Decompose** (Sonnet) — classifies intent, picks joy modes / audiences / filters
 2. **Retrieve** (Supabase) — tag + semantic + full-text items, verbatims, laws, demo splits
@@ -29,10 +45,9 @@ Flow per query:
 
 Set these in Netlify → Site settings → Environment variables:
 
-- `ANTHROPIC_API_KEY` — for decomposer (Sonnet) + synthesis (Opus)
-- `OPENAI_API_KEY` — query embedding for semantic retrieval (text-embedding-3-small)
+- `ANTHROPIC_API_KEY` — for triage (Haiku 4.5) + investigation + synthesis (Sonnet 4.6)
 - `SUPABASE_URL` — e.g. `https://iqjkgswpzbklihdfccnd.supabase.co`
-- `SUPABASE_ANON_KEY` — anon public key; retrieval uses SELECT-only RPCs
+- `SUPABASE_SERVICE_KEY` — service role key; the bg fn uses this for the SECURITY DEFINER `execute_read_sql` RPC
 
 ## Local development
 
@@ -41,14 +56,21 @@ npm install
 netlify dev
 ```
 
+If you change the prompts in `prompts/*.md` or the schema doc in `docs/schema_doc.md`, regenerate
+the bundle that the bg fn loads at startup:
+
+```bash
+node bin/build_prompts_bundle.js
+```
+
 ## Deploy
 
 Netlify auto-deploys on push to `main`.
 
 ## Notes
 
-- `/api/bjl-query` is now the streaming orchestrator. It replaces the old "fetch BJL rows as JSON"
-  endpoint that earlier versions of this tool used.
-- The old `fetchBJLData` helper in `index.html` is now a no-op stub. Legacy call-sites (batch email
-  generation, web-research enrichment, etc.) still route through `/api/claude` — rewire them to the
-  orchestrator if/when needed.
+- `/api/bjl-query` is the sync enqueuer (returns 202 with a job_id).
+- `/api/bjl-query-status` is the poll endpoint (frontend polls every 2s).
+- `/api/claude` is an Anthropic Messages passthrough still used by legacy email-generation paths
+  in `archive/index_v1.html`. The current V2 frontend's email mode routes through `/api/bjl-query`
+  with `mode: "email"`.
