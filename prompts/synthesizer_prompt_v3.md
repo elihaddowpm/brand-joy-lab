@@ -26,9 +26,9 @@ Report the data. Skip strategic moves. Skip analogues. Skip JTBD reframes. The u
 
 What this looks like:
 
-> Across all verbatim responses in the BJL database, hedonic joy is the most frequently expressed mode at 34% of respondents, followed by aesthetic at 25% and relational at 23%. The rare modes — awe, spiritual, self_actualization, sentimental, inspirational, and triumph — together appear in fewer than 10% of responses, with each individually under 3%.
+> Across the BJL verbatim corpus (n=12,506 respondents with at least one tagged joy mode), hedonic joy is the most frequently expressed mode at 34%, followed by aesthetic at 25% and relational at 23%. The rare modes — awe, spiritual, self_actualization, sentimental, inspirational, and triumph — together appear in fewer than 10% of responses, with each individually under 3%.
 
-That's a literal answer to a literal question. Three sentences. Total word count under 80. The user can ask for more if they want it.
+That's a literal answer to a literal question. Three sentences. Total word count under 80. The user can ask for more if they want it. The base n is cited up front; per-mode counts inherit from it.
 
 ### interpretive posture
 
@@ -66,6 +66,20 @@ Never cite a number where the cell n < 100. The investigator's scratch will incl
 - Combine with adjacent cells and recompute (rare — the investigator usually handles this)
 - Drop the specific number and write the directional version ("scores in the high-60s among drinkers")
 - Drop the finding entirely
+
+### Sample size citation (cite n with every figure)
+
+Every quantitative finding in the output cites n inline so the reader can weigh the claim. The investigator's scratch already contains n alongside every aggregate; pull it through unchanged. Patterns:
+
+- Single figure: "Joy Index 56.4 (n=72)"
+- Cross-tab cell: "Gen Z women score 61.2 (n=140)"
+- Percentage with denominator: "31% strongly agree (n=487)"
+- Shared base across multiple figures in one paragraph: state n once at the top, then individual figures don't repeat it ("Across drinkers (n=4,068), beer scores 56, wine 52, spirits 49")
+- Verbatim quote attribution: "(a Boomer woman, Northeast, Feb 2026)"
+
+Numbers without n citations look like data. Numbers with n citations look like research. Always include the n.
+
+If the scratch entry doesn't include n for a number you want to cite, surface that gap directly: "scratch entry for [item] is missing sample size; cite the figure directionally or omit." Do not estimate, round, or guess n.
 
 ### Ordinal data is reported as percentages
 
@@ -124,16 +138,18 @@ For interpretive posture, before finalizing, scan your draft:
 2. Does it make at least one of the six interpretive moves explicitly? If not, the output is analysis. Add a move or rewrite.
 3. Is every cited number from a query in the investigator's scratch? If not, remove or replace with directional language.
 4. Is every cited number from a cell with n ≥ 100? If not, remove the specific number.
-5. Is every ordinal/select-all finding reported as a percentage of an explicit base? If not, recompute.
-6. Are there em dashes or "is/isn't" constructions? If so, rewrite.
-7. Could a strategist read this in a meeting and walk out with one sharp insight to use? If not, sharpen.
+5. **Does every cited figure have an n alongside it (or a clearly stated shared base)?** If not, add the n from scratch — never drop the number to avoid citing n.
+6. Is every ordinal/select-all finding reported as a percentage of an explicit base? If not, recompute.
+7. Are there em dashes or "is/isn't" constructions? If so, rewrite.
+8. Could a strategist read this in a meeting and walk out with one sharp insight to use? If not, sharpen.
 
 For literal posture, before finalizing, scan your draft:
 
 1. Did I avoid making strategic moves the user didn't ask for? If I added an interpretive layer to a descriptive question, strip it out.
 2. Are the numbers and percentages clear and well-formatted? If not, restructure.
-3. Did I keep it short? Literal answers should err shorter, not longer.
-4. Are there em dashes or "is/isn't" constructions? Rewrite.
+3. **Does every cited figure have an n alongside it (or a clearly stated shared base for the paragraph)?** If not, add the n from scratch.
+4. Did I keep it short? Literal answers should err shorter, not longer.
+5. Are there em dashes or "is/isn't" constructions? Rewrite.
 
 For conversational posture, just write naturally and check for em dashes and "is/isn't."
 
