@@ -2,12 +2,14 @@
  * bjl-query.js — sync enqueue endpoint
  *
  * Accepts BOTH request shapes (V1 and V2):
- *   V1: { query_type, prompt }
- *   V2: { query, intentHint, strategistContext, waldoContext, debug }
+ *   V1: { query_type, prompt, prior_conversation_context? }
+ *   V2: { query, intentHint, strategistContext, waldoContext, debug, prior_conversation_context? }
  *
  * Maps V2 → V1: query → prompt, intentHint → query_type.
  * strategistContext / waldoContext / debug get persisted to extra_context
  * and passed through to the investigator background function.
+ * prior_conversation_context is persisted to its own jsonb column so the
+ * triage stage can recognize follow-ups against recent turns.
  *
  * Inserts a job row into bjl_query_jobs (status=pending) and fires the
  * background function. Returns {job_id} with HTTP 202.
@@ -23,12 +25,20 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 const VALID_TYPES = ['brand_lookup', 'audience_dive', 'outreach_angle', 'data_pull', 'email_findings'];
 
 function normalizeRequest(body) {
+  // Triage uses prior_conversation_context to recognize follow-ups. Accept
+  // it from either request shape, as either prior_conversation_context (snake)
+  // or priorConversationContext (camel) for client convenience.
+  const priorContext = body.prior_conversation_context
+    || body.priorConversationContext
+    || null;
+
   // V1 shape passthrough
   if (typeof body.prompt === 'string' && body.prompt) {
     return {
       prompt: body.prompt,
       query_type: VALID_TYPES.includes(body.query_type) ? body.query_type : 'data_pull',
-      extra_context: null
+      extra_context: null,
+      prior_conversation_context: priorContext
     };
   }
   // V2 shape translation. The Intelligence-mode client sends `intent`, the
@@ -48,7 +58,8 @@ function normalizeRequest(body) {
     return {
       prompt: body.query,
       query_type: queryType,
-      extra_context: Object.keys(extra).length ? extra : null
+      extra_context: Object.keys(extra).length ? extra : null,
+      prior_conversation_context: priorContext
     };
   }
   return null;
@@ -77,7 +88,8 @@ exports.handler = async (event) => {
       status: 'pending',
       query_type: norm.query_type,
       prompt: norm.prompt,
-      extra_context: norm.extra_context
+      extra_context: norm.extra_context,
+      prior_conversation_context: norm.prior_conversation_context
     })
     .select('job_id')
     .single();

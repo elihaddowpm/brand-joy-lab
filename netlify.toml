@@ -11,6 +11,22 @@
 [functions.bjl-query]
   timeout = 26
 
+[functions.bjl-query-status]
+  timeout = 26
+
+# Background function — Netlify gives any function whose filename ends with
+# -background.js a 15-minute timeout automatically. The included_files glob
+# bundles the prompt files and the schema doc into the deploy zip so
+# fs.readFileSync at startup can find them under ../../prompts/ and
+# ../../docs/ relative to the function file.
+[functions.bjl-query-background]
+  included_files = [
+    "prompts/triage_prompt.md",
+    "prompts/investigator_prompt_v3.md",
+    "prompts/synthesizer_prompt_v3.md",
+    "docs/schema_doc.md"
+  ]
+
 [context.production.environment]
   NODE_VERSION = "18"
 
@@ -22,4 +38,9 @@
 [[redirects]]
   from = "/api/bjl-query"
   to = "/.netlify/functions/bjl-query"
+  status = 200
+
+[[redirects]]
+  from = "/api/bjl-query-status"
+  to = "/.netlify/functions/bjl-query-status"
   status = 200
