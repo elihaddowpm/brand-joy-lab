@@ -216,6 +216,30 @@ const TOOLS = [
   }
 ];
 
+// SQL execution layer for the investigator. Routes every query through a
+// SECURITY DEFINER Postgres function in Supabase (originally agent_exec_sql,
+// later renamed to execute_read_sql) rather than a direct Postgres connection.
+//
+// Why not a direct Postgres connection:
+//   Supabase's Supavisor pooler does not accept custom-role tenants (only
+//   postgres.*). A direct connection via pg to db.PROJECT.supabase.co
+//   requires IPv6 from Netlify Functions, which is not available. The
+//   pg library path was producing "Tenant or user not found" auth rejections.
+//
+// Security posture (enforced at the DB layer, not here):
+//   - SECURITY DEFINER function runs as postgres with BYPASSRLS
+//   - function denylist rejects DDL/DML/admin keywords anywhere in input
+//   - function rejects multi-statement input
+//   - function requires leading SELECT or WITH
+//   - function caps rows at 500 via outer LIMIT wrap
+//   - EXECUTE on the function granted only to service_role (NOT anon/authenticated)
+// The service-role JWT is held server-side in SUPABASE_SERVICE_KEY and is
+// never exposed to the browser.
+//
+// The local isReadOnlySql guard below is a belt-and-suspenders pre-check that
+// rejects obvious write attempts before round-tripping to Postgres. The DB
+// function is the real enforcement layer; this just saves a query of the
+// agent's budget on clearly-invalid input.
 function isReadOnlySql(sql) {
   const dangerous = /\b(INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER|CREATE|GRANT|REVOKE)\b/i;
   return !dangerous.test(sql);

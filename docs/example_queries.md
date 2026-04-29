@@ -1,10 +1,12 @@
-// example_queries.js
-// 18 curated investigative patterns teaching the investigator how to approach
-// different question shapes. The investigator treats these as templates to
-// adapt, NOT a fixed catalog — the point is the reasoning pattern, not the
-// specific queries.
+<!-- Note for future maintainers: these patterns were originally written for the SSE-flow investigator
+(circa Apr 2025) and reference the legacy aggregate tables (bjl_scores, bjl_demo_splits, bjl_verbatims)
+plus the retrieve_* RPC family. The strategic patterns underneath the SQL — four-pass brand lookups,
+adjacency pivots when direct data is thin, where demographic gaps are the strategic finding — remain
+architecture-agnostic and useful for thinking about investigations on the new long-form schema
+(bjl_responses + bjl_items + bjl_respondents). When porting a pattern, translate the table references
+to the long-form tables. The reasoning notes (the prose above each query block) are the durable part. -->
 
-export const EXAMPLE_QUERIES = `# Example Investigative Patterns (18 worked examples)
+# Example Investigative Patterns (18 worked examples)
 
 These examples teach patterns that produce strong outputs. Each shows: the user question, the intent tag (if any), the reasoning, and the actual queries. Adapt, don't copy.
 
@@ -19,7 +21,7 @@ Intent: Brand Lookup
 Reasoning: Four-pass pattern. (1) Direct hits in scores. (2) Demo splits — the demographic story is often the most strategic finding. (3) Verbatims for emotional voice (via full-text RPC to bypass category misrouting). (4) Adjacent territory if thin.
 
 Queries:
-\`\`\`sql
+```sql
 -- 1. Scores: direct mentions
 SELECT item_name, question, joy_index, top_pct, top_response, n
 FROM bjl_scores
@@ -39,7 +41,7 @@ FROM bjl_verbatims
 WHERE response_text ILIKE '%cracker barrel%' AND is_quotable = true
 GROUP BY theme, mode
 ORDER BY n DESC LIMIT 20;
-\`\`\`
+```
 
 ---
 
@@ -49,7 +51,7 @@ Intent: Brand Lookup
 
 Reasoning: DMO — data lives under travel_destinations but brand isn't named directly. Search for "Puerto Rico" the place. Pull demo splits. Check adjacent Caribbean destinations for benchmarks.
 
-\`\`\`sql
+```sql
 -- 1. Scores
 SELECT item_name, question, joy_index, n FROM bjl_scores
 WHERE item_name ILIKE '%puerto rico%' OR question ILIKE '%puerto rico%'
@@ -68,7 +70,7 @@ SELECT * FROM retrieve_verbatims_full_text('Puerto Rico', NULL, NULL, NULL, true
 -- 4. Travel/destination laws
 SELECT law_id, title, statement, implication FROM bjl_laws
 WHERE 'travel_destinations' = ANY(applies_to_categories);
-\`\`\`
+```
 
 ---
 
@@ -78,7 +80,7 @@ Intent: Brand Lookup
 
 Reasoning: Direct check first. If thin (<~5 hits across all tables), pivot to category benchmarking. Frame the response as adjacent.
 
-\`\`\`sql
+```sql
 -- 1. Direct check across all four tables in one query
 SELECT 'scores' AS source, COUNT(*) AS n FROM bjl_scores WHERE item_name ILIKE '%jolly rancher%'
 UNION ALL SELECT 'demo_splits', COUNT(*) FROM bjl_demo_splits WHERE item_name ILIKE '%jolly rancher%'
@@ -105,7 +107,7 @@ FROM bjl_verbatims
 WHERE (response_text ILIKE '%candy%' OR response_text ILIKE '%hershey%' OR response_text ILIKE '%sweet treat%')
   AND is_quotable = true
 LIMIT 12;
-\`\`\`
+```
 
 ---
 
@@ -115,7 +117,7 @@ Intent: Brand Lookup
 
 Reasoning: Loyalty programs can be sparse on direct mention but rich on parent brand. Look up parent, named properties, then broader hospitality category.
 
-\`\`\`sql
+```sql
 -- 1. Direct + parent + properties
 SELECT item_name, question, joy_index, n FROM bjl_scores
 WHERE item_name ILIKE '%marriott%' OR item_name ILIKE '%bonvoy%' OR item_name ILIKE '%ritz%' OR item_name ILIKE '%westin%'
@@ -131,7 +133,7 @@ WHERE item_name ILIKE '%marriott%' OR item_name ILIKE '%hilton%' OR item_name IL
 SELECT * FROM retrieve_verbatims(
   NULL, NULL, ARRAY['travel_hospitality'], NULL, NULL, NULL, NULL, NULL, 'marriott OR bonvoy OR loyalty', true, 15
 );
-\`\`\`
+```
 
 ---
 
@@ -143,7 +145,7 @@ Intent: Audience Deep Dive
 
 Reasoning: Filter verbatims on generation + gender + topic. Pull related score items. Check theme/joy_mode shape. Always check parental_status and income for context.
 
-\`\`\`sql
+```sql
 -- 1. Quotable verbatims
 SELECT response_text, joy_modes, themes, parental_status, income_bracket
 FROM bjl_verbatims
@@ -173,7 +175,7 @@ SELECT item_name, top_pct, top_response, n
 FROM bjl_scores
 WHERE question ILIKE '%add to your joy when shopping for furniture in a physical store%'
 ORDER BY top_pct DESC NULLS LAST LIMIT 10;
-\`\`\`
+```
 
 ---
 
@@ -183,7 +185,7 @@ Intent: Audience Deep Dive
 
 Reasoning: High gen_z_vs_boomer gap (positive = Gen Z higher). Surprising findings are where the gap is large.
 
-\`\`\`sql
+```sql
 -- 1. Gen Z meaningfully over-indexing vs Boomers
 SELECT item_name, ji_gen_z, ji_boomer, gen_z_vs_boomer, overall_ji, n_overall
 FROM bjl_demo_splits
@@ -203,7 +205,7 @@ WHERE generation = 'Gen Z'
   AND joy_modes && ARRAY['achievement', 'self_actualization', 'inspirational']
   AND is_quotable = true
 ORDER BY length(response_text) DESC LIMIT 10;
-\`\`\`
+```
 
 ---
 
@@ -211,7 +213,7 @@ ORDER BY length(response_text) DESC LIMIT 10;
 Question: "Where do men and women diverge most on travel?"
 Intent: Audience Deep Dive
 
-\`\`\`sql
+```sql
 SELECT item_name, ji_male, ji_female, gender_gap, n_overall
 FROM bjl_demo_splits ds
 WHERE EXISTS (
@@ -220,7 +222,7 @@ WHERE EXISTS (
     AND s.category_key LIKE 'travel%'
 )
 ORDER BY ABS(gender_gap) DESC LIMIT 25;
-\`\`\`
+```
 
 ---
 
@@ -228,13 +230,13 @@ ORDER BY ABS(gender_gap) DESC LIMIT 25;
 Question: "Joy gaps by income for hospitality brands"
 Intent: Audience Deep Dive
 
-\`\`\`sql
+```sql
 SELECT item_name, ji_under_35k, ji_35_75k, ji_75_125k, ji_over_125k, income_gap, overall_ji
 FROM bjl_demo_splits
 WHERE item_name IN (SELECT DISTINCT item_name FROM bjl_scores WHERE category_key = 'travel_hospitality')
   AND income_gap IS NOT NULL
 ORDER BY ABS(income_gap) DESC LIMIT 20;
-\`\`\`
+```
 
 ---
 
@@ -244,7 +246,7 @@ Intent: Audience Deep Dive
 
 Reasoning: demo_splits has no parental_status breaks. Has to come from verbatims.
 
-\`\`\`sql
+```sql
 SELECT
   parental_status,
   COUNT(*) AS total_responses,
@@ -253,17 +255,17 @@ SELECT
 FROM bjl_verbatims
 WHERE parental_status IS NOT NULL AND is_quotable = true
 GROUP BY parental_status;
-\`\`\`
+```
 
 Then sample:
-\`\`\`sql
+```sql
 SELECT response_text, themes, joy_modes
 FROM bjl_verbatims
 WHERE parental_status = 'Parent'
   AND themes && ARRAY['family togetherness']
   AND is_quotable = true
 ORDER BY length(response_text) DESC LIMIT 8;
-\`\`\`
+```
 
 ---
 
@@ -275,7 +277,7 @@ Intent: Outreach Angle
 
 Reasoning: Outreach angles need (1) what BJL says about this brand or close adjacency, (2) something surprising/strategic, (3) demographic pattern pointing at growth opportunity. The angle is the intersection of what we know and what the prospect probably doesn't.
 
-\`\`\`sql
+```sql
 -- 1. Direct + state-name hits in verbatims
 SELECT * FROM retrieve_verbatims_full_text('Wyoming', NULL, NULL, NULL, true, 12);
 
@@ -295,7 +297,7 @@ WHERE joy_modes && ARRAY['freedom', 'awe', 'tranquil']
   AND themes && ARRAY['mountains / nature', 'travel adventure']
   AND is_quotable = true
 LIMIT 8;
-\`\`\`
+```
 
 ---
 
@@ -305,7 +307,7 @@ Intent: Outreach Angle
 
 Reasoning: No brand. Surface what BJL knows about financial services emotional landscape that a bank CMO probably doesn't.
 
-\`\`\`sql
+```sql
 -- 1. Financial items ranked
 SELECT item_name, joy_index, n, question
 FROM bjl_scores WHERE category_key = 'financial' AND joy_index IS NOT NULL
@@ -325,7 +327,7 @@ ORDER BY length(response_text) DESC LIMIT 10;
 
 -- 4. Financial laws
 SELECT law_id, title, statement FROM bjl_laws WHERE 'financial' = ANY(applies_to_categories);
-\`\`\`
+```
 
 ---
 
@@ -335,7 +337,7 @@ SELECT law_id, title, statement FROM bjl_laws WHERE 'financial' = ANY(applies_to
 Question: "Give me the top stats about anticipation"
 Intent: Data Pull
 
-\`\`\`sql
+```sql
 -- 1. High-JI items measuring anticipation
 SELECT item_name, joy_index, top_pct, n, question
 FROM bjl_scores
@@ -353,7 +355,7 @@ ORDER BY length(response_text) DESC LIMIT 8;
 -- 3. Laws referencing anticipation
 SELECT law_id, title, statement FROM bjl_laws
 WHERE statement ILIKE '%anticipat%' OR evidence ILIKE '%anticipat%';
-\`\`\`
+```
 
 ---
 
@@ -361,14 +363,14 @@ WHERE statement ILIKE '%anticipat%' OR evidence ILIKE '%anticipat%';
 Question: "Joy Index of major QSR brands ranked"
 Intent: Data Pull
 
-\`\`\`sql
+```sql
 SELECT item_name, joy_index, n, question
 FROM bjl_scores
 WHERE item_name IN ('McDonalds', 'McDonald''s', 'Burger King', 'Wendys', 'Wendy''s',
                      'Chick-fil-A', 'Taco Bell', 'Subway', 'Chipotle', 'Popeyes', 'KFC')
    OR item_name ILIKE 'McDonald%' OR item_name ILIKE 'Wendy%'
 ORDER BY joy_index DESC NULLS LAST LIMIT 20;
-\`\`\`
+```
 
 ---
 
@@ -376,7 +378,7 @@ ORDER BY joy_index DESC NULLS LAST LIMIT 20;
 Question: "How are joy modes distributed across our verbatim corpus?"
 Intent: Data Pull
 
-\`\`\`sql
+```sql
 SELECT
   unnest(joy_modes) AS mode,
   COUNT(*) AS n,
@@ -385,7 +387,7 @@ FROM bjl_verbatims
 WHERE is_quotable = true
 GROUP BY mode
 ORDER BY n DESC;
-\`\`\`
+```
 
 ---
 
@@ -393,13 +395,13 @@ ORDER BY n DESC;
 Question: "What did we ask about gift giving?"
 Intent: Data Pull
 
-\`\`\`sql
+```sql
 SELECT DISTINCT question, COUNT(*) AS items
 FROM bjl_scores
 WHERE question ILIKE '%gift%' OR 'gift giving' = ANY(occasions)
 GROUP BY question
 ORDER BY items DESC;
-\`\`\`
+```
 
 ---
 
@@ -411,7 +413,7 @@ Intent: none
 
 Reasoning: Cast wide. Laws first for synthesized findings, then scores, then verbatims.
 
-\`\`\`sql
+```sql
 -- 1. Laws
 SELECT law_id, title, statement, evidence FROM bjl_laws
 WHERE statement ILIKE '%decay%' OR statement ILIKE '%after purchase%' OR statement ILIKE '%hedonic%'
@@ -430,7 +432,7 @@ WHERE (response_text ILIKE '%wore off%' OR response_text ILIKE '%not as %' OR re
        OR response_text ILIKE '%got used to%')
   AND is_quotable = true
 LIMIT 10;
-\`\`\`
+```
 
 ---
 
@@ -438,7 +440,7 @@ LIMIT 10;
 Question: "Which categories have the strongest relational joy?"
 Intent: none
 
-\`\`\`sql
+```sql
 SELECT
   category_key,
   COUNT(*) AS n_items,
@@ -450,7 +452,7 @@ WHERE joy_index IS NOT NULL AND category_key IS NOT NULL
 GROUP BY category_key
 HAVING COUNT(*) >= 10
 ORDER BY pct_relational DESC LIMIT 10;
-\`\`\`
+```
 
 ---
 
@@ -458,7 +460,7 @@ ORDER BY pct_relational DESC LIMIT 10;
 Question: "How do legacy brands compare to challenger brands on sentimental joy?"
 Intent: none
 
-\`\`\`sql
+```sql
 -- 1. Items where sentimental is a primary joy mode
 SELECT item_name, joy_index, joy_modes, category_key, n
 FROM bjl_scores
@@ -478,7 +480,7 @@ SELECT item_name, overall_ji, ji_gen_z, ji_boomer, gen_z_vs_boomer
 FROM bjl_demo_splits ds
 WHERE EXISTS (SELECT 1 FROM bjl_scores s WHERE s.item_name = ds.item_name AND 'sentimental' = ANY(s.joy_modes))
 ORDER BY gen_z_vs_boomer ASC LIMIT 15;
-\`\`\`
+```
 
 ---
 
@@ -490,4 +492,3 @@ ORDER BY gen_z_vs_boomer ASC LIMIT 15;
 4. For demographic queries: bjl_demo_splits when item is named; bjl_verbatims with demo filters when topic is broad.
 5. When aggregating, look for the surprising number. Biggest gap, most over-indexed mode.
 6. UNION ALL queries that parallel-check multiple tables in one query save budget.
-`;
