@@ -530,19 +530,55 @@ const parseBatchFile = (file) => {
 
 // Shared poll helper. Polls /api/bjl-query-status until terminal state.
 // Calls onTransition(job) once per status change. Returns the terminal job row.
+//
+// Hard cap raised from 5 min to 10 min after thorough investigations on
+// multi-axis questions ("tensions, generational, income, regional patterns")
+// were averaging 4.4 min and one ran 5.75 min — completing successfully on
+// the backend but losing the result client-side because the cap was 5 min.
+//
+// Recovery on timeout: when the cap is reached, fire ONE final status check
+// before throwing. If the job actually completed during the request that
+// would have crossed the cap (or while a polling tick was throttled by the
+// browser when the tab was backgrounded), return the completed job instead
+// of timing out. Only throw the timeout error if the final check confirms
+// the job is still running.
 const _bjlPollJob = async (jobId, signal, opts = {}) => {
   const pollIntervalMs = opts.pollIntervalMs || 2000;
-  const hardCapMs = opts.hardCapMs || 5 * 60 * 1000;
+  const hardCapMs = opts.hardCapMs || 10 * 60 * 1000;
   const onTransition = opts.onTransition || (() => {});
   const onPollError = opts.onPollError || (() => {});
   const startedAt = Date.now();
   let lastStatus = "pending";
+
+  // One-shot final status check used for both the hard-cap timeout path and
+  // any other dead-end exit so we don't drop a finding the backend produced.
+  const finalCheck = async () => {
+    try {
+      const res = await fetch("/api/bjl-query-status?id=" + encodeURIComponent(jobId), { signal });
+      if (!res.ok) return null;
+      return await res.json();
+    } catch { return null; }
+  };
+
   while (true) {
     if (signal && signal.aborted) {
       const e = new Error("Aborted"); e.phase = "abort"; e.job_id = jobId; throw e;
     }
     if (Date.now() - startedAt > hardCapMs) {
-      const e = new Error("Query exceeded " + Math.round(hardCapMs / 1000) + "s without completing.");
+      // Recovery attempt: one last status check before declaring timeout.
+      // The backend may have completed during the previous request or while
+      // the tab was throttled. If status is now terminal, return the job
+      // and let the caller surface the finding.
+      const recovered = await finalCheck();
+      if (recovered && (recovered.status === "complete"
+                     || recovered.status === "error"
+                     || recovered.status === "clarification_needed")) {
+        if (recovered.status !== lastStatus) {
+          try { onTransition(recovered); } catch (e) { console.error("[poll] onTransition threw:", e); }
+        }
+        return recovered;
+      }
+      const e = new Error("Query exceeded " + Math.round(hardCapMs / 1000) + "s without completing. The investigation may still be running on the backend; check job " + jobId + " in a moment.");
       e.phase = "timeout"; e.job_id = jobId; throw e;
     }
     await new Promise(r => setTimeout(r, pollIntervalMs));
@@ -553,7 +589,7 @@ const _bjlPollJob = async (jobId, signal, opts = {}) => {
     let job;
     try { job = await res.json(); } catch { continue; }
     if (job.status !== lastStatus) { lastStatus = job.status; try { onTransition(job); } catch (e) { console.error("[poll] onTransition threw:", e); } }
-    if (job.status === "complete" || job.status === "error") return job;
+    if (job.status === "complete" || job.status === "error" || job.status === "clarification_needed") return job;
   }
 };
 
