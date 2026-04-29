@@ -5,7 +5,7 @@
  *   V1: { query_type, prompt }
  *   V2: { query, intentHint, strategistContext, waldoContext, debug }
  *
- * Maps V2 to V1: query -> prompt, intentHint -> query_type.
+ * Maps V2 → V1: query → prompt, intentHint → query_type.
  * strategistContext / waldoContext / debug get persisted to extra_context
  * and passed through to the investigator background function.
  *
@@ -91,20 +91,73 @@ exports.handler = async (event) => {
   const siteUrl = process.env.URL || `https://${event.headers.host}`;
   const bgUrl = `${siteUrl}/.netlify/functions/bjl-query-background`;
 
+  // Dispatch the background function. Capture the response status — Netlify's
+  // password-protection gate (and other auth/proxy issues) returns 401 with an
+  // HTML body, which fetch() resolves successfully. Without checking the
+  // status, a non-2xx response would let the sync fn return 202 and the job
+  // would silently stick in 'pending' forever.
+  let dispatchStatus = null;
+  let dispatchPreview = null;
+  let dispatchThrew = null;
+
   try {
-    await fetch(bgUrl, {
+    const bgRes = await fetch(bgUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ job_id: jobId })
     });
+    dispatchStatus = bgRes.status;
+    if (dispatchStatus < 200 || dispatchStatus >= 300) {
+      try {
+        const bodyText = await bgRes.text();
+        dispatchPreview = bodyText ? bodyText.slice(0, 500) : null;
+      } catch (_) {
+        dispatchPreview = null;
+      }
+    }
   } catch (e) {
-    console.error('[bjl-query] background dispatch error:', e);
+    console.error('[bjl-query] background dispatch threw:', e);
+    dispatchThrew = e && e.message ? e.message : String(e);
+  }
+
+  // Failure path: dispatch threw OR returned non-2xx. Mark the job error
+  // immediately so the next status poll surfaces a real message. Surface the
+  // most actionable diagnostic we have.
+  if (dispatchThrew || (dispatchStatus !== null && (dispatchStatus < 200 || dispatchStatus >= 300))) {
+    let errMsg;
+    if (dispatchThrew) {
+      errMsg = 'Background dispatch threw: ' + dispatchThrew;
+    } else if (dispatchStatus === 401 && dispatchPreview && dispatchPreview.includes('Password Protection')) {
+      errMsg = 'Background function blocked by Netlify site password protection (HTTP 401). Disable site password in Netlify dashboard for the function-to-function dispatch to work.';
+    } else if (dispatchStatus === 401 || dispatchStatus === 403) {
+      errMsg = `Background function rejected with HTTP ${dispatchStatus} (auth gate). Check Netlify access controls.`;
+    } else {
+      errMsg = `Background function dispatch returned HTTP ${dispatchStatus} (expected 2xx).`;
+    }
+
     await supabase
       .from('bjl_query_jobs')
-      .update({ status: 'error', error: 'Failed to dispatch background worker: ' + e.message, completed_at: new Date().toISOString() })
+      .update({
+        status: 'error',
+        error: errMsg,
+        dispatch_status: dispatchStatus,
+        dispatch_response_preview: dispatchPreview,
+        completed_at: new Date().toISOString()
+      })
       .eq('job_id', jobId);
-    return { statusCode: 500, body: JSON.stringify({ error: 'Failed to dispatch background worker', job_id: jobId }) };
+
+    return {
+      statusCode: 502,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ error: errMsg, job_id: jobId, dispatch_status: dispatchStatus })
+    };
   }
+
+  // Success path. Record dispatch status for future debugging.
+  await supabase
+    .from('bjl_query_jobs')
+    .update({ dispatch_status: dispatchStatus })
+    .eq('job_id', jobId);
 
   return {
     statusCode: 202,
