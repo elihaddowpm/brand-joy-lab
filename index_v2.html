@@ -505,167 +505,270 @@ const parseBatchFile = (file) => {
 };
 
 /* =========================================================================
- * 3. queryBJL / investigateQuery — inlined SSE clients.
- *    - queryBJL: structured pipeline for email path (intentHint: email_findings).
- *    - investigateQuery: SQL investigator + synthesis_v2 for Intelligence mode.
- *    Matches orchestrator/src/bjlClient.js semantics.
+ * 3. queryBJL / investigateQuery — async job-queue clients.
+ *
+ * V2 was originally written against an SSE backend that emitted streaming
+ * status / chunk / evidence / investigation_note events. The current backend
+ * uses an enqueue + poll architecture (see netlify/functions/bjl-query*.js):
+ *   - POST /api/bjl-query                  -> { job_id }, HTTP 202
+ *   - GET  /api/bjl-query-status?id=<id>   -> { status, finding, scratch, ... }
+ *   - status flips: pending -> running -> complete | error
+ *
+ * To preserve V2's UI contract (phase pill, evidence drawer, accumulating
+ * chunk handlers, investigation notes), these clients enqueue a job and poll,
+ * synthesizing V2's expected event stream from polled state. Streaming text
+ * is collapsed to one onChunk(finding) emitted at the end — same trade as
+ * the V1 frontend, accepted for correctness on long queries.
  * ========================================================================= */
+
+// Shared poll helper. Polls /api/bjl-query-status until terminal state.
+// Calls onTransition(job) once per status change. Returns the terminal job row.
+const _bjlPollJob = async (jobId, signal, opts = {}) => {
+  const pollIntervalMs = opts.pollIntervalMs || 2000;
+  const hardCapMs = opts.hardCapMs || 5 * 60 * 1000;
+  const onTransition = opts.onTransition || (() => {});
+  const onPollError = opts.onPollError || (() => {});
+  const startedAt = Date.now();
+  let lastStatus = "pending";
+  while (true) {
+    if (signal && signal.aborted) {
+      const e = new Error("Aborted"); e.phase = "abort"; e.job_id = jobId; throw e;
+    }
+    if (Date.now() - startedAt > hardCapMs) {
+      const e = new Error("Query exceeded " + Math.round(hardCapMs / 1000) + "s without completing.");
+      e.phase = "timeout"; e.job_id = jobId; throw e;
+    }
+    await new Promise(r => setTimeout(r, pollIntervalMs));
+    let res;
+    try { res = await fetch("/api/bjl-query-status?id=" + encodeURIComponent(jobId), { signal }); }
+    catch (err) { onPollError({ phase: "poll_network", message: err.message }); continue; }
+    if (!res.ok) { onPollError({ phase: "poll_http", status: res.status }); continue; }
+    let job;
+    try { job = await res.json(); } catch { continue; }
+    if (job.status !== lastStatus) { lastStatus = job.status; try { onTransition(job); } catch (e) { console.error("[poll] onTransition threw:", e); } }
+    if (job.status === "complete" || job.status === "error") return job;
+  }
+};
+
+// Map scratch entries to V2 evidence rows. Scratch is {query, rationale, result, rowcount}.
+// V2's drawer expects { rows: [{ id, kind, body, meta }] }.
+const _bjlScratchToEvidenceRows = (scratch) => {
+  const arr = Array.isArray(scratch) ? scratch : [];
+  return arr.map((s, i) => {
+    const rowcount = (typeof s.rowcount === "number") ? s.rowcount : (Array.isArray(s.result) ? s.result.length : 0);
+    const body = (s.rationale || "").slice(0, 280);
+    const queryPreview = s.query ? (" · " + s.query.replace(/\s+/g, " ").slice(0, 200)) : "";
+    const meta = "Q" + (i + 1) + " · " + rowcount + " row" + (rowcount === 1 ? "" : "s") + queryPreview;
+    return { id: "scratch-" + i, kind: "query_result", body, meta };
+  });
+};
+
+// Map a polled job's stage to a UI phase. The new backend exposes a `stage`
+// field; if absent (legacy job rows from before the triage rollout), fall
+// back to inferring from status.
+const _stageToPhase = (job) => {
+  const stage = job.stage || (job.status === "running" ? (job.triage_brief ? "investigation" : "triage") : job.status);
+  switch (stage) {
+    case "queued":        return { phase: "decomposing", message: "Starting up" };
+    case "triage":        return { phase: "decomposing", message: "Reading your question" };
+    case "investigation": return { phase: "retrieving",  message: "Pulling the data" };
+    case "synthesis":     return { phase: "synthesizing", message: "Writing the answer" };
+    default:              return { phase: stage, message: stage };
+  }
+};
+
+// queryBJL — email/insights path. POST -> poll -> emit V2's expected events.
+// Triage-aware: sends prior_conversation_context if provided; surfaces
+// triage_brief, followup_chips, clarifying_question via onDone.
 const queryBJL = async ({
   query, intentHint, strategistContext, waldoContext, debug = false,
+  priorConversationContext = null,
   onStatus = () => {}, onChunk = () => {}, onDone = () => {},
   onError = () => {}, onDebug = () => {}, onEvidence = () => {},
   endpoint = "/api/bjl-query", signal,
 }) => {
-  let response;
+  let enqueueRes;
   try {
-    response = await fetch(endpoint, {
+    enqueueRes = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, intentHint, strategistContext, waldoContext, debug, mode: "email" }),
+      body: JSON.stringify({
+        query, intentHint, strategistContext, waldoContext, debug,
+        mode: "email",
+        prior_conversation_context: priorConversationContext,
+      }),
       signal,
     });
   } catch (err) { onError({ message: err.message, phase: "fetch" }); return; }
-  if (!response.ok) {
+
+  if (!enqueueRes.ok && enqueueRes.status !== 202) {
     let errBody;
-    try { errBody = await response.json(); } catch { errBody = { error: response.statusText }; }
-    onError({ message: errBody.error || "Request failed", phase: "http", status: response.status });
+    try { errBody = await enqueueRes.json(); } catch { errBody = { error: enqueueRes.statusText }; }
+    onError({ message: errBody.error || "Enqueue failed", phase: "http", status: enqueueRes.status });
     return;
   }
-  if (!response.body) { onError({ message: "No response body", phase: "stream" }); return; }
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      let frameEnd;
-      while ((frameEnd = buffer.indexOf("\n\n")) !== -1) {
-        const frame = buffer.slice(0, frameEnd);
-        buffer = buffer.slice(frameEnd + 2);
-        const lines = frame.split("\n");
-        let eventType = "message"; let data = "";
-        for (const line of lines) {
-          if (line.startsWith("event: ")) eventType = line.slice(7);
-          else if (line.startsWith("data: ")) data += line.slice(6);
-        }
-        if (!data) continue;
-        let parsed;
-        try { parsed = JSON.parse(data); } catch { continue; }
-        switch (eventType) {
-          case "status": onStatus(parsed); break;
-          case "chunk": onChunk(parsed.text); break;
-          case "done": onDone(parsed); break;
-          case "error": onError(parsed); break;
-          case "debug": onDebug(parsed); break;
-          case "evidence": onEvidence(parsed); break;
-        }
-      }
-    }
-  } catch (err) { onError({ message: err.message, phase: "stream" }); }
-  finally { reader.releaseLock(); }
-};
 
-// Stream an SSE response into the given event handlers. Shared by both legs
-// of the investigator flow (mode=investigate + mode=synthesize).
-const streamSSE = async (response, handlers) => {
-  if (!response.ok) {
-    let errBody;
-    try { errBody = await response.json(); } catch { errBody = { error: response.statusText }; }
-    handlers.onError && handlers.onError({ message: errBody.error || "Request failed", phase: "http", status: response.status });
+  let enqueue;
+  try { enqueue = await enqueueRes.json(); } catch { onError({ message: "Invalid enqueue response", phase: "fetch" }); return; }
+  if (!enqueue || !enqueue.job_id) { onError({ message: "Enqueue returned no job_id", phase: "fetch" }); return; }
+
+  if (debug) onDebug({ job_id: enqueue.job_id, phase: "enqueued" });
+  onStatus(_stageToPhase({ status: "pending" }));
+
+  let job;
+  try {
+    job = await _bjlPollJob(enqueue.job_id, signal, {
+      onTransition: (j) => onStatus(_stageToPhase(j)),
+      onPollError: (e) => { if (debug) onDebug(e); }
+    });
+  } catch (err) { onError({ message: err.message, phase: err.phase || "poll", job_id: err.job_id || enqueue.job_id }); return; }
+
+  if (job.status === "error") {
+    onError({ message: job.error || "Investigation failed", phase: "investigation", job_id: enqueue.job_id, finding: job.finding || null, scratch: job.scratch || null });
     return;
   }
-  if (!response.body) { handlers.onError && handlers.onError({ message: "No response body", phase: "stream" }); return; }
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
+
+  // Clarification path: triage flagged the question as ambiguous. Surface the
+  // clarifying_question to the caller via onDone with a clarifying flag.
+  if (job.status === "clarification_needed") {
+    try {
+      onDone({
+        clarification_needed: true,
+        clarifying_question: job.clarifying_question || "",
+        triage_brief: job.triage_brief || null,
+        followup_chips: [],
+        finding: "",
+        query_count: 0,
+        job_id: enqueue.job_id,
+        completed_at: job.completed_at,
+      });
+    } catch (e) { console.error("[queryBJL] onDone threw:", e); }
+    return;
+  }
+
+  onStatus(_stageToPhase({ status: "running", triage_brief: job.triage_brief })); // synthesizing-ish
+  const evidenceRows = _bjlScratchToEvidenceRows(job.scratch);
+  try { onEvidence({ rows: evidenceRows }); } catch (e) { console.error("[queryBJL] onEvidence threw:", e); }
+
+  const finding = job.finding || "";
+  try { onChunk(finding); } catch (e) { console.error("[queryBJL] onChunk threw:", e); }
+  const qc1 = job.query_count || (Array.isArray(job.scratch) ? job.scratch.length : 0);
   try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      let frameEnd;
-      while ((frameEnd = buffer.indexOf("\n\n")) !== -1) {
-        const frame = buffer.slice(0, frameEnd);
-        buffer = buffer.slice(frameEnd + 2);
-        const lines = frame.split("\n");
-        let eventType = "message"; let data = "";
-        for (const line of lines) {
-          if (line.startsWith("event: ")) eventType = line.slice(7);
-          else if (line.startsWith("data: ")) data += line.slice(6);
-        }
-        if (!data) continue;
-        let parsed;
-        try { parsed = JSON.parse(data); } catch { continue; }
-        const h = handlers[eventType];
-        if (typeof h === "function") h(parsed);
-      }
-    }
-  } catch (err) { handlers.onError && handlers.onError({ message: err.message, phase: "stream" }); }
-  finally { reader.releaseLock(); }
+    onDone({
+      finding,
+      query_count: qc1,
+      queryBudgetUsed: qc1,
+      job_id: enqueue.job_id,
+      completed_at: job.completed_at,
+      triage_brief: job.triage_brief || null,
+      followup_chips: Array.isArray(job.followup_chips) ? job.followup_chips : [],
+    });
+  } catch (e) { console.error("[queryBJL] onDone threw:", e); }
 };
 
-// Run the full Intelligence flow as two sequential requests:
-//   1. mode=investigate → streams investigation_note events + a transcript event
-//   2. mode=synthesize  → streams chunk events with the final brief
-// Each leg gets its own 26s Netlify function budget.
+// investigateQuery — Intelligence mode. POST -> poll -> emit notes per scratch
+// entry, project scratch into evidence rows, fire chunk(finding), then done.
+// The SSE-era two-leg flow (mode=investigate then mode=synthesize) collapses
+// into a single job; the polling backend handles triage + investigation +
+// synthesis. Triage-aware: sends prior_conversation_context for follow-up
+// recognition, exposes triage_brief and followup_chips via onDone, handles
+// the clarification_needed bypass.
 const investigateQuery = async ({
   question, intent = null, debug = false,
+  priorConversationContext = null,
   onStatus = () => {}, onNote = () => {}, onChunk = () => {}, onDone = () => {},
-  onError = () => {}, onDebug = () => {},
+  onError = () => {}, onDebug = () => {}, onEvidence = () => {},
   endpoint = "/api/bjl-query", signal,
 }) => {
-  // Leg 1: investigation
-  let investigation = null;
-  let investigationMeta = null;
-  let legOneFailed = false;
-  let investigateResponse;
+  let enqueueRes;
   try {
-    investigateResponse = await fetch(endpoint, {
+    enqueueRes = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: question, mode: "investigate", intent, debug }),
+      body: JSON.stringify({
+        query: question, intent, mode: "investigate", debug,
+        prior_conversation_context: priorConversationContext,
+      }),
       signal,
     });
   } catch (err) { onError({ message: err.message, phase: "fetch" }); return; }
 
-  await streamSSE(investigateResponse, {
-    status: onStatus,
-    investigation_note: onNote,
-    transcript: (payload) => { investigation = payload.investigation; },
-    debug: onDebug,
-    done: (payload) => { investigationMeta = payload; },
-    error: (payload) => { legOneFailed = true; onError(payload); },
-  });
-
-  if (legOneFailed) return;
-  if (!investigation) {
-    onError({ message: "Investigation completed but no transcript returned", phase: "protocol" });
+  if (!enqueueRes.ok && enqueueRes.status !== 202) {
+    let errBody;
+    try { errBody = await enqueueRes.json(); } catch { errBody = { error: enqueueRes.statusText }; }
+    onError({ message: errBody.error || "Enqueue failed", phase: "http", status: enqueueRes.status });
     return;
   }
 
-  // Leg 2: synthesis
-  let synthResponse;
-  try {
-    synthResponse = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: question, mode: "synthesize", investigation, debug }),
-      signal,
-    });
-  } catch (err) { onError({ message: err.message, phase: "fetch" }); return; }
+  let enqueue;
+  try { enqueue = await enqueueRes.json(); } catch { onError({ message: "Invalid enqueue response", phase: "fetch" }); return; }
+  if (!enqueue || !enqueue.job_id) { onError({ message: "Enqueue returned no job_id", phase: "fetch" }); return; }
 
-  await streamSSE(synthResponse, {
-    status: onStatus,
-    chunk: (payload) => onChunk(payload.text),
-    debug: onDebug,
-    done: (payload) => {
-      // Merge the investigation meta from leg 1 with the synth 'done' info.
-      onDone({ ...(investigationMeta || {}), ...payload });
-    },
-    error: onError,
-  });
+  if (debug) onDebug({ job_id: enqueue.job_id, phase: "enqueued" });
+  onStatus(_stageToPhase({ status: "pending" }));
+
+  let job;
+  try {
+    job = await _bjlPollJob(enqueue.job_id, signal, {
+      onTransition: (j) => onStatus(_stageToPhase(j)),
+      onPollError: (e) => { if (debug) onDebug(e); }
+    });
+  } catch (err) { onError({ message: err.message, phase: err.phase || "poll", job_id: err.job_id || enqueue.job_id }); return; }
+
+  if (job.status === "error") {
+    onError({ message: job.error || "Investigation failed", phase: "investigation", job_id: enqueue.job_id, finding: job.finding || null, scratch: job.scratch || null });
+    return;
+  }
+
+  // Clarification path: triage flagged the question as ambiguous. Skip
+  // notes/evidence/chunks; surface the clarifying_question via onDone.
+  if (job.status === "clarification_needed") {
+    try {
+      onDone({
+        clarification_needed: true,
+        clarifying_question: job.clarifying_question || "",
+        triage_brief: job.triage_brief || null,
+        followup_chips: [],
+        finding: "",
+        query_count: 0,
+        job_id: enqueue.job_id,
+        completed_at: job.completed_at,
+      });
+    } catch (e) { console.error("[investigateQuery] onDone threw:", e); }
+    return;
+  }
+
+  // Replay scratch as notes so the UI's note feed populates with what the
+  // investigator did. Each scratch entry's rationale becomes one note.
+  const scratch = Array.isArray(job.scratch) ? job.scratch : [];
+  for (const s of scratch) {
+    const note = (s && s.rationale) ? String(s.rationale).trim() : "";
+    if (note) {
+      try { onNote({ note }); } catch (e) { console.error("[investigateQuery] onNote threw:", e); }
+    }
+  }
+
+  // Project scratch into evidence rows so the drawer populates.
+  try { onEvidence({ rows: _bjlScratchToEvidenceRows(scratch) }); } catch (e) { console.error("[investigateQuery] onEvidence threw:", e); }
+
+  // Synthesizing phase
+  onStatus(_stageToPhase({ status: "running", triage_brief: job.triage_brief, stage: "synthesis" }));
+  const finding = job.finding || "";
+  try { onChunk(finding); } catch (e) { console.error("[investigateQuery] onChunk threw:", e); }
+
+  const qc = job.query_count || scratch.length;
+  try {
+    onDone({
+      finding,
+      query_count: qc,
+      queryBudgetUsed: qc,
+      job_id: enqueue.job_id,
+      completed_at: job.completed_at,
+      triage_brief: job.triage_brief || null,
+      followup_chips: Array.isArray(job.followup_chips) ? job.followup_chips : [],
+      investigation: { scratch }
+    });
+  } catch (e) { console.error("[investigateQuery] onDone threw:", e); }
 };
 
 /* =========================================================================
@@ -819,6 +922,65 @@ const renderMarkdown = (text) => {
       }
       nodes.push(<ul key={key++}>{items.map((it, j) => <li key={j}>{renderInline(it)}</li>)}</ul>);
       continue;
+    }
+    // Pipe table: header line of "| col | col |", separator "|---|---|", then data rows.
+    // Splits cells on | and trims; handles leading/trailing pipes. Alignment hints (:---,
+    // ---:, :---:) in the separator are detected and applied as text-align styles.
+    if (trimmed.includes("|") && i + 1 < lines.length) {
+      const sepRaw = lines[i + 1].trim();
+      const isSep = sepRaw.includes("|") && /^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?$/.test(sepRaw);
+      if (isSep) {
+        const splitRow = (raw) => raw.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map(c => c.trim());
+        const headers = splitRow(trimmed);
+        const aligns = splitRow(sepRaw).map(seg => {
+          const left = seg.startsWith(":");
+          const right = seg.endsWith(":");
+          if (left && right) return "center";
+          if (right) return "right";
+          if (left) return "left";
+          return null;
+        });
+        i += 2;
+        const rows = [];
+        while (i < lines.length) {
+          const r = lines[i].trim();
+          if (!r || !r.includes("|")) break;
+          rows.push(splitRow(r));
+          i++;
+        }
+        nodes.push(
+          <div key={key++} className="md-table-wrap" style={{overflowX: "auto", margin: "12px 0"}}>
+            <table style={{borderCollapse: "collapse", width: "100%", fontSize: "0.92em"}}>
+              <thead>
+                <tr>{headers.map((h, j) => (
+                  <th key={j} style={{
+                    textAlign: aligns[j] || "left",
+                    borderBottom: "1px solid var(--grey-3, #d0d0d0)",
+                    padding: "6px 10px",
+                    fontWeight: 600,
+                    whiteSpace: "nowrap"
+                  }}>{renderInline(h)}</th>
+                ))}</tr>
+              </thead>
+              <tbody>
+                {rows.map((row, ri) => (
+                  <tr key={ri}>
+                    {row.map((c, ci) => (
+                      <td key={ci} style={{
+                        textAlign: aligns[ci] || "left",
+                        borderBottom: "1px solid var(--grey-4, #ececec)",
+                        padding: "5px 10px",
+                        verticalAlign: "top"
+                      }}>{renderInline(c)}</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
+        continue;
+      }
     }
     // Paragraph — accumulate until blank line or block-starter
     const pLines = [line];
@@ -1032,7 +1194,6 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
     if (!promptText.trim() || running) return;
 
     const prevTurns = isFollowup ? turns : [];
-    const prior = isFollowup ? prevTurns[prevTurns.length - 1] : null;
 
     setRunning(true);
     setPhase("investigating");
@@ -1044,31 +1205,70 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
     setCurrentStream("");
     setCurrentIsFollowup(isFollowup);
 
-    let builtQuestion;
-    if (isFollowup && prior && prior.prompt && prior.response) {
-      builtQuestion =
-        `[PRIOR QUESTION]\n${prior.prompt}\n\n[PRIOR RESPONSE]\n${prior.response.trim()}\n\n[FOLLOW-UP QUESTION]\n${promptText.trim()}`;
-    } else {
-      builtQuestion = promptText.trim();
-    }
-    if (strategistContext && strategistContext.trim()) {
-      builtQuestion = `[STRATEGIST CONTEXT]\n${strategistContext.trim()}\n\n${builtQuestion}`;
-    }
+    // Build prior_conversation_context for triage. Last 3-5 turns. For each
+    // assistant turn, send a SUMMARY (200-400 chars) plus the triage_brief
+    // it produced, so triage can recognize follow-ups vs new questions.
+    const buildPriorConversationContext = (history) => {
+      const recent = (Array.isArray(history) ? history : []).slice(-5);
+      const ctx = [];
+      for (const t of recent) {
+        if (t && t.prompt) {
+          ctx.push({ role: "user", content: String(t.prompt) });
+        }
+        if (t && t.response) {
+          const resp = String(t.response).trim();
+          const summary = resp.length > 400 ? resp.slice(0, 380) + "…" : resp;
+          ctx.push({
+            role: "assistant",
+            content_summary: summary,
+            triage_brief_summary: t.triage_brief
+              ? {
+                  the_question: t.triage_brief.the_question || null,
+                  investigation_depth: t.triage_brief.investigation_depth || null,
+                }
+              : null,
+          });
+        }
+      }
+      return ctx.length ? ctx : null;
+    };
+
+    const priorContext = isFollowup ? buildPriorConversationContext(prevTurns) : null;
 
     await investigateQuery({
-      question: builtQuestion,
+      question: promptText.trim(),
       intent: intent || null,
+      priorConversationContext: priorContext,
       onStatus: ({ phase }) => setPhase(phase),
       onNote: ({ note }) => setNotes(prev => [...prev, note]),
+      onEvidence: ({ rows }) => setEvidenceRows(rows || []),
       onChunk: (text) => setCurrentStream(prev => prev + text),
       onDone: (info) => {
         setRunning(false);
         setPhase(null);
+        // Clarification bypass: render the clarifying question as the
+        // assistant's response for this turn. No follow-up chips on this
+        // state — the user types a clarifying answer in the input box.
+        if (info && info.clarification_needed) {
+          setCurrentStream("");
+          setTurns(prev => [...prev, {
+            prompt: promptText.trim(),
+            response: info.clarifying_question || "(clarification requested)",
+            triage_brief: info.triage_brief || null,
+            followup_chips: [],
+            isClarification: true,
+            isFollowup,
+          }]);
+          setCurrentPrompt("");
+          return;
+        }
         setCurrentStream(finalStream => {
           setTurns(prev => [...prev, {
             prompt: promptText.trim(),
             response: finalStream,
             investigationMeta: info || null,
+            triage_brief: (info && info.triage_brief) || null,
+            followup_chips: (info && Array.isArray(info.followup_chips)) ? info.followup_chips : [],
             isFollowup,
           }]);
           return "";
@@ -1227,17 +1427,36 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
               </div>
             )}
 
-            {turns.map((t, i) => (
-              <div key={i} className="turn">
-                <div className="turn-head">
-                  <span className="turn-idx">Q{i + 1}{t.isFollowup ? " · follow-up" : ""}</span>
-                  <span className="turn-prompt">{t.prompt}</span>
+            {turns.map((t, i) => {
+              const isLastCompleted = i === turns.length - 1 && !running;
+              const chips = (t.followup_chips || []).filter(c => typeof c === "string" && c.trim());
+              return (
+                <div key={i} className="turn">
+                  <div className="turn-head">
+                    <span className="turn-idx">Q{i + 1}{t.isFollowup ? " · follow-up" : ""}{t.isClarification ? " · clarification" : ""}</span>
+                    <span className="turn-prompt">{t.prompt}</span>
+                  </div>
+                  <div className="stream-doc">
+                    {renderMarkdown(t.response)}
+                  </div>
+                  {/* Triage-provided followup chips. Only on the last turn so the
+                      conversation feed stays clean. Clicking a chip submits it
+                      as the next follow-up question. */}
+                  {isLastCompleted && chips.length > 0 && (
+                    <div className="followup-chips fade-in">
+                      {chips.slice(0, 3).map((chip, ci) => (
+                        <button key={ci} type="button"
+                          className="followup-chip"
+                          onClick={() => runQuery(chip, true)}
+                          disabled={running}>
+                          {chip}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
-                <div className="stream-doc">
-                  {renderMarkdown(t.response)}
-                </div>
-              </div>
-            ))}
+              );
+            })}
 
             {running && currentPrompt && (
               <div className="turn turn-active">
@@ -1252,28 +1471,37 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
               </div>
             )}
 
-            {!running && turns.length > 0 && !error && (
-              <div className="followup fade-in">
-                <div className="followup-label">Stay curious. Ask a follow-up.</div>
-                <div className="followup-pills">
-                  {FOLLOWUP_SUGGESTIONS.map(s => (
-                    <button key={s} className="followup-pill" type="button"
-                      onClick={() => setFollowupText(s)}>
-                      {s}
-                    </button>
-                  ))}
+            {!running && turns.length > 0 && !error && (() => {
+              const lastTurn = turns[turns.length - 1];
+              const hasTriageChips = lastTurn && Array.isArray(lastTurn.followup_chips) && lastTurn.followup_chips.length > 0;
+              return (
+                <div className="followup fade-in">
+                  <div className="followup-label">Stay curious. Ask a follow-up.</div>
+                  {/* Static suggestion pills hidden when triage provided chips
+                      above, since those are contextual and stronger. The typed-
+                      follow-up input below is always available either way. */}
+                  {!hasTriageChips && (
+                    <div className="followup-pills">
+                      {FOLLOWUP_SUGGESTIONS.map(s => (
+                        <button key={s} className="followup-pill" type="button"
+                          onClick={() => setFollowupText(s)}>
+                          {s}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <div className="followup-row">
+                    <input type="text" className="followup-input"
+                      value={followupText}
+                      onChange={(e) => setFollowupText(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); runFollowup(); } }}
+                      placeholder="Ask a follow-up…" />
+                    <button className="btn primary" onClick={runFollowup}
+                      disabled={!followupText.trim()}>Go</button>
+                  </div>
                 </div>
-                <div className="followup-row">
-                  <input type="text" className="followup-input"
-                    value={followupText}
-                    onChange={(e) => setFollowupText(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); runFollowup(); } }}
-                    placeholder="Ask a follow-up…" />
-                  <button className="btn primary" onClick={runFollowup}
-                    disabled={!followupText.trim()}>Go</button>
-                </div>
-              </div>
-            )}
+              );
+            })()}
           </article>
         ) : (
           <div className="doc-placeholder">Output appears here after you ask the Lab a question.</div>

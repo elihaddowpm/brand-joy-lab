@@ -1,14 +1,14 @@
 {
   "name": "bjl-intelligence-engine",
-  "version": "2.2.0",
-  "description": "Brand Joy Lab Intelligence Engine - database-backed orchestrator",
-  "type": "module",
+  "version": "2.3.0",
+  "description": "Brand Joy Lab Intelligence Engine — database-backed orchestrator",
+  "private": true,
+  "type": "commonjs",
   "engines": {
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.30.0",
     "@supabase/supabase-js": "^2.45.0",
-    "openai": "^4.70.0"
+    "@anthropic-ai/sdk": "^0.32.0"
   }
 }

@@ -1,353 +1,179 @@
-// netlify/functions/bjl-query.js
-// Main entry point for the BJL Intelligence Engine.
-// Orchestrates: decompose query → retrieve evidence → stream synthesis back.
+/**
+ * bjl-query.js — sync enqueue endpoint
+ *
+ * Accepts BOTH request shapes (V1 and V2):
+ *   V1: { query_type, prompt, prior_conversation_context? }
+ *   V2: { query, intentHint, strategistContext, waldoContext, debug, prior_conversation_context? }
+ *
+ * Maps V2 → V1: query → prompt, intentHint → query_type.
+ * strategistContext / waldoContext / debug get persisted to extra_context
+ * and passed through to the investigator background function.
+ * prior_conversation_context is persisted to its own jsonb column so the
+ * triage stage can recognize follow-ups against recent turns.
+ *
+ * Inserts a job row into bjl_query_jobs (status=pending) and fires the
+ * background function. Returns {job_id} with HTTP 202.
+ */
 
-import Anthropic from "@anthropic-ai/sdk";
-import { decompose } from "../../src/decomposer.js";
-import { retrieve } from "../../src/retrieval.js";
-import { synthesize } from "../../src/synthesis.js";
-// Investigator + synthesis_v2 are dynamically imported below so a pg or
-// node-sql-parser bundling failure surfaces as an SSE error rather than a
-// cold-start crash. The email path keeps its static imports.
+const { createClient } = require('@supabase/supabase-js');
 
-// Trim a string to max N chars, preserving word boundaries where possible.
-function trim(str, n) {
-  if (!str) return "";
-  const s = String(str);
-  if (s.length <= n) return s;
-  const cut = s.slice(0, n);
-  const lastSpace = cut.lastIndexOf(" ");
-  return (lastSpace > n * 0.6 ? cut.slice(0, lastSpace) : cut) + "…";
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY;
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+const VALID_TYPES = ['brand_lookup', 'audience_dive', 'outreach_angle', 'data_pull', 'email_findings'];
+
+function normalizeRequest(body) {
+  // Triage uses prior_conversation_context to recognize follow-ups. Accept
+  // it from either request shape, as either prior_conversation_context (snake)
+  // or priorConversationContext (camel) for client convenience.
+  const priorContext = body.prior_conversation_context
+    || body.priorConversationContext
+    || null;
+
+  // V1 shape passthrough
+  if (typeof body.prompt === 'string' && body.prompt) {
+    return {
+      prompt: body.prompt,
+      query_type: VALID_TYPES.includes(body.query_type) ? body.query_type : 'data_pull',
+      extra_context: null,
+      prior_conversation_context: priorContext
+    };
+  }
+  // V2 shape translation. The Intelligence-mode client sends `intent`, the
+  // email-mode client sends `intentHint`. Both map to query_type.
+  if (typeof body.query === 'string' && body.query) {
+    const intentRaw = body.intentHint || body.intent_hint || body.intent;
+    const queryType = VALID_TYPES.includes(intentRaw) ? intentRaw : 'data_pull';
+
+    const extra = {};
+    if (body.strategistContext) extra.strategistContext = body.strategistContext;
+    if (body.waldoContext) extra.waldoContext = body.waldoContext;
+    if (body.debug) extra.debug = !!body.debug;
+    if (body.intentHint) extra.intentHint = body.intentHint;
+    if (body.intent) extra.intent = body.intent;
+    if (body.mode) extra.mode = body.mode;
+
+    return {
+      prompt: body.query,
+      query_type: queryType,
+      extra_context: Object.keys(extra).length ? extra : null,
+      prior_conversation_context: priorContext
+    };
+  }
+  return null;
 }
 
-// Shape the retrieval bundle into slim, UI-friendly rows for the evidence drawer.
-// This is a display-only projection — the full rows still flow into synthesis
-// unchanged inside retrieve() / synthesize(). No existing caller is affected.
-function toEvidenceRows(evidence) {
-  const rows = [];
-
-  // Items — ranked survey items (joy_scale, ordinal_scale, likelihood_scale, etc.)
-  for (const it of (evidence.items || []).slice(0, 20)) {
-    const qtype = it.question_type || "item";
-    let body = it.item_name || "(unnamed item)";
-    let meta = "";
-    if (qtype === "joy_scale" && it.joy_index != null) {
-      meta = `Joy Index ${it.joy_index}${it.n ? ` · n=${it.n}` : ""}`;
-    } else if (it.top_response && it.top_pct != null) {
-      meta = `${it.top_pct}% ${trim(it.top_response, 40)}${it.n ? ` · n=${it.n}` : ""}`;
-    } else if (it.joy_index != null) {
-      meta = `score ${it.joy_index}${it.n ? ` · n=${it.n}` : ""}`;
-    } else if (it.n) {
-      meta = `n=${it.n}`;
-    }
-    if (it.category) meta = meta ? `${meta} · ${it.category}` : it.category;
-    rows.push({
-      id: `item-${it.item_name ? it.item_name.replace(/\s+/g, "_").slice(0, 40) : rows.length}`,
-      kind: "item",
-      body: trim(it.question ? `${it.item_name} (${trim(it.question, 90)})` : it.item_name, 220),
-      meta,
-    });
-  }
-
-  // Verbatims — quotable consumer voice
-  for (const v of (evidence.verbatims || []).slice(0, 15)) {
-    const demo = [v.generation, v.gender, v.income_bracket, v.region].filter(Boolean).join(", ");
-    rows.push({
-      id: `verbatim-${v.id || rows.length}`,
-      kind: "verbatim",
-      body: trim(v.response_text || "", 280),
-      meta: demo || "anonymous",
-    });
-  }
-
-  // Laws — derived BJL framework principles
-  for (const law of (evidence.laws || []).slice(0, 8)) {
-    rows.push({
-      id: `law-${law.law_id || rows.length}`,
-      kind: "law",
-      body: trim(`${law.title || "Law"}: ${law.statement || ""}`, 280),
-      meta: law.law_id || "derived",
-    });
-  }
-
-  // Demo splits — meaningful demographic gaps
-  for (const s of (evidence.demo_splits || []).slice(0, 10)) {
-    const gaps = [];
-    if (s.gender_gap != null && Math.abs(s.gender_gap) >= 8) {
-      gaps.push(`${s.gender_gap > 0 ? "F>M" : "M>F"} ${Math.abs(s.gender_gap).toFixed(1)}`);
-    }
-    if (s.gen_z_vs_boomer != null && Math.abs(s.gen_z_vs_boomer) >= 10) {
-      gaps.push(`${s.gen_z_vs_boomer > 0 ? "GenZ>Boomer" : "Boomer>GenZ"} ${Math.abs(s.gen_z_vs_boomer).toFixed(1)}`);
-    }
-    if (s.income_gap != null && Math.abs(s.income_gap) >= 10) {
-      gaps.push(`${s.income_gap > 0 ? "Hi>Lo" : "Lo>Hi"} income ${Math.abs(s.income_gap).toFixed(1)}`);
-    }
-    if (!gaps.length) continue;
-    rows.push({
-      id: `split-${s.item_name ? s.item_name.replace(/\s+/g, "_").slice(0, 30) : rows.length}`,
-      kind: "demo_split",
-      body: trim(s.item_name || "(unnamed split)", 180),
-      meta: `${gaps.join(" · ")}${s.overall_ji != null ? ` · overall JI=${s.overall_ji}` : ""}${s.n_overall ? ` · n=${s.n_overall}` : ""}`,
-    });
-  }
-
-  return rows;
-}
-
-export default async (request) => {
-  if (request.method !== "POST") {
-    return new Response("Method not allowed", { status: 405 });
+exports.handler = async (event) => {
+  if (event.httpMethod !== 'POST') {
+    return { statusCode: 405, body: JSON.stringify({ error: 'Method not allowed' }) };
   }
 
   let body;
   try {
-    body = await request.json();
-  } catch (err) {
-    return new Response(JSON.stringify({ error: "Invalid JSON body" }), {
-      status: 400,
-      headers: { "Content-Type": "application/json" },
+    body = JSON.parse(event.body);
+  } catch (e) {
+    return { statusCode: 400, body: JSON.stringify({ error: 'Invalid JSON' }) };
+  }
+
+  const norm = normalizeRequest(body);
+  if (!norm) {
+    return { statusCode: 400, body: JSON.stringify({ error: 'Missing prompt or query' }) };
+  }
+
+  const { data: jobRow, error: insertErr } = await supabase
+    .from('bjl_query_jobs')
+    .insert({
+      status: 'pending',
+      query_type: norm.query_type,
+      prompt: norm.prompt,
+      extra_context: norm.extra_context,
+      prior_conversation_context: norm.prior_conversation_context
+    })
+    .select('job_id')
+    .single();
+
+  if (insertErr) {
+    console.error('[bjl-query] insert error:', insertErr);
+    return { statusCode: 500, body: JSON.stringify({ error: 'Failed to enqueue job: ' + insertErr.message }) };
+  }
+
+  const jobId = jobRow.job_id;
+  const siteUrl = process.env.URL || `https://${event.headers.host}`;
+  const bgUrl = `${siteUrl}/.netlify/functions/bjl-query-background`;
+
+  // Dispatch the background function. Capture the response status — Netlify's
+  // password-protection gate (and other auth/proxy issues) returns 401 with an
+  // HTML body, which fetch() resolves successfully. Without checking the
+  // status, a non-2xx response would let the sync fn return 202 and the job
+  // would silently stick in 'pending' forever.
+  let dispatchStatus = null;
+  let dispatchPreview = null;
+  let dispatchThrew = null;
+
+  try {
+    const bgRes = await fetch(bgUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ job_id: jobId })
     });
-  }
-
-  const { query, intentHint, strategistContext, waldoContext, debug, mode, intent } = body;
-
-  if (!query || typeof query !== "string" || query.trim().length === 0) {
-    return new Response(JSON.stringify({ error: "Missing required field: query" }), {
-      status: 400,
-      headers: { "Content-Type": "application/json" },
-    });
-  }
-
-  const anthropicKey = process.env.ANTHROPIC_API_KEY;
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const supabaseKey = process.env.SUPABASE_ANON_KEY;
-  const openaiKey = process.env.OPENAI_API_KEY;
-
-  // Investigator path also needs the read-only Postgres URL for executor.
-  const needsInvestigator = mode === "investigate";
-  const needsReadonlyDb = mode === "investigate" || mode === "pg-ping";
-  const readonlyUrl = process.env.SUPABASE_READONLY_URL;
-
-  const missingEnv = [];
-  if (!anthropicKey && mode !== "pg-ping") missingEnv.push("ANTHROPIC_API_KEY");
-  if (!supabaseUrl && mode !== "pg-ping") missingEnv.push("SUPABASE_URL");
-  if (!supabaseKey && mode !== "pg-ping") missingEnv.push("SUPABASE_ANON_KEY");
-  if (!openaiKey && !needsInvestigator && mode !== "pg-ping") missingEnv.push("OPENAI_API_KEY");
-  if (needsReadonlyDb && !readonlyUrl) missingEnv.push("SUPABASE_READONLY_URL");
-  if (missingEnv.length > 0) {
-    return new Response(JSON.stringify({
-      error: "Server misconfigured: missing required environment variables: " + missingEnv.join(", ")
-    }), { status: 500, headers: { "Content-Type": "application/json" } });
-  }
-
-  const anthropic = new Anthropic({ apiKey: anthropicKey });
-
-  // Stream the response using Server-Sent Events format
-  const encoder = new TextEncoder();
-  const stream = new ReadableStream({
-    async start(controller) {
-      const sendEvent = (eventType, data) => {
-        controller.enqueue(encoder.encode(`event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`));
-      };
-      
+    dispatchStatus = bgRes.status;
+    if (dispatchStatus < 200 || dispatchStatus >= 300) {
       try {
-        if (mode === "synthesize") {
-          // Second-leg call: takes the investigation transcript produced by
-          // the mode=investigate call and streams the synthesizer brief.
-          // Splitting the flow across two requests gives each leg its own
-          // 26s Netlify ceiling instead of sharing one.
-          const investigation = body.investigation;
-          if (!investigation || typeof investigation !== "object") {
-            sendEvent("error", {
-              message: "mode=synthesize requires an 'investigation' object in the body",
-              phase: "input",
-            });
-            return;
-          }
-          let synthesizeV2;
-          try {
-            ({ synthesizeV2 } = await import("../../src/synthesis_v2.js"));
-          } catch (importErr) {
-            sendEvent("error", {
-              message: "synthesis import failed: " + (importErr?.message || String(importErr)),
-              phase: "import",
-            });
-            return;
-          }
-          sendEvent("status", { phase: "synthesizing" });
-          const synthStream = synthesizeV2({ investigation, client: anthropic });
-          for await (const chunk of synthStream) {
-            sendEvent("chunk", { text: chunk });
-          }
-          sendEvent("done", {
-            queryBudgetUsed: investigation.queryBudgetUsed,
-            errorCount: (investigation.errors || []).length,
-            stoppedEarly: investigation.stoppedEarly,
-          });
-          return;
-        }
-        if (mode === "pg-ping") {
-          // Diagnostic path: tries a SELECT 1 through the readonly pool and
-          // returns the row + role + db info, or the pg error detail.
-          sendEvent("status", { phase: "pinging" });
-          let pingDb;
-          try {
-            ({ pingDb } = await import("../../src/executor.js"));
-          } catch (importErr) {
-            sendEvent("error", {
-              message: "pg import failed: " + (importErr?.message || String(importErr)),
-              phase: "import",
-            });
-            return;
-          }
-          const result = await pingDb();
-          sendEvent("debug", { pgPing: result, envUrlSet: !!readonlyUrl });
-          if (result.ok) {
-            sendEvent("chunk", { text: "PG OK. user=" + result.row.as_user + " db=" + result.row.db });
-            sendEvent("done", { pgPing: result });
-          } else {
-            sendEvent("error", {
-              message: "pg error: " + result.error + (result.code ? " (code " + result.code + ")" : ""),
-              phase: "pg",
-            });
-          }
-          return;
-        }
-        if (mode === "investigate") {
-          // First-leg call: run the investigator loop, emit investigation_note
-          // events, and emit a final 'transcript' event with the full
-          // investigation object. The client then calls mode=synthesize with
-          // that transcript to get the streamed brief. Splitting gives each
-          // leg its own 26s Netlify budget.
-          let investigate;
-          try {
-            ({ investigate } = await import("../../src/investigator.js"));
-          } catch (importErr) {
-            console.error("Investigator import failed:", importErr, importErr?.stack);
-            sendEvent("error", {
-              message: "Failed to load investigator module: " + (importErr?.message || String(importErr)),
-              phase: "import",
-            });
-            return;
-          }
-          sendEvent("status", { phase: "investigating" });
-          const investigation = await investigate({
-            question: query,
-            intent: intent || null,
-            client: anthropic,
-            onNote: ({ note, queryIndex }) => {
-              sendEvent("investigation_note", { note, queryIndex });
-            },
-          });
-
-          if (debug) {
-            sendEvent("debug", {
-              queryBudgetUsed: investigation.queryBudgetUsed,
-              errorCount: (investigation.errors || []).length,
-              stoppedEarly: investigation.stoppedEarly,
-            });
-          }
-
-          sendEvent("transcript", { investigation });
-          sendEvent("done", {
-            queryBudgetUsed: investigation.queryBudgetUsed,
-            errorCount: (investigation.errors || []).length,
-            stoppedEarly: investigation.stoppedEarly,
-            phase: "investigation_complete",
-          });
-        } else {
-          // Existing structured pipeline for email / legacy callers.
-          // Step 1: Decompose
-          sendEvent("status", { phase: "decomposing" });
-          const spec = await decompose({
-            query,
-            intentHint,
-            strategistContext,
-            waldoContext,
-            client: anthropic
-          });
-
-          if (debug) {
-            sendEvent("debug", { spec });
-          }
-
-          // Step 2: Retrieve
-          sendEvent("status", { phase: "retrieving" });
-          const evidence = await retrieve({
-            spec,
-            rawQuery: query,
-            supabaseUrl,
-            supabaseKey,
-            openaiKey
-          });
-
-          if (debug) {
-            sendEvent("debug", {
-              evidence_counts: {
-                items: evidence.items?.length ?? 0,
-                verbatims: evidence.verbatims?.length ?? 0,
-                laws: evidence.laws?.length ?? 0,
-                demo_splits: evidence.demo_splits?.length ?? 0,
-              }
-            });
-          }
-
-          // Step 2.5: compact evidence rows for the frontend drawer.
-          sendEvent("evidence", { rows: toEvidenceRows(evidence) });
-
-          // Step 3: Synthesize (streaming)
-          sendEvent("status", { phase: "synthesizing" });
-          const synthStream = synthesize({
-            query,
-            evidence,
-            strategistContext,
-            waldoContext,
-            client: anthropic
-          });
-          for await (const chunk of synthStream) {
-            sendEvent("chunk", { text: chunk });
-          }
-
-          sendEvent("done", {
-            evidence_counts: {
-              items: evidence.items?.length ?? 0,
-              verbatims: evidence.verbatims?.length ?? 0,
-              laws: evidence.laws?.length ?? 0,
-              demo_splits: evidence.demo_splits?.length ?? 0,
-            }
-          });
-        }
-      } catch (err) {
-        console.error("Orchestrator error:", err, err?.stack);
-        const phase = err?.phase
-          || (mode === "investigate" ? "investigate" : "unknown");
-        // Surface postgres error codes and the head of the stack so the UI
-        // can show the actual failure instead of a generic "Request failed".
-        const detail = [
-          err?.message || String(err),
-          err?.code ? `(code: ${err.code})` : null,
-          err?.detail ? `(detail: ${err.detail})` : null,
-        ].filter(Boolean).join(" ");
-        sendEvent("error", {
-          message: detail || "An error occurred during processing",
-          phase,
-        });
-      } finally {
-        controller.close();
+        const bodyText = await bgRes.text();
+        dispatchPreview = bodyText ? bodyText.slice(0, 500) : null;
+      } catch (_) {
+        dispatchPreview = null;
       }
-    },
-  });
+    }
+  } catch (e) {
+    console.error('[bjl-query] background dispatch threw:', e);
+    dispatchThrew = e && e.message ? e.message : String(e);
+  }
 
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache, no-transform",
-      "Connection": "keep-alive",
-      "X-Accel-Buffering": "no", // Disable proxy buffering for Netlify
-    },
-  });
-};
+  // Failure path: dispatch threw OR returned non-2xx. Mark the job error
+  // immediately so the next status poll surfaces a real message. Surface the
+  // most actionable diagnostic we have.
+  if (dispatchThrew || (dispatchStatus !== null && (dispatchStatus < 200 || dispatchStatus >= 300))) {
+    let errMsg;
+    if (dispatchThrew) {
+      errMsg = 'Background dispatch threw: ' + dispatchThrew;
+    } else if (dispatchStatus === 401 && dispatchPreview && dispatchPreview.includes('Password Protection')) {
+      errMsg = 'Background function blocked by Netlify site password protection (HTTP 401). Disable site password in Netlify dashboard for the function-to-function dispatch to work.';
+    } else if (dispatchStatus === 401 || dispatchStatus === 403) {
+      errMsg = `Background function rejected with HTTP ${dispatchStatus} (auth gate). Check Netlify access controls.`;
+    } else {
+      errMsg = `Background function dispatch returned HTTP ${dispatchStatus} (expected 2xx).`;
+    }
 
-export const config = {
-  path: "/api/bjl-query",
+    await supabase
+      .from('bjl_query_jobs')
+      .update({
+        status: 'error',
+        error: errMsg,
+        dispatch_status: dispatchStatus,
+        dispatch_response_preview: dispatchPreview,
+        completed_at: new Date().toISOString()
+      })
+      .eq('job_id', jobId);
+
+    return {
+      statusCode: 502,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ error: errMsg, job_id: jobId, dispatch_status: dispatchStatus })
+    };
+  }
+
+  // Success path. Record dispatch status for future debugging.
+  await supabase
+    .from('bjl_query_jobs')
+    .update({ dispatch_status: dispatchStatus })
+    .eq('job_id', jobId);
+
+  return {
+    statusCode: 202,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ job_id: jobId, status: 'pending' })
+  };
 };

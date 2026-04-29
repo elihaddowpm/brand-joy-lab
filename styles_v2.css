@@ -1862,6 +1862,41 @@ textarea { font-family: var(--font-text); }
 }
 .followup-input:focus { border-color: var(--iron); }
 
+/* Triage-provided followup chips, rendered below each completed turn.
+   Visually heavier than .followup-pill (the static fallback row) so they
+   read as suggested continuations of the current finding rather than as
+   generic prompt seeds. */
+.followup-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--hairline);
+}
+.followup-chip {
+  font-family: var(--font-text);
+  font-size: 13px;
+  line-height: 1.4;
+  padding: 8px 14px;
+  border-radius: 18px;
+  background: var(--wash);
+  color: var(--iron);
+  border: 1px solid var(--hairline-strong);
+  cursor: pointer;
+  text-align: left;
+  max-width: 100%;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.followup-chip:hover {
+  background: var(--cloud);
+  border-color: var(--iron);
+}
+.followup-chip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* ---------- Phase pill variant for curiosity loading copy ---------- */
 .phase-pill.curiosity {
   background: var(--wash);
