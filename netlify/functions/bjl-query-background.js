@@ -25,8 +25,6 @@
 
 const { createClient } = require('@supabase/supabase-js');
 const Anthropic = require('@anthropic-ai/sdk').default;
-const fs = require('fs');
-const path = require('path');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY;
@@ -48,26 +46,28 @@ const DEPTH_TO_MAX_TURNS = {
 };
 
 // -------------------------------------------------------------------------
-// Load prompts and schema doc from disk at startup
+// Load prompts and schema doc — bundled as a JSON sibling
 // -------------------------------------------------------------------------
-// These live as files so they can be edited without code changes. The
-// included_files declaration in netlify.toml ensures they're bundled with
-// the function when deployed.
-const PROMPTS_DIR = path.resolve(__dirname, '../../prompts');
-const DOCS_DIR = path.resolve(__dirname, '../../docs');
+// _prompts_bundle.json is generated from prompts/*.md and docs/schema_doc.md
+// by bin/build_prompts_bundle.js. esbuild inlines JSON requires into the
+// function bundle, which sidesteps Netlify's included_files mechanism (which
+// doesn't reliably include non-JS files when node_bundler = "esbuild").
+//
+// Run `node bin/build_prompts_bundle.js` from the repo root before each
+// deploy if the .md sources have changed.
+const PROMPTS = require('./_prompts_bundle.json');
 
-const TRIAGE_PROMPT = fs.readFileSync(path.join(PROMPTS_DIR, 'triage_prompt.md'), 'utf8');
-const INVESTIGATOR_PROMPT_BASE = fs.readFileSync(path.join(PROMPTS_DIR, 'investigator_prompt_v3.md'), 'utf8');
-const SYNTHESIZER_PROMPT_BASE = fs.readFileSync(path.join(PROMPTS_DIR, 'synthesizer_prompt_v3.md'), 'utf8');
-const SCHEMA_DOC = fs.readFileSync(path.join(DOCS_DIR, 'schema_doc.md'), 'utf8');
+console.log('[bjl-query-background] prompts bundle loaded:');
+console.log('  triage_prompt.md       ', PROMPTS.triage.length, 'chars');
+console.log('  investigator_v3.md     ', PROMPTS.investigator.length, 'chars');
+console.log('  synthesizer_v3.md      ', PROMPTS.synthesizer.length, 'chars');
+console.log('  schema_doc.md          ', PROMPTS.schemaDoc.length, 'chars');
+console.log('  schema_doc.md head[200]:', PROMPTS.schemaDoc.slice(0, 200).replace(/\n/g, ' | '));
 
-// Smoke-test log on startup: confirm everything loaded.
-console.log('[bjl-query-background] startup file loads:');
-console.log('  triage_prompt.md      ', TRIAGE_PROMPT.length, 'chars');
-console.log('  investigator_v3.md    ', INVESTIGATOR_PROMPT_BASE.length, 'chars');
-console.log('  synthesizer_v3.md     ', SYNTHESIZER_PROMPT_BASE.length, 'chars');
-console.log('  schema_doc.md         ', SCHEMA_DOC.length, 'chars');
-console.log('  schema_doc.md head[200]:', SCHEMA_DOC.slice(0, 200).replace(/\n/g, ' | '));
+const TRIAGE_PROMPT_GET            = () => PROMPTS.triage;
+const INVESTIGATOR_PROMPT_BASE_GET = () => PROMPTS.investigator;
+const SYNTHESIZER_PROMPT_BASE_GET  = () => PROMPTS.synthesizer;
+const SCHEMA_DOC_GET               = () => PROMPTS.schemaDoc;
 
 // -------------------------------------------------------------------------
 // Tools available to the investigator
@@ -155,7 +155,7 @@ async function runTriage(question, priorContext, extraContext) {
   const response = await anthropic.messages.create({
     model: HAIKU_MODEL,
     max_tokens: 1500,
-    system: TRIAGE_PROMPT,
+    system: TRIAGE_PROMPT_GET(),
     messages: [{ role: 'user', content: userMessage }]
   });
 
@@ -191,10 +191,10 @@ async function runTriage(question, priorContext, extraContext) {
 // Stage 2: Investigation (Sonnet 4.6)
 // -------------------------------------------------------------------------
 function buildInvestigatorSystemPrompt(triage) {
-  return `${INVESTIGATOR_PROMPT_BASE}
+  return `${INVESTIGATOR_PROMPT_BASE_GET()}
 
 ## DATABASE SCHEMA
-${SCHEMA_DOC}
+${SCHEMA_DOC_GET()}
 
 ## CURRENT TRIAGE BRIEF
 
@@ -289,7 +289,7 @@ async function runInvestigation(triage, prompt, extraContext) {
 // Stage 3: Synthesis (Sonnet 4.6)
 // -------------------------------------------------------------------------
 function buildSynthesizerSystemPrompt(triage) {
-  return `${SYNTHESIZER_PROMPT_BASE}
+  return `${SYNTHESIZER_PROMPT_BASE_GET()}
 
 ## CURRENT TRIAGE BRIEF
 
@@ -376,6 +376,12 @@ exports.handler = async (event) => {
   try {
     // Stage 1: Triage
     const triage = await runTriage(job.prompt, job.prior_conversation_context, job.extra_context);
+    console.log('[bjl-query-background] triage returned:',
+      'needs_clarification=' + JSON.stringify(triage.needs_clarification),
+      'early_exit=' + JSON.stringify(triage.early_exit),
+      'depth=' + triage.investigation_depth,
+      'cq_len=' + (triage.clarifying_question ? triage.clarifying_question.length : 0)
+    );
     await supabase
       .from('bjl_query_jobs')
       .update({
@@ -385,8 +391,9 @@ exports.handler = async (event) => {
       .eq('job_id', jobId);
 
     // Bypass: clarification needed
-    if (triage.needs_clarification) {
-      await supabase
+    if (triage.needs_clarification === true) {
+      console.log('[bjl-query-background] taking clarification bypass for job', jobId);
+      const { error: clarErr } = await supabase
         .from('bjl_query_jobs')
         .update({
           status: 'clarification_needed',
@@ -395,11 +402,16 @@ exports.handler = async (event) => {
           completed_at: new Date().toISOString()
         })
         .eq('job_id', jobId);
+      if (clarErr) {
+        console.error('[bjl-query-background] clarification update failed:', clarErr);
+      } else {
+        console.log('[bjl-query-background] clarification update OK for job', jobId);
+      }
       return { statusCode: 200, body: JSON.stringify({ ok: true, status: 'clarification_needed', job_id: jobId }) };
     }
 
     // Bypass: early exit (no investigation needed)
-    if (triage.early_exit) {
+    if (triage.early_exit === true) {
       await supabase
         .from('bjl_query_jobs')
         .update({
