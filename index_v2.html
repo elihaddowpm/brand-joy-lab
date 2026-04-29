@@ -563,9 +563,26 @@ const _bjlScratchToEvidenceRows = (scratch) => {
   });
 };
 
+// Map a polled job's stage to a UI phase. The new backend exposes a `stage`
+// field; if absent (legacy job rows from before the triage rollout), fall
+// back to inferring from status.
+const _stageToPhase = (job) => {
+  const stage = job.stage || (job.status === "running" ? (job.triage_brief ? "investigation" : "triage") : job.status);
+  switch (stage) {
+    case "queued":        return { phase: "decomposing", message: "Starting up" };
+    case "triage":        return { phase: "decomposing", message: "Reading your question" };
+    case "investigation": return { phase: "retrieving",  message: "Pulling the data" };
+    case "synthesis":     return { phase: "synthesizing", message: "Writing the answer" };
+    default:              return { phase: stage, message: stage };
+  }
+};
+
 // queryBJL — email/insights path. POST -> poll -> emit V2's expected events.
+// Triage-aware: sends prior_conversation_context if provided; surfaces
+// triage_brief, followup_chips, clarifying_question via onDone.
 const queryBJL = async ({
   query, intentHint, strategistContext, waldoContext, debug = false,
+  priorConversationContext = null,
   onStatus = () => {}, onChunk = () => {}, onDone = () => {},
   onError = () => {}, onDebug = () => {}, onEvidence = () => {},
   endpoint = "/api/bjl-query", signal,
@@ -575,7 +592,11 @@ const queryBJL = async ({
     enqueueRes = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, intentHint, strategistContext, waldoContext, debug, mode: "email" }),
+      body: JSON.stringify({
+        query, intentHint, strategistContext, waldoContext, debug,
+        mode: "email",
+        prior_conversation_context: priorConversationContext,
+      }),
       signal,
     });
   } catch (err) { onError({ message: err.message, phase: "fetch" }); return; }
@@ -592,14 +613,12 @@ const queryBJL = async ({
   if (!enqueue || !enqueue.job_id) { onError({ message: "Enqueue returned no job_id", phase: "fetch" }); return; }
 
   if (debug) onDebug({ job_id: enqueue.job_id, phase: "enqueued" });
-  onStatus({ phase: "decomposing", message: "Reading your query" });
+  onStatus(_stageToPhase({ status: "pending" }));
 
   let job;
   try {
     job = await _bjlPollJob(enqueue.job_id, signal, {
-      onTransition: (j) => {
-        if (j.status === "running") onStatus({ phase: "retrieving", message: "Searching BJL" });
-      },
+      onTransition: (j) => onStatus(_stageToPhase(j)),
       onPollError: (e) => { if (debug) onDebug(e); }
     });
   } catch (err) { onError({ message: err.message, phase: err.phase || "poll", job_id: err.job_id || enqueue.job_id }); return; }
@@ -609,22 +628,54 @@ const queryBJL = async ({
     return;
   }
 
-  onStatus({ phase: "synthesizing", message: "Writing the brief" });
+  // Clarification path: triage flagged the question as ambiguous. Surface the
+  // clarifying_question to the caller via onDone with a clarifying flag.
+  if (job.status === "clarification_needed") {
+    try {
+      onDone({
+        clarification_needed: true,
+        clarifying_question: job.clarifying_question || "",
+        triage_brief: job.triage_brief || null,
+        followup_chips: [],
+        finding: "",
+        query_count: 0,
+        job_id: enqueue.job_id,
+        completed_at: job.completed_at,
+      });
+    } catch (e) { console.error("[queryBJL] onDone threw:", e); }
+    return;
+  }
+
+  onStatus(_stageToPhase({ status: "running", triage_brief: job.triage_brief })); // synthesizing-ish
   const evidenceRows = _bjlScratchToEvidenceRows(job.scratch);
   try { onEvidence({ rows: evidenceRows }); } catch (e) { console.error("[queryBJL] onEvidence threw:", e); }
 
   const finding = job.finding || "";
   try { onChunk(finding); } catch (e) { console.error("[queryBJL] onChunk threw:", e); }
   const qc1 = job.query_count || (Array.isArray(job.scratch) ? job.scratch.length : 0);
-  try { onDone({ finding, query_count: qc1, queryBudgetUsed: qc1, stoppedEarly: !!job.forced_synthesis, job_id: enqueue.job_id, completed_at: job.completed_at, forced_synthesis: !!job.forced_synthesis }); } catch (e) { console.error("[queryBJL] onDone threw:", e); }
+  try {
+    onDone({
+      finding,
+      query_count: qc1,
+      queryBudgetUsed: qc1,
+      job_id: enqueue.job_id,
+      completed_at: job.completed_at,
+      triage_brief: job.triage_brief || null,
+      followup_chips: Array.isArray(job.followup_chips) ? job.followup_chips : [],
+    });
+  } catch (e) { console.error("[queryBJL] onDone threw:", e); }
 };
 
 // investigateQuery — Intelligence mode. POST -> poll -> emit notes per scratch
 // entry, project scratch into evidence rows, fire chunk(finding), then done.
-// The original two-leg SSE flow (mode=investigate then mode=synthesize)
-// collapses into a single job here; the polling backend handles both phases.
+// The SSE-era two-leg flow (mode=investigate then mode=synthesize) collapses
+// into a single job; the polling backend handles triage + investigation +
+// synthesis. Triage-aware: sends prior_conversation_context for follow-up
+// recognition, exposes triage_brief and followup_chips via onDone, handles
+// the clarification_needed bypass.
 const investigateQuery = async ({
   question, intent = null, debug = false,
+  priorConversationContext = null,
   onStatus = () => {}, onNote = () => {}, onChunk = () => {}, onDone = () => {},
   onError = () => {}, onDebug = () => {}, onEvidence = () => {},
   endpoint = "/api/bjl-query", signal,
@@ -634,7 +685,10 @@ const investigateQuery = async ({
     enqueueRes = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: question, intent, mode: "investigate", debug }),
+      body: JSON.stringify({
+        query: question, intent, mode: "investigate", debug,
+        prior_conversation_context: priorConversationContext,
+      }),
       signal,
     });
   } catch (err) { onError({ message: err.message, phase: "fetch" }); return; }
@@ -651,14 +705,12 @@ const investigateQuery = async ({
   if (!enqueue || !enqueue.job_id) { onError({ message: "Enqueue returned no job_id", phase: "fetch" }); return; }
 
   if (debug) onDebug({ job_id: enqueue.job_id, phase: "enqueued" });
-  onStatus({ phase: "decomposing" });
+  onStatus(_stageToPhase({ status: "pending" }));
 
   let job;
   try {
     job = await _bjlPollJob(enqueue.job_id, signal, {
-      onTransition: (j) => {
-        if (j.status === "running") onStatus({ phase: "retrieving" });
-      },
+      onTransition: (j) => onStatus(_stageToPhase(j)),
       onPollError: (e) => { if (debug) onDebug(e); }
     });
   } catch (err) { onError({ message: err.message, phase: err.phase || "poll", job_id: err.job_id || enqueue.job_id }); return; }
@@ -668,19 +720,39 @@ const investigateQuery = async ({
     return;
   }
 
+  // Clarification path: triage flagged the question as ambiguous. Skip
+  // notes/evidence/chunks; surface the clarifying_question via onDone.
+  if (job.status === "clarification_needed") {
+    try {
+      onDone({
+        clarification_needed: true,
+        clarifying_question: job.clarifying_question || "",
+        triage_brief: job.triage_brief || null,
+        followup_chips: [],
+        finding: "",
+        query_count: 0,
+        job_id: enqueue.job_id,
+        completed_at: job.completed_at,
+      });
+    } catch (e) { console.error("[investigateQuery] onDone threw:", e); }
+    return;
+  }
+
   // Replay scratch as notes so the UI's note feed populates with what the
   // investigator did. Each scratch entry's rationale becomes one note.
   const scratch = Array.isArray(job.scratch) ? job.scratch : [];
   for (const s of scratch) {
-    const note = (s.rationale || "").trim() || "(no rationale)";
-    try { onNote({ note }); } catch (e) { console.error("[investigateQuery] onNote threw:", e); }
+    const note = (s && s.rationale) ? String(s.rationale).trim() : "";
+    if (note) {
+      try { onNote({ note }); } catch (e) { console.error("[investigateQuery] onNote threw:", e); }
+    }
   }
 
   // Project scratch into evidence rows so the drawer populates.
   try { onEvidence({ rows: _bjlScratchToEvidenceRows(scratch) }); } catch (e) { console.error("[investigateQuery] onEvidence threw:", e); }
 
   // Synthesizing phase
-  onStatus({ phase: "synthesizing" });
+  onStatus(_stageToPhase({ status: "running", triage_brief: job.triage_brief, stage: "synthesis" }));
   const finding = job.finding || "";
   try { onChunk(finding); } catch (e) { console.error("[investigateQuery] onChunk threw:", e); }
 
@@ -690,10 +762,10 @@ const investigateQuery = async ({
       finding,
       query_count: qc,
       queryBudgetUsed: qc,
-      stoppedEarly: !!job.forced_synthesis,
       job_id: enqueue.job_id,
       completed_at: job.completed_at,
-      forced_synthesis: !!job.forced_synthesis,
+      triage_brief: job.triage_brief || null,
+      followup_chips: Array.isArray(job.followup_chips) ? job.followup_chips : [],
       investigation: { scratch }
     });
   } catch (e) { console.error("[investigateQuery] onDone threw:", e); }
@@ -1122,7 +1194,6 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
     if (!promptText.trim() || running) return;
 
     const prevTurns = isFollowup ? turns : [];
-    const prior = isFollowup ? prevTurns[prevTurns.length - 1] : null;
 
     setRunning(true);
     setPhase("investigating");
@@ -1134,20 +1205,40 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
     setCurrentStream("");
     setCurrentIsFollowup(isFollowup);
 
-    let builtQuestion;
-    if (isFollowup && prior && prior.prompt && prior.response) {
-      builtQuestion =
-        `[PRIOR QUESTION]\n${prior.prompt}\n\n[PRIOR RESPONSE]\n${prior.response.trim()}\n\n[FOLLOW-UP QUESTION]\n${promptText.trim()}`;
-    } else {
-      builtQuestion = promptText.trim();
-    }
-    if (strategistContext && strategistContext.trim()) {
-      builtQuestion = `[STRATEGIST CONTEXT]\n${strategistContext.trim()}\n\n${builtQuestion}`;
-    }
+    // Build prior_conversation_context for triage. Last 3-5 turns. For each
+    // assistant turn, send a SUMMARY (200-400 chars) plus the triage_brief
+    // it produced, so triage can recognize follow-ups vs new questions.
+    const buildPriorConversationContext = (history) => {
+      const recent = (Array.isArray(history) ? history : []).slice(-5);
+      const ctx = [];
+      for (const t of recent) {
+        if (t && t.prompt) {
+          ctx.push({ role: "user", content: String(t.prompt) });
+        }
+        if (t && t.response) {
+          const resp = String(t.response).trim();
+          const summary = resp.length > 400 ? resp.slice(0, 380) + "…" : resp;
+          ctx.push({
+            role: "assistant",
+            content_summary: summary,
+            triage_brief_summary: t.triage_brief
+              ? {
+                  the_question: t.triage_brief.the_question || null,
+                  investigation_depth: t.triage_brief.investigation_depth || null,
+                }
+              : null,
+          });
+        }
+      }
+      return ctx.length ? ctx : null;
+    };
+
+    const priorContext = isFollowup ? buildPriorConversationContext(prevTurns) : null;
 
     await investigateQuery({
-      question: builtQuestion,
+      question: promptText.trim(),
       intent: intent || null,
+      priorConversationContext: priorContext,
       onStatus: ({ phase }) => setPhase(phase),
       onNote: ({ note }) => setNotes(prev => [...prev, note]),
       onEvidence: ({ rows }) => setEvidenceRows(rows || []),
@@ -1155,11 +1246,29 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
       onDone: (info) => {
         setRunning(false);
         setPhase(null);
+        // Clarification bypass: render the clarifying question as the
+        // assistant's response for this turn. No follow-up chips on this
+        // state — the user types a clarifying answer in the input box.
+        if (info && info.clarification_needed) {
+          setCurrentStream("");
+          setTurns(prev => [...prev, {
+            prompt: promptText.trim(),
+            response: info.clarifying_question || "(clarification requested)",
+            triage_brief: info.triage_brief || null,
+            followup_chips: [],
+            isClarification: true,
+            isFollowup,
+          }]);
+          setCurrentPrompt("");
+          return;
+        }
         setCurrentStream(finalStream => {
           setTurns(prev => [...prev, {
             prompt: promptText.trim(),
             response: finalStream,
             investigationMeta: info || null,
+            triage_brief: (info && info.triage_brief) || null,
+            followup_chips: (info && Array.isArray(info.followup_chips)) ? info.followup_chips : [],
             isFollowup,
           }]);
           return "";
@@ -1318,17 +1427,36 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
               </div>
             )}
 
-            {turns.map((t, i) => (
-              <div key={i} className="turn">
-                <div className="turn-head">
-                  <span className="turn-idx">Q{i + 1}{t.isFollowup ? " · follow-up" : ""}</span>
-                  <span className="turn-prompt">{t.prompt}</span>
+            {turns.map((t, i) => {
+              const isLastCompleted = i === turns.length - 1 && !running;
+              const chips = (t.followup_chips || []).filter(c => typeof c === "string" && c.trim());
+              return (
+                <div key={i} className="turn">
+                  <div className="turn-head">
+                    <span className="turn-idx">Q{i + 1}{t.isFollowup ? " · follow-up" : ""}{t.isClarification ? " · clarification" : ""}</span>
+                    <span className="turn-prompt">{t.prompt}</span>
+                  </div>
+                  <div className="stream-doc">
+                    {renderMarkdown(t.response)}
+                  </div>
+                  {/* Triage-provided followup chips. Only on the last turn so the
+                      conversation feed stays clean. Clicking a chip submits it
+                      as the next follow-up question. */}
+                  {isLastCompleted && chips.length > 0 && (
+                    <div className="followup-chips fade-in">
+                      {chips.slice(0, 3).map((chip, ci) => (
+                        <button key={ci} type="button"
+                          className="followup-chip"
+                          onClick={() => runQuery(chip, true)}
+                          disabled={running}>
+                          {chip}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
-                <div className="stream-doc">
-                  {renderMarkdown(t.response)}
-                </div>
-              </div>
-            ))}
+              );
+            })}
 
             {running && currentPrompt && (
               <div className="turn turn-active">
@@ -1343,28 +1471,37 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
               </div>
             )}
 
-            {!running && turns.length > 0 && !error && (
-              <div className="followup fade-in">
-                <div className="followup-label">Stay curious. Ask a follow-up.</div>
-                <div className="followup-pills">
-                  {FOLLOWUP_SUGGESTIONS.map(s => (
-                    <button key={s} className="followup-pill" type="button"
-                      onClick={() => setFollowupText(s)}>
-                      {s}
-                    </button>
-                  ))}
+            {!running && turns.length > 0 && !error && (() => {
+              const lastTurn = turns[turns.length - 1];
+              const hasTriageChips = lastTurn && Array.isArray(lastTurn.followup_chips) && lastTurn.followup_chips.length > 0;
+              return (
+                <div className="followup fade-in">
+                  <div className="followup-label">Stay curious. Ask a follow-up.</div>
+                  {/* Static suggestion pills hidden when triage provided chips
+                      above, since those are contextual and stronger. The typed-
+                      follow-up input below is always available either way. */}
+                  {!hasTriageChips && (
+                    <div className="followup-pills">
+                      {FOLLOWUP_SUGGESTIONS.map(s => (
+                        <button key={s} className="followup-pill" type="button"
+                          onClick={() => setFollowupText(s)}>
+                          {s}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <div className="followup-row">
+                    <input type="text" className="followup-input"
+                      value={followupText}
+                      onChange={(e) => setFollowupText(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); runFollowup(); } }}
+                      placeholder="Ask a follow-up…" />
+                    <button className="btn primary" onClick={runFollowup}
+                      disabled={!followupText.trim()}>Go</button>
+                  </div>
                 </div>
-                <div className="followup-row">
-                  <input type="text" className="followup-input"
-                    value={followupText}
-                    onChange={(e) => setFollowupText(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); runFollowup(); } }}
-                    placeholder="Ask a follow-up…" />
-                  <button className="btn primary" onClick={runFollowup}
-                    disabled={!followupText.trim()}>Go</button>
-                </div>
-              </div>
-            )}
+              );
+            })()}
           </article>
         ) : (
           <div className="doc-placeholder">Output appears here after you ask the Lab a question.</div>
