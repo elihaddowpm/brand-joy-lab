@@ -1,8 +1,11 @@
 // netlify/functions/claude.js
 // Thin server-side proxy to Anthropic's Messages API.
-// Used by legacy call-sites in index.html (batch email generation, brand lookup,
-// web-research pre-step, Waldo insights) that POST the Anthropic Messages body
-// directly and expect a JSON response.
+// Used by legacy call-sites in archive/index_v1.html (batch email generation,
+// brand lookup, web-research pre-step, Waldo insights) that POST the Anthropic
+// Messages body directly and expect a JSON response. The current V2 frontend
+// (index.html) does not call this passthrough directly — it routes through
+// /api/bjl-query for the email path as well. Kept for any client still
+// pointing at /api/claude.
 //
 // The body passed by the client is forwarded verbatim to /v1/messages, minus any
 // attempts to override auth/version headers. This keeps the ANTHROPIC_API_KEY
