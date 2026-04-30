@@ -300,13 +300,91 @@ followup_seeds:  ${JSON.stringify(triage.followup_seeds || [])}
 `;
 }
 
+// Synthesizer max_tokens scaled by triage's response_length. The previous
+// hardcoded 3000 was too low for any literal-posture data dump request — a
+// 242-item table with n>1000 truncated mid-line at item 115. These ceilings
+// give literal/long requests room while keeping short responses fast and
+// cheap (each output token is real money + latency on Sonnet).
+const LENGTH_TO_MAX_TOKENS = {
+  short:  1500,
+  medium: 4000,
+  long:   16000
+};
+
+// Heuristic for distinguishing truncation from other JSON-parse failures.
+// Truncation symptoms: stop_reason === 'max_tokens' from the API, or the
+// raw text doesn't end with a closing brace/bracket. Other malformations
+// (model emitted plain prose, model wrapped in unexpected fence, etc.)
+// fall through to the raw-text fallback so the user still sees something.
+function looksLikeTruncation(stopReason, raw) {
+  if (stopReason === 'max_tokens') return true;
+  const trimmed = (raw || '').trim();
+  if (!trimmed) return false;
+  const last = trimmed.slice(-1);
+  // A complete JSON object ends with } and a complete array with ].
+  // If the last non-whitespace char is anything else AND the start was {
+  // (we're expecting a JSON object), the model likely got cut off.
+  return trimmed.startsWith('{') && last !== '}';
+}
+
+// Try to extract whatever response_text the truncated JSON managed to
+// produce before being cut off, so we can show the user the partial
+// content alongside the truncation notice. Best-effort; returns null if
+// nothing salvageable.
+function extractTruncatedResponseText(raw) {
+  if (!raw) return null;
+  // Find the start of the response_text value: looks like
+  //    "response_text": "..."
+  // The value is a JSON string, so we need to walk it manually because
+  // it can contain escaped quotes.
+  const keyMatch = raw.match(/"response_text"\s*:\s*"/);
+  if (!keyMatch) return null;
+  const start = keyMatch.index + keyMatch[0].length;
+  let i = start;
+  let out = '';
+  while (i < raw.length) {
+    const c = raw[i];
+    if (c === '\\' && i + 1 < raw.length) {
+      const next = raw[i + 1];
+      // Decode common JSON escapes; pass through anything else literally.
+      if (next === 'n') out += '\n';
+      else if (next === 't') out += '\t';
+      else if (next === 'r') out += '\r';
+      else if (next === '"') out += '"';
+      else if (next === '\\') out += '\\';
+      else if (next === '/') out += '/';
+      else if (next === 'u' && i + 5 < raw.length) {
+        const code = parseInt(raw.slice(i + 2, i + 6), 16);
+        if (!isNaN(code)) { out += String.fromCharCode(code); i += 4; }
+      } else {
+        out += next;
+      }
+      i += 2;
+      continue;
+    }
+    if (c === '"') {
+      // End of the JSON string — the rest of the JSON is metadata
+      // (followup_chips array, closing brace). We have the full
+      // response_text. Return it.
+      return out;
+    }
+    out += c;
+    i++;
+  }
+  // Hit end of buffer mid-string: this is truncation. Return what we have.
+  return out;
+}
+
 async function runSynthesis(triage, scratch) {
   const systemPrompt = buildSynthesizerSystemPrompt(triage);
   const userMessage = `Investigator scratch (${scratch.length} entries):\n${JSON.stringify(scratch, null, 2)}\n\nProduce the response now as JSON: {"response_text": "...", "followup_chips": ["...", "...", "..."]}`;
 
+  const lengthKey = (triage && triage.response_length) || 'medium';
+  const maxTokens = LENGTH_TO_MAX_TOKENS[lengthKey] || LENGTH_TO_MAX_TOKENS.medium;
+
   const response = await anthropic.messages.create({
     model: SONNET_MODEL,
-    max_tokens: 3000,
+    max_tokens: maxTokens,
     system: systemPrompt,
     messages: [{ role: 'user', content: userMessage }]
   });
@@ -323,9 +401,33 @@ async function runSynthesis(triage, scratch) {
       followup_chips: Array.isArray(parsed.followup_chips) ? parsed.followup_chips : (triage.followup_seeds || [])
     };
   } catch (e) {
-    // If the synthesizer returned plain text instead of JSON, treat the whole
-    // response as the finding and fall back to triage's seeds.
-    console.warn('[synthesis] JSON parse failed, using raw text. err:', e.message);
+    // Distinguish truncation from other malformations. Truncation gets a
+    // clean message + whatever partial content we can salvage. Anything
+    // else falls through to the raw-text fallback so the user still sees
+    // the model's output rather than a silent failure.
+    if (looksLikeTruncation(response.stop_reason, raw)) {
+      const partial = extractTruncatedResponseText(raw);
+      const truncMsg = "I had to cut this short due to response length limits"
+        + ` (the lab's synthesizer hit its ${maxTokens.toLocaleString()}-token ceiling on this ${lengthKey} response).`
+        + " The full result set may be larger than fits in one response."
+        + " Try asking for a narrower slice (e.g. top 50, by category, only items above a JI threshold)"
+        + " or break the question into stages and we'll page through the corpus.";
+      console.warn('[synthesis] truncation detected. stop_reason=', response.stop_reason,
+        'maxTokens=', maxTokens, 'raw chars=', raw.length,
+        'partial chars=', partial ? partial.length : 0);
+      return {
+        response_text: partial && partial.trim()
+          ? (partial.trim() + '\n\n---\n\n**' + truncMsg + '**')
+          : truncMsg,
+        followup_chips: triage.followup_seeds || [],
+        truncated: true
+      };
+    }
+    // Non-truncation malformation: model emitted plain prose, fence the
+    // strip didn't catch, etc. Surface the raw output so we don't lose the
+    // model's work; the user sees something readable.
+    console.warn('[synthesis] JSON parse failed (non-truncation), using raw text. err:', e.message,
+      'stop_reason=', response.stop_reason, 'raw chars=', raw.length);
     return {
       response_text: raw,
       followup_chips: triage.followup_seeds || []
