@@ -396,9 +396,36 @@ async function runSynthesis(triage, scratch) {
 
   try {
     const parsed = JSON.parse(raw);
+    // The JSON parsed cleanly. Use parsed.response_text directly — never fall
+    // back to the raw JSON string as the response. If parsed.response_text is
+    // missing or empty, that's a separate failure mode (synthesizer produced
+    // valid JSON but didn't include the expected field). Surface a clear
+    // error instead of dumping the raw JSON to the user, which is what was
+    // happening before this fix and showed up to users as a literal
+    // `{ "response_text": "..." }` rendered as the answer body.
+    const responseText = (parsed && typeof parsed.response_text === 'string')
+      ? parsed.response_text
+      : null;
+    const followupChips = Array.isArray(parsed.followup_chips)
+      ? parsed.followup_chips
+      : (triage.followup_seeds || []);
+
+    if (!responseText) {
+      console.warn('[synthesis] parsed JSON OK but response_text missing/empty/non-string. parsed keys:',
+        Object.keys(parsed || {}), 'raw chars:', raw.length);
+      return {
+        response_text: "The synthesizer parsed valid JSON but did not include a response_text field. "
+          + "The investigation scratch is intact (look at the evidence drawer or pull job_id "
+          + "from the URL). This is a synthesizer-prompt issue, not a data issue. Try rephrasing "
+          + "the question or rerun.",
+        followup_chips: followupChips,
+        synth_error: 'missing_response_text'
+      };
+    }
+
     return {
-      response_text: parsed.response_text || raw,
-      followup_chips: Array.isArray(parsed.followup_chips) ? parsed.followup_chips : (triage.followup_seeds || [])
+      response_text: responseText,
+      followup_chips: followupChips
     };
   } catch (e) {
     // Distinguish truncation from other malformations. Truncation gets a
