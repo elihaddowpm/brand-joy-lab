@@ -7,7 +7,7 @@
   <link rel="icon" type="image/png" sizes="32x32" href="assets/bjl_favicon_32x32.png" />
   <link rel="icon" type="image/png" sizes="64x64" href="assets/bjl_favicon_64x64.png" />
   <link rel="apple-touch-icon" href="assets/bjl_favicon_64x64.png" />
-  <link rel="stylesheet" href="styles_v2.css?v=7" />
+  <link rel="stylesheet" href="styles_v2.css?v=8" />
 </head>
 <body data-display="on">
   <div id="root"></div>
@@ -550,15 +550,25 @@ const _bjlPollJob = async (jobId, signal, opts = {}) => {
   const startedAt = Date.now();
   let lastStatus = "pending";
 
+  // Force no-store on the polling GET so an aggressive HTTP cache (browser
+  // or upstream CDN) can't serve stale 'running' responses. Without this,
+  // some browsers will satisfy a poll from cache and the loop never observes
+  // the backend's terminal-state transition.
+  const POLL_FETCH_OPTS = { signal, cache: "no-store", headers: { "Cache-Control": "no-cache" } };
+
   // One-shot final status check used for both the hard-cap timeout path and
   // any other dead-end exit so we don't drop a finding the backend produced.
   const finalCheck = async () => {
     try {
-      const res = await fetch("/api/bjl-query-status?id=" + encodeURIComponent(jobId), { signal });
+      const res = await fetch("/api/bjl-query-status?id=" + encodeURIComponent(jobId), POLL_FETCH_OPTS);
       if (!res.ok) return null;
       return await res.json();
     } catch { return null; }
   };
+
+  const TERMINAL = new Set(["complete", "error", "clarification_needed"]);
+
+  console.log("[bjl-poll] starting for job", jobId, "cap", hardCapMs / 1000, "s");
 
   while (true) {
     if (signal && signal.aborted) {
@@ -570,26 +580,33 @@ const _bjlPollJob = async (jobId, signal, opts = {}) => {
       // the tab was throttled. If status is now terminal, return the job
       // and let the caller surface the finding.
       const recovered = await finalCheck();
-      if (recovered && (recovered.status === "complete"
-                     || recovered.status === "error"
-                     || recovered.status === "clarification_needed")) {
+      if (recovered && TERMINAL.has(recovered.status)) {
+        console.log("[bjl-poll] cap reached but final-check recovered status", recovered.status, "for job", jobId);
         if (recovered.status !== lastStatus) {
-          try { onTransition(recovered); } catch (e) { console.error("[poll] onTransition threw:", e); }
+          try { onTransition(recovered); } catch (e) { console.error("[bjl-poll] onTransition threw on recovery:", e); }
         }
         return recovered;
       }
+      console.warn("[bjl-poll] cap exceeded with non-terminal status for job", jobId, "(final-check returned", recovered ? recovered.status : "null", ")");
       const e = new Error("Query exceeded " + Math.round(hardCapMs / 1000) + "s without completing. The investigation may still be running on the backend; check job " + jobId + " in a moment.");
       e.phase = "timeout"; e.job_id = jobId; throw e;
     }
     await new Promise(r => setTimeout(r, pollIntervalMs));
     let res;
-    try { res = await fetch("/api/bjl-query-status?id=" + encodeURIComponent(jobId), { signal }); }
+    try { res = await fetch("/api/bjl-query-status?id=" + encodeURIComponent(jobId), POLL_FETCH_OPTS); }
     catch (err) { onPollError({ phase: "poll_network", message: err.message }); continue; }
     if (!res.ok) { onPollError({ phase: "poll_http", status: res.status }); continue; }
     let job;
     try { job = await res.json(); } catch { continue; }
-    if (job.status !== lastStatus) { lastStatus = job.status; try { onTransition(job); } catch (e) { console.error("[poll] onTransition threw:", e); } }
-    if (job.status === "complete" || job.status === "error" || job.status === "clarification_needed") return job;
+    if (job.status !== lastStatus) {
+      console.log("[bjl-poll] status transition", lastStatus, "->", job.status, "for job", jobId);
+      lastStatus = job.status;
+      try { onTransition(job); } catch (e) { console.error("[bjl-poll] onTransition threw:", e); }
+    }
+    if (TERMINAL.has(job.status)) {
+      console.log("[bjl-poll] terminal state reached:", job.status, "for job", jobId);
+      return job;
+    }
   }
 };
 
@@ -674,10 +691,14 @@ const queryBJL = async ({
   // Clarification path: triage flagged the question as ambiguous. Surface the
   // clarifying_question to the caller via onDone with a clarifying flag.
   if (job.status === "clarification_needed") {
+    console.log("[queryBJL] clarification_needed for job", enqueue.job_id, "rendering clarifying_question");
+    if (!job.clarifying_question) {
+      console.warn("[queryBJL] clarification_needed status but clarifying_question is empty/null on job", enqueue.job_id, "- triage_brief:", job.triage_brief);
+    }
     try {
       onDone({
         clarification_needed: true,
-        clarifying_question: job.clarifying_question || "",
+        clarifying_question: job.clarifying_question || (job.triage_brief && job.triage_brief.clarifying_question) || "(triage flagged this question as ambiguous but did not produce a clarifying question; please rephrase)",
         triage_brief: job.triage_brief || null,
         followup_chips: [],
         finding: "",
@@ -766,10 +787,14 @@ const investigateQuery = async ({
   // Clarification path: triage flagged the question as ambiguous. Skip
   // notes/evidence/chunks; surface the clarifying_question via onDone.
   if (job.status === "clarification_needed") {
+    console.log("[investigateQuery] clarification_needed for job", enqueue.job_id, "rendering clarifying_question");
+    if (!job.clarifying_question) {
+      console.warn("[investigateQuery] clarification_needed status but clarifying_question is empty/null on job", enqueue.job_id, "- triage_brief:", job.triage_brief);
+    }
     try {
       onDone({
         clarification_needed: true,
-        clarifying_question: job.clarifying_question || "",
+        clarifying_question: job.clarifying_question || (job.triage_brief && job.triage_brief.clarifying_question) || "(triage flagged this question as ambiguous but did not produce a clarifying question; please rephrase)",
         triage_brief: job.triage_brief || null,
         followup_chips: [],
         finding: "",
@@ -1251,6 +1276,9 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
     // Build prior_conversation_context for triage. Last 3-5 turns. For each
     // assistant turn, send a SUMMARY (200-400 chars) plus the triage_brief
     // it produced, so triage can recognize follow-ups vs new questions.
+    // Clarification turns get an explicit flag so triage knows the assistant
+    // asked a clarifying question and the user's next message is the answer
+    // (not a brand new question to be triaged from scratch).
     const buildPriorConversationContext = (history) => {
       const recent = (Array.isArray(history) ? history : []).slice(-5);
       const ctx = [];
@@ -1261,16 +1289,21 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
         if (t && t.response) {
           const resp = String(t.response).trim();
           const summary = resp.length > 400 ? resp.slice(0, 380) + "…" : resp;
-          ctx.push({
+          const turn = {
             role: "assistant",
             content_summary: summary,
             triage_brief_summary: t.triage_brief
               ? {
                   the_question: t.triage_brief.the_question || null,
                   investigation_depth: t.triage_brief.investigation_depth || null,
+                  needs_clarification: !!t.triage_brief.needs_clarification,
                 }
               : null,
-          });
+          };
+          if (t.isClarification) {
+            turn.was_clarification_request = true;
+          }
+          ctx.push(turn);
         }
       }
       return ctx.length ? ctx : null;
@@ -1474,11 +1507,16 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
               const isLastCompleted = i === turns.length - 1 && !running;
               const chips = (t.followup_chips || []).filter(c => typeof c === "string" && c.trim());
               return (
-                <div key={i} className="turn">
+                <div key={i} className={"turn" + (t.isClarification ? " turn-clarification" : "")}>
                   <div className="turn-head">
-                    <span className="turn-idx">Q{i + 1}{t.isFollowup ? " · follow-up" : ""}{t.isClarification ? " · clarification" : ""}</span>
+                    <span className="turn-idx">Q{i + 1}{t.isFollowup ? " · follow-up" : ""}{t.isClarification ? " · clarification needed" : ""}</span>
                     <span className="turn-prompt">{t.prompt}</span>
                   </div>
+                  {t.isClarification && (
+                    <div className="clarification-hint">
+                      The lab needs a bit more from you before investigating. Type your answer below to continue.
+                    </div>
+                  )}
                   <div className="stream-doc">
                     {renderMarkdown(t.response)}
                   </div>
