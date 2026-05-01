@@ -38,11 +38,17 @@ const SONNET_MODEL = 'claude-sonnet-4-6';
 
 // Investigation depth -> max turns mapping. Each successful query is one turn;
 // turn budget includes overhead for tool result + final synthesis.
+//
+// 'thorough' lowered from 20 to 12 turns (target 6-8 queries) on 2026-05-01
+// after multi-part prompts ("Tell me about X. What about Y? How differ?")
+// produced 13-18 query investigations running 5-13 minutes. The investigator
+// prompt now asks the model to pick the ONE central sub-question and surface
+// the others as followup chips; the lowered hard cap forces the discipline.
 const DEPTH_TO_MAX_TURNS = {
   none: 0,
   minimal: 4,    // 1-2 queries
   focused: 10,   // 3-5 queries
-  thorough: 20   // 6-10 queries
+  thorough: 12   // target 6-8 queries
 };
 
 // -------------------------------------------------------------------------
