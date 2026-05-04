@@ -22,3 +22,6 @@ node_modules/
 
 # Local Claude Code state
 .claude/settings.local.json
+
+# Per-wave SQL chunk experiments (canonical SQL is out/YYYY-MM_phaseN_*.sql)
+out/mcp_*.sql
