@@ -1,0 +1,167 @@
+[
+  {
+    "col_idx": 440,
+    "item_name": null,
+    "question_prefix": "Which of the following best describes your overall mood thes"
+  },
+  {
+    "col_idx": 443,
+    "item_name": null,
+    "question_prefix": "Over the last month or so, how would you rate the level of j"
+  },
+  {
+    "col_idx": 444,
+    "item_name": null,
+    "question_prefix": "How optimistic are you feeling about the future? (The scale "
+  },
+  {
+    "col_idx": 453,
+    "item_name": null,
+    "question_prefix": "When is the last time you felt joy?"
+  },
+  {
+    "col_idx": 595,
+    "item_name": null,
+    "question_prefix": "Would you say you've been more or less joyful than usual, ov"
+  },
+  {
+    "col_idx": 596,
+    "item_name": null,
+    "question_prefix": "What do you think has been making you feel more joyful than "
+  },
+  {
+    "col_idx": 597,
+    "item_name": null,
+    "question_prefix": "What do you think has been making you feel less joyful than "
+  },
+  {
+    "col_idx": 1718,
+    "item_name": "Gas Prices",
+    "question_prefix": "Compared to earlier this year, how concerned are you about:"
+  },
+  {
+    "col_idx": 1719,
+    "item_name": "Grocery Prices",
+    "question_prefix": "Compared to earlier this year, how concerned are you about:"
+  },
+  {
+    "col_idx": 1720,
+    "item_name": "Electricity Bills",
+    "question_prefix": "Compared to earlier this year, how concerned are you about:"
+  },
+  {
+    "col_idx": 1721,
+    "item_name": "Utility Bills",
+    "question_prefix": "Compared to earlier this year, how concerned are you about:"
+  },
+  {
+    "col_idx": 1722,
+    "item_name": "Housing Costs",
+    "question_prefix": "Compared to earlier this year, how concerned are you about:"
+  },
+  {
+    "col_idx": 1723,
+    "item_name": "Overall Cost of Living",
+    "question_prefix": "Compared to earlier this year, how concerned are you about:"
+  },
+  {
+    "col_idx": 2516,
+    "item_name": "To confirm that you are not a robot, please select the number that represents the sum of eight plus one",
+    "question_prefix": ""
+  },
+  {
+    "col_idx": 3652,
+    "item_name": "Joyful",
+    "question_prefix": "How have your feelings changed over the past few weeks when "
+  },
+  {
+    "col_idx": 3653,
+    "item_name": "Optimistic about the economy of the next ~three years",
+    "question_prefix": "How have your feelings changed over the past few weeks when "
+  },
+  {
+    "col_idx": 3654,
+    "item_name": "Optimistic about the long-term future of the United States",
+    "question_prefix": "How have your feelings changed over the past few weeks when "
+  },
+  {
+    "col_idx": 3655,
+    "item_name": "Optimistic about your financial situation",
+    "question_prefix": "How have your feelings changed over the past few weeks when "
+  },
+  {
+    "col_idx": 3656,
+    "item_name": "Optimistic about your future",
+    "question_prefix": "How have your feelings changed over the past few weeks when "
+  },
+  {
+    "col_idx": 3657,
+    "item_name": "Optimistic about the next few years, in general",
+    "question_prefix": "How have your feelings changed over the past few weeks when "
+  },
+  {
+    "col_idx": 3658,
+    "item_name": null,
+    "question_prefix": "To what degree does the idea of ~three more years of TRUMP i"
+  },
+  {
+    "col_idx": 4392,
+    "item_name": null,
+    "question_prefix": "How often do you drink alcoholic beverages?"
+  },
+  {
+    "col_idx": 4394,
+    "item_name": "These days, are you",
+    "question_prefix": ""
+  },
+  {
+    "col_idx": 4395,
+    "item_name": "Being an American citizen",
+    "question_prefix": "To what degree do/would each of the following bring you joy?"
+  },
+  {
+    "col_idx": 4396,
+    "item_name": "Celebrating the 4th of July",
+    "question_prefix": "To what degree do/would each of the following bring you joy?"
+  },
+  {
+    "col_idx": 4397,
+    "item_name": "Celebrating the 250th anniversary of the signing of the Declaration of Independence",
+    "question_prefix": "To what degree do/would each of the following bring you joy?"
+  },
+  {
+    "col_idx": 4398,
+    "item_name": "Visiting the Smithsonian Institution",
+    "question_prefix": "To what degree do/would each of the following bring you joy?"
+  },
+  {
+    "col_idx": 4399,
+    "item_name": "Visiting U.S. National Parks",
+    "question_prefix": "To what degree do/would each of the following bring you joy?"
+  },
+  {
+    "col_idx": 4400,
+    "item_name": "Being an American citizen",
+    "question_prefix": "Compared to one year ago, to what degree do/would each of th"
+  },
+  {
+    "col_idx": 4401,
+    "item_name": "Celebrating the 250th anniversary of the signing of the Declaration of Independence",
+    "question_prefix": "Compared to one year ago, to what degree do/would each of th"
+  },
+  {
+    "col_idx": 4402,
+    "item_name": "Celebrating the 4th of July",
+    "question_prefix": "Compared to one year ago, to what degree do/would each of th"
+  },
+  {
+    "col_idx": 4403,
+    "item_name": "Visiting the Smithsonian Institution",
+    "question_prefix": "Compared to one year ago, to what degree do/would each of th"
+  },
+  {
+    "col_idx": 4404,
+    "item_name": "Visiting U.S. National Parks",
+    "question_prefix": "Compared to one year ago, to what degree do/would each of th"
+  }
+]
