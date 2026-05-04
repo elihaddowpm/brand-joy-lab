@@ -260,8 +260,9 @@
     "canonical_brand": null,
     "confidence": "high",
     "col_idx": 103,
-    "item_name": "Other - Write In",
-    "q_num": 4
+    "item_name": "Other - Write In (col 103)",
+    "q_num": 4,
+    "_disambiguation_note": "Original item_name was 'Other - Write In'; disambiguated by col_idx because Q4 has multiple columns with this label (typical Qualtrics dual-column 'Other' pattern: one flag, one text)."
   },
   {
     "primary_topic": "financial_services",
@@ -842,8 +843,9 @@
     "canonical_brand": null,
     "confidence": "high",
     "col_idx": 146,
-    "item_name": "Other - Write In",
-    "q_num": 9
+    "item_name": "Other - Write In (col 146)",
+    "q_num": 9,
+    "_disambiguation_note": "Original item_name was 'Other - Write In'; disambiguated by col_idx because Q9 has multiple columns with this label (typical Qualtrics dual-column 'Other' pattern: one flag, one text)."
   },
   {
     "primary_topic": "financial_services",
@@ -1270,8 +1272,9 @@
     "canonical_brand": null,
     "confidence": "high",
     "col_idx": 179,
-    "item_name": "Other - Write In",
-    "q_num": 15
+    "item_name": "Other - Write In (col 179)",
+    "q_num": 15,
+    "_disambiguation_note": "Original item_name was 'Other - Write In'; disambiguated by col_idx because Q15 has multiple columns with this label (typical Qualtrics dual-column 'Other' pattern: one flag, one text)."
   },
   {
     "primary_topic": "food_beverage",
@@ -1420,8 +1423,9 @@
     "canonical_brand": null,
     "confidence": "high",
     "col_idx": 190,
-    "item_name": "Other - Write In",
-    "q_num": 17
+    "item_name": "Other - Write In (col 190)",
+    "q_num": 17,
+    "_disambiguation_note": "Original item_name was 'Other - Write In'; disambiguated by col_idx because Q17 has multiple columns with this label (typical Qualtrics dual-column 'Other' pattern: one flag, one text)."
   },
   {
     "primary_topic": "food_beverage",
@@ -2227,8 +2231,9 @@
     "canonical_brand": null,
     "confidence": "high",
     "col_idx": 246,
-    "item_name": "Other - Write In",
-    "q_num": 22
+    "item_name": "Other - Write In (col 246)",
+    "q_num": 22,
+    "_disambiguation_note": "Original item_name was 'Other - Write In'; disambiguated by col_idx because Q22 has multiple columns with this label (typical Qualtrics dual-column 'Other' pattern: one flag, one text)."
   },
   {
     "primary_topic": "food_beverage",
