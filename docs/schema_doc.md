@@ -8,7 +8,7 @@ This is the canonical schema reference for the BJL Intelligence Engine investiga
 
 ## Tables
 
-### `bjl_responses` — long-form respondent answers (~2.12M rows)
+### `bjl_responses` — long-form respondent answers (~2.18M rows)
 
 One row per (respondent, question, item, answer).
 
@@ -24,11 +24,11 @@ One row per (respondent, question, item, answer).
 | joy_index | numeric | 0-100 scale, ONLY populated for joy-scale items where respondent gave a numeric answer |
 | is_selected | boolean | for select_all items, true if checked |
 | fielding_id | text | 'm_YYYY_MM' format |
-| year_month | text | 'YYYY-MM' format, 29 unique months from 2023-08 to 2026-03 |
+| year_month | text | 'YYYY-MM' format, 30 unique months from 2023-08 to 2026-04 |
 
 **Critical:** `joy_index` is ONLY for items where respondents gave numeric ratings. For label-scale questions (agreement, frequency, importance, familiarity, likelihood-text), `joy_index` and `numeric_value` are NULL by design. Report those as distributions of `raw_value`, not averages. See `bjl_scale_labels` for canonical ordering.
 
-### `bjl_respondents` — full demographic profile (~12,663 rows)
+### `bjl_respondents` — full demographic profile (~13,064 rows)
 
 One row per respondent.
 
@@ -51,7 +51,7 @@ One row per respondent.
 | race_other | text write-in |
 | decisionmaker_vacation, decisionmaker_internet, decisionmaker_car, decisionmaker_groceries, decisionmaker_bank, decisionmaker_vacation_activities, decisionmaker_car_insurance, decisionmaker_home_furnishing | text — household-decision-maker flags from the Decision_Maker battery |
 
-### `bjl_items` — one row per (question, item) (~5,391 rows)
+### `bjl_items` — one row per (question, item) (~5,590 rows)
 
 | Column | Notes |
 |---|---|
@@ -66,28 +66,28 @@ One row per respondent.
 
 After the Haiku retag, `primary_topic` and `subtags` are reliable for filtering by industry. Trust them.
 
-### `bjl_questions_v2` — question catalog (~415 rows)
+### `bjl_questions_v2` — question catalog (~446 rows)
 
 | Column | Notes |
 |---|---|
 | question_id | PK |
 | question_text | full question text |
-| question_type | joy_scale / likelihood_scale / familiarity_scale / trust_scale / frequency_scale / agreement_scale / importance_scale / select_all / single_select / open_end / numeric / momentum |
+| question_type | joy_scale / joy_scale_0_to_5 / likelihood_scale / familiarity_scale / trust_scale / frequency_scale / agreement_scale / importance_scale / importance_scale_0_to_5 / description_scale_0_to_5 / select_all / multi_select / single_select / open_end / numeric / momentum |
 | primary_topic | inherited up from items, or set explicitly for question-level filtering |
 | subtags | array |
 | intent_tag | joy / trust / familiarity / likelihood / preference / behavior / emotion / frequency / importance / agreement / identity / decision_maker / life_context |
 | n_items | how many items the question has |
 
-### `bjl_respondent_usage` — category usage screener results (~44,816 rows)
+### `bjl_respondent_usage` — category usage screener results (~45,217 rows)
 
 One row per (respondent, category) combination. Built from screener questions that ask whether or how often respondents engage with a category.
 
 | Column | Notes |
 |---|---|
 | respondent_id | FK |
-| category | alcohol / orange_juice / hot_dogs / yogurt / snacks / nonalcoholic_beverages / home_internet / knows_isp / casinos / auto_racing / horse_racing / gambling / exercise / vitamins_supplements / dr_teals / travel_leisure / travel_domestic / travel_international / travel_business / planning_kennedy_space / planning_orlando / travel_planning_horizon / news_engagement / outlook_2026 |
-| usage_level | varies by category — for alcohol: Heavy / Frequent / Moderate / Light / Never |
-| source_question_id | which screener provided this |
+| category | alcohol / wine / orange_juice / hot_dogs / yogurt / snacks / nonalcoholic_beverages / home_internet / knows_isp / casinos / auto_racing / horse_racing / gambling / exercise / vitamins_supplements / dr_teals / travel_leisure / travel_domestic / travel_international / travel_business / planning_kennedy_space / planning_orlando / travel_planning_horizon / news_engagement / outlook_2026 |
+| usage_level | varies by category — for alcohol and wine: Frequent / Moderate / Light / Never (wine has no Heavy tier; the Q429 screener tops out at "regularly — once or twice a week") |
+| source_question_id | which screener provided this. Wine = Q429 (April 2026 onward). |
 
 **Use this table for consumer filtering on consumption-style questions.** When asking about beer joy or casino joy or any product category, `JOIN bjl_respondent_usage` and filter by appropriate usage_level.
 
@@ -105,7 +105,7 @@ When reporting distributions of `raw_value` for agreement / frequency / importan
 
 16 primary topics, 78 subtags, 13 intent tags. Query this to discover what values are valid before writing filters.
 
-### `bjl_verbatims` — open-end responses (~62,755 rows)
+### `bjl_verbatims` — open-end responses (~63,755 rows)
 
 | Column | Notes |
 |---|---|
@@ -119,8 +119,8 @@ When reporting distributions of `raw_value` for agreement / frequency / importan
 | is_quotable | pre-flagged quotability — ALWAYS filter `is_quotable = true` for output |
 | sentiment | positive / negative / mixed / neutral |
 | themes | text[] — thematic tags |
-| joy_modes | text[] — populated, see Reference vocabularies |
-| tensions, occasions, functional_jobs | text[] — currently NULL/empty (see population status below) |
+| joy_modes | text[] — populated for all months, see Reference vocabularies |
+| tensions, occasions, functional_jobs | text[] — populated for 2026-04 onward (April load applied via `framework_scan.py`); pre-April rows still NULL/empty pending backfill |
 | search_vector | tsvector — full-text index on response_text |
 | embedding | vector — semantic embedding |
 
@@ -154,19 +154,19 @@ The four BJL frameworks are tagged via reference tables. Each table has at minim
 
 `aspiration_vs_acceptance, challenger_vs_legacy, control_vs_surrender, digital_vs_physical, discovery_vs_comfort, forgiveness_vs_foresight, individual_vs_communal, introvert_vs_extrovert, luxury_vs_value, moderation_vs_indulgence, performance_vs_pleasure, present_vs_future, savings_vs_spending, self_vs_others, tradition_vs_modern`
 
-**Population status:** `bjl_verbatims.tensions` array is currently NULL on all rows (backfill in progress). The 15 framework definitions in `bjl_tensions` itself are queryable today for "what tensions does BJL track?" type questions. Filters against the verbatim array will start returning results once the backfill lands.
+**Population status:** `bjl_verbatims.tensions` is populated for 2026-04 onward (886 April verbatims tagged via Haiku 4.5 in May 2026). Pre-April rows remain NULL pending the historical backfill. The 15 framework definitions in `bjl_tensions` are queryable today for "what tensions does BJL track?" questions. When filtering on this array, also filter `year_month >= '2026-04'` until the historical backfill lands.
 
 ### Functional jobs (24, table `bjl_functional_jobs`)
 
 `build_belonging, cheer_team, compete, connect_remotely, create_memory, demonstrate_care, display_taste, escape_routine, express_creativity, feel_proud, immerse_in_story, learn_grow, mark_milestone, nourish_others, plan_future, preserve_tradition, provide_security, refuel, relax_recover, relieve_anxiety, reward_self, share_experience, signal_identity, signal_status`
 
-**Population status:** `bjl_verbatims.functional_jobs` array is currently NULL on all rows (backfill in progress). Same situation as tensions.
+**Population status:** Same as tensions — populated for 2026-04 onward, NULL pre-April pending historical backfill.
 
 ### Occasions (25, table `bjl_occasions`)
 
 `alone_time, anticipation, birthday, celebration, evening, everyday, gathering, gift_giving, holiday, hosting, in_moment, live_event, mealtime, memory, morning, post_purchase, purchase_moment, shopping, special_occasion, sports_viewing, transition, travel_journey, vacation, weekend, work`
 
-**Population status:** `bjl_verbatims.occasions` array is currently NULL on all rows (backfill in progress).
+**Population status:** Same as tensions — populated for 2026-04 onward, NULL pre-April pending historical backfill.
 
 ## Joy index math
 
@@ -193,6 +193,16 @@ Do NOT use:
 - `bjl_waves` lookup — legacy table, ignore.
 
 For "last N months" questions: filter `year_month >= to_char(CURRENT_DATE - INTERVAL 'N months', 'YYYY-MM')`. For "how has X shifted" / "momentum of Y" / trend framings with no explicit window: default to the last 6 months. For a named month or quarter: pin the exact `year_month` values. When writing the response, name months directly ("Jan-Mar 2026", "the last six months"), never "Wave 2" or similar.
+
+### April 2026 wave additions
+
+The April 2026 fielding (`year_month = '2026-04'`, `fielding_id = 'm_2026_04'`, n=401 respondents) added two new survey batteries plus a cross-cutting summative pair:
+
+- **Banking battery (Q416–Q428)** — current banking situation, institution type, tenure, switching triggers, joy drivers (`joy_scale_0_to_5`), importance drivers (`importance_scale_0_to_5`), description scale, and an open-end (Q428) on what consumers wish their bank understood about their financial life.
+- **Wine battery (Q429–Q444)** — Q429 is the relationship-with-wine screener that feeds `bjl_respondent_usage` (category=`wine`). Q433–Q436 are joy/importance scales on wine occasions and choice drivers. Q438 (open-end) and Q440 (memorable wine experience open-end) are the wine verbatims. Q443/Q444 capture price ranges as `mixed`-type.
+- **Cross-category joy preference (Q446, multi_select)** — the joy_mode preference question. Each item maps to one of the 14 canonical joy modes; respondents pick the modes that feel most true to them across categories. Use this to filter respondents by self-reported joy-mode affinity.
+
+These questions only have responses for `year_month = '2026-04'` (and forward, once subsequent waves carry them). Filter by `year_month` accordingly; do not assume historical coverage.
 
 ## Verbatim text search
 
