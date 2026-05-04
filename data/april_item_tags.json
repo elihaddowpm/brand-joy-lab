@@ -1,0 +1,2726 @@
+[
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "banking_situation",
+      "account_status"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 84,
+    "item_name": null,
+    "q_num": 1
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "institution_type",
+      "national_bank"
+    ],
+    "is_brand": true,
+    "canonical_brand": "Chase, Bank of America, Wells Fargo",
+    "confidence": "high",
+    "col_idx": 85,
+    "item_name": "A national bank (such as Chase, Bank of America, or Wells Fargo)",
+    "q_num": 2
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "institution_type",
+      "regional_community_bank"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 86,
+    "item_name": "A regional or community bank",
+    "q_num": 2
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "institution_type",
+      "credit_union"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 87,
+    "item_name": "A credit union",
+    "q_num": 2
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "institution_type",
+      "online_bank"
+    ],
+    "is_brand": true,
+    "canonical_brand": "Ally, Marcus, Discover",
+    "confidence": "high",
+    "col_idx": 88,
+    "item_name": "An online-only bank (such as Ally, Marcus, or Discover)",
+    "q_num": 2
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "institution_type",
+      "neobank_fintech"
+    ],
+    "is_brand": true,
+    "canonical_brand": "Chime, SoFi, Cash App, Venmo",
+    "confidence": "high",
+    "col_idx": 89,
+    "item_name": "A neobank or fintech app (such as Chime, SoFi, Cash App, or Venmo)",
+    "q_num": 2
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "institution_type",
+      "brokerage_banking"
+    ],
+    "is_brand": true,
+    "canonical_brand": "Fidelity, Charles Schwab",
+    "confidence": "high",
+    "col_idx": 90,
+    "item_name": "A brokerage with banking features (such as Fidelity or Charles Schwab)",
+    "q_num": 2
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "institution_type",
+      "no_account"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 91,
+    "item_name": "None \u2014 I do not currently have a bank account",
+    "q_num": 2
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "tenure_duration",
+      "primary_bank"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 92,
+    "item_name": null,
+    "q_num": 3
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "account_opening_motivation",
+      "interest_rates"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 93,
+    "item_name": "I found a better interest rate or financial return elsewhere",
+    "q_num": 4
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "account_opening_motivation",
+      "sign_up_bonus"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 94,
+    "item_name": "I was offered a sign-up bonus, promotion, or cash incentive",
+    "q_num": 4
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "account_opening_motivation",
+      "recommendation_trust"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 95,
+    "item_name": "Someone I trust recommended an institution to me",
+    "q_num": 4
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "account_opening_motivation",
+      "dissatisfaction_switch"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 96,
+    "item_name": "I had a frustrating or disappointing experience with my current bank",
+    "q_num": 4
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "account_opening_motivation",
+      "life_change"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 97,
+    "item_name": "I was going through a life change such as a new job, a move, or a major purchase",
+    "q_num": 4
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "account_opening_motivation",
+      "advertising_social_media"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 98,
+    "item_name": "I saw advertising or content online or on social media",
+    "q_num": 4
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "account_opening_motivation",
+      "feature_seeking"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 99,
+    "item_name": "I was looking for a specific feature or tool my current bank did not offer",
+    "q_num": 4
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "account_opening_motivation",
+      "financial_situation_change"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 100,
+    "item_name": "My financial situation changed and I needed something different",
+    "q_num": 4
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "account_opening_motivation",
+      "no_recent_action"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 101,
+    "item_name": "I have not opened a new account or considered doing so recently",
+    "q_num": 4
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "account_opening_motivation",
+      "other_writein"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 102,
+    "item_name": "Other - Write In",
+    "q_num": 4
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "account_opening_motivation",
+      "other_writein"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 103,
+    "item_name": "Other - Write In",
+    "q_num": 4
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "emotional_drivers",
+      "brand_alignment"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 104,
+    "item_name": "Feeling like it was built for people like me",
+    "q_num": 5
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "emotional_drivers",
+      "fee_transparency"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 105,
+    "item_name": "Knowing exactly what I will and will not be charged",
+    "q_num": 5
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "emotional_drivers",
+      "social_recommendation"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 106,
+    "item_name": "A recommendation from someone whose financial judgment I trust",
+    "q_num": 5
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "emotional_drivers",
+      "peer_adoption"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 107,
+    "item_name": "Seeing that other people my age use it and feel good about it",
+    "q_num": 5
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "emotional_drivers",
+      "financial_literacy_tools"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 108,
+    "item_name": "Having tools or features that help me understand my own finances better",
+    "q_num": 5
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "emotional_drivers",
+      "financial_success_partner"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 109,
+    "item_name": "The feeling that this institution actually wants me to succeed financially",
+    "q_num": 5
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "emotional_drivers",
+      "value_proposition"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 110,
+    "item_name": "Feeling like I am getting a genuinely good deal",
+    "q_num": 5
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "emotional_drivers",
+      "safety_security"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 111,
+    "item_name": "Knowing my money is safe and protected",
+    "q_num": 5
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "emotional_drivers",
+      "mobile_convenience"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 112,
+    "item_name": "Being able to manage everything from my phone without visiting a branch",
+    "q_num": 5
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "emotional_drivers",
+      "respect_inclusion"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 113,
+    "item_name": "Feeling welcomed and respected rather than evaluated or judged",
+    "q_num": 5
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "selection_criteria",
+      "interest_rates"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 114,
+    "item_name": "High interest rates on savings",
+    "q_num": 6
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "selection_criteria",
+      "fees"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 115,
+    "item_name": "Low or no fees",
+    "q_num": 6
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "selection_criteria",
+      "mobile_app"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 116,
+    "item_name": "A good mobile app experience",
+    "q_num": 6
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "selection_criteria",
+      "customer_service"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 117,
+    "item_name": "The ability to speak to a real person when I need to",
+    "q_num": 6
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "selection_criteria",
+      "physical_branches"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 118,
+    "item_name": "Physical branch locations near me",
+    "q_num": 6
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "selection_criteria",
+      "values_alignment"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 119,
+    "item_name": "A company that shares my values",
+    "q_num": 6
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "selection_criteria",
+      "reputation_track_record"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 120,
+    "item_name": "A strong reputation and long track record",
+    "q_num": 6
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "selection_criteria",
+      "onboarding_ease"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 121,
+    "item_name": "Speed and ease of getting started",
+    "q_num": 6
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "selection_criteria",
+      "business_model_transparency"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 122,
+    "item_name": "Transparency about how they make money",
+    "q_num": 6
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "selection_criteria",
+      "financial_tools"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 123,
+    "item_name": "Tools that help me budget, save, or track spending",
+    "q_num": 6
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "brand_perception",
+      "modern_relevance",
+      "bank_selection"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 124,
+    "item_name": "A brand that feels modern and relevant to my life",
+    "q_num": 6
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "personal_treatment",
+      "customer_relationship",
+      "individualization"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 125,
+    "item_name": "I feel like they treat me as an individual, not just an account number",
+    "q_num": 7
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "fee_transparency",
+      "trust",
+      "institutional_honesty"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 126,
+    "item_name": "I trust them to be upfront about fees and any changes to my account",
+    "q_num": 7
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "financial_wellbeing",
+      "genuine_care",
+      "customer_investment"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 127,
+    "item_name": "I feel like they are genuinely invested in my financial wellbeing",
+    "q_num": 7
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "brand_trust",
+      "recommendation",
+      "loyalty"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 128,
+    "item_name": "I would recommend them to a close friend without hesitation",
+    "q_num": 7
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "loyalty",
+      "competitive_offers",
+      "switching_behavior"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 129,
+    "item_name": "I feel some loyalty to them even when I see better offers elsewhere",
+    "q_num": 7
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "confidence",
+      "financial_management",
+      "emotional_benefit"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 130,
+    "item_name": "Managing my finances through them brings me a sense of confidence",
+    "q_num": 7
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "control",
+      "capability",
+      "empowerment"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 131,
+    "item_name": "They make me feel capable and in control of my financial life",
+    "q_num": 7
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "generational_understanding",
+      "relatable",
+      "age_relevant"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 132,
+    "item_name": "I feel like they understand the financial realities people my age face",
+    "q_num": 7
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "switching_consideration",
+      "loyalty_risk",
+      "retention"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 133,
+    "item_name": "I have thought about leaving them in the past year",
+    "q_num": 7
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "brand_pride",
+      "customer_satisfaction",
+      "emotional_connection"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 134,
+    "item_name": "I feel proud to be a customer of theirs",
+    "q_num": 7
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "switching_behavior",
+      "banking_relationship",
+      "none_option"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 135,
+    "item_name": null,
+    "q_num": 8
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "unexpected_fees",
+      "switching_reason",
+      "cost"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 136,
+    "item_name": "I was charged unexpected or unfair fees",
+    "q_num": 9
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "customer_service",
+      "switching_reason",
+      "service_quality"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 137,
+    "item_name": "I had a poor customer service experience",
+    "q_num": 9
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "interest_rates",
+      "switching_reason",
+      "competitive_advantage"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 138,
+    "item_name": "I found significantly better interest rates elsewhere",
+    "q_num": 9
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "modern_institution",
+      "switching_reason",
+      "lifestyle_fit"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 139,
+    "item_name": "I found an institution that felt more modern or more suited to my lifestyle",
+    "q_num": 9
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "customer_value",
+      "switching_reason",
+      "recognition"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 140,
+    "item_name": "I felt like my bank did not value me as a customer",
+    "q_num": 9
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "features",
+      "services",
+      "switching_reason"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 141,
+    "item_name": "I needed features or services my bank did not offer",
+    "q_num": 9
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "financial_evolution",
+      "life_circumstances",
+      "switching_reason"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 142,
+    "item_name": "My financial situation changed and my needs evolved",
+    "q_num": 9
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "major_life_change",
+      "switching_reason",
+      "relocation"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 143,
+    "item_name": "I went through a major life change such as moving, a new job, or a new relationship",
+    "q_num": 9
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "word_of_mouth",
+      "recommendation",
+      "switching_reason"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 144,
+    "item_name": "A recommendation from someone I trust",
+    "q_num": 9
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "open_response",
+      "switching_reason",
+      "other"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 145,
+    "item_name": "Other - Write In",
+    "q_num": 9
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "open_response",
+      "switching_reason",
+      "other"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 146,
+    "item_name": "Other - Write In",
+    "q_num": 9
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "retention_factor",
+      "banking_relationship",
+      "none_option"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 147,
+    "item_name": null,
+    "q_num": 10
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "open_response",
+      "retention_factor",
+      "other"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 148,
+    "item_name": "Other - Write In",
+    "q_num": 10
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "freedom",
+      "financial_control",
+      "emotional_benefit"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 149,
+    "item_name": "A sense of freedom \u2014 feeling financially unencumbered and in control of my choices",
+    "q_num": 11
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "achievement",
+      "competence",
+      "emotional_benefit"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 150,
+    "item_name": "A sense of achievement \u2014 feeling capable, competent, and on top of my finances",
+    "q_num": 11
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "connection",
+      "understanding",
+      "emotional_benefit"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 151,
+    "item_name": "A sense of connection \u2014 feeling genuinely understood and cared for",
+    "q_num": 11
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "peace",
+      "security",
+      "emotional_benefit"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 152,
+    "item_name": "A sense of peace \u2014 feeling secure, stable, and protected",
+    "q_num": 11
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "inspiration",
+      "motivation",
+      "emotional_benefit"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 153,
+    "item_name": "A sense of inspiration \u2014 feeling motivated and energized about my financial future",
+    "q_num": 11
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "pride",
+      "responsibility",
+      "emotional_benefit"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 154,
+    "item_name": "A sense of pride \u2014 feeling like I am making smart, responsible choices",
+    "q_num": 11
+  },
+  {
+    "primary_topic": "general_joy",
+    "subtags": [
+      "joy_absence",
+      "banking_relationship",
+      "no_emotional_connection"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 156,
+    "item_name": "Honestly, my bank does not bring me any particular kind of joy",
+    "q_num": 11
+  },
+  {
+    "primary_topic": "general_joy",
+    "subtags": [
+      "joy_awareness",
+      "banking_relationship",
+      "no_prior_reflection"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 157,
+    "item_name": "I have never thought about my bank in terms of joy before",
+    "q_num": 11
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "financial_confidence",
+      "future_outlook",
+      "personal_assessment"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 159,
+    "item_name": "I feel confident about where my finances are headed",
+    "q_num": 12
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "system_fairness",
+      "financial_inclusion",
+      "institutional_trust"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 160,
+    "item_name": "I feel like the financial system is designed to work for people like me",
+    "q_num": 12
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "bank_understanding",
+      "financial_realities",
+      "empathy"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 161,
+    "item_name": "I feel like my bank genuinely understands the financial realities of my life",
+    "q_num": 12
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "financial_stress",
+      "money_management",
+      "emotional_impact"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 162,
+    "item_name": "Managing my finances brings me more stress than joy",
+    "q_num": 12
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "financial_capability",
+      "knowledge",
+      "competence"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 163,
+    "item_name": "I feel like I have the tools and knowledge I need to make good financial decisions",
+    "q_num": 12
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "financial_security",
+      "achievability",
+      "aspirational"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 164,
+    "item_name": "I feel like achieving real financial security is within reach for me",
+    "q_num": 12
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "financial_lag",
+      "comparison",
+      "personal_anxiety"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 165,
+    "item_name": "I often feel behind financially compared to where I thought I would be at this stage of life",
+    "q_num": 12
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "banking_relationship",
+      "financial_trajectory",
+      "trust_institutions"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 166,
+    "item_name": "I believe a great banking relationship could genuinely change someone's financial trajectory",
+    "q_num": 12
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "banking_relationship",
+      "emotional_understanding"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "medium",
+    "col_idx": 167,
+    "item_name": null,
+    "q_num": 13
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_relationship",
+      "wine_preference"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 168,
+    "item_name": null,
+    "q_num": 14
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_occasions",
+      "home_relaxation",
+      "wind_down"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 169,
+    "item_name": "A relaxed evening at home, winding down",
+    "q_num": 15
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_occasions",
+      "family_dining",
+      "home_meal"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 170,
+    "item_name": "Dinner at home with family or a partner",
+    "q_num": 15
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_occasions",
+      "restaurant_dining"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 171,
+    "item_name": "Dinner at a restaurant",
+    "q_num": 15
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_occasions",
+      "social_gathering",
+      "party"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 172,
+    "item_name": "A social gathering or party",
+    "q_num": 15
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_occasions",
+      "celebration",
+      "special_occasion"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 173,
+    "item_name": "A special occasion or celebration",
+    "q_num": 15
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_occasions",
+      "outdoor_settings",
+      "picnic"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 174,
+    "item_name": "Outdoors \u2014 a picnic, a concert, or a casual outdoor setting",
+    "q_num": 15
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_occasions",
+      "tasting_events",
+      "winery_visit"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 175,
+    "item_name": "A tasting, winery visit, or wine-focused event",
+    "q_num": 15
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_occasions",
+      "food_pairing",
+      "cooking"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 176,
+    "item_name": "Pairing with a specific food I am cooking or eating",
+    "q_num": 15
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_occasions",
+      "casual_drinking"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 177,
+    "item_name": "With no particular occasion \u2014 just when I feel like it",
+    "q_num": 15
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_occasions",
+      "open_ended"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 178,
+    "item_name": "Other - Write In",
+    "q_num": 15
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_occasions",
+      "open_ended"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 179,
+    "item_name": "Other - Write In",
+    "q_num": 15
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_consumption_trend",
+      "drinking_habits"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "medium",
+    "col_idx": 180,
+    "item_name": "In the past year, would you say your wine drinking has",
+    "q_num": 16
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_decrease_reason",
+      "alcohol_reduction",
+      "health_conscious"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 181,
+    "item_name": "I am trying to drink less alcohol overall",
+    "q_num": 17
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_decrease_reason",
+      "sobriety",
+      "alcohol_abstinence"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 182,
+    "item_name": "I gave up alcohol entirely",
+    "q_num": 17
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_decrease_reason",
+      "non_alcoholic_drinks",
+      "substitution"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 183,
+    "item_name": "I have found non-alcoholic drinks I genuinely enjoy",
+    "q_num": 17
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_decrease_reason",
+      "other_beverages",
+      "substitution"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 184,
+    "item_name": "I have been drinking other alcoholic beverages more",
+    "q_num": 17
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_decrease_reason",
+      "price_sensitivity",
+      "value_perception"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 185,
+    "item_name": "Wine feels too expensive for what I get",
+    "q_num": 17
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_decrease_reason",
+      "health_consciousness"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 186,
+    "item_name": "I am more health-conscious than I used to be",
+    "q_num": 17
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_decrease_reason",
+      "lifestyle_change",
+      "social_occasions"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 187,
+    "item_name": "My social occasions have changed and wine fits less naturally",
+    "q_num": 17
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_decrease_reason",
+      "choice_anxiety",
+      "confidence"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 188,
+    "item_name": "I never felt fully confident choosing wine and it got tiring",
+    "q_num": 17
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_decrease_reason",
+      "open_ended"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 189,
+    "item_name": "Other - Write In",
+    "q_num": 17
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_decrease_reason",
+      "open_ended"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 190,
+    "item_name": "Other - Write In",
+    "q_num": 17
+  },
+  {
+    "primary_topic": "food_joy",
+    "subtags": [
+      "taste_pleasure",
+      "sensory_enjoyment",
+      "wine_satisfaction"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 191,
+    "item_name": "The pleasure of a glass that tastes exactly right in the moment",
+    "q_num": 18
+  },
+  {
+    "primary_topic": "food_joy",
+    "subtags": [
+      "discovery",
+      "wine_exploration",
+      "novelty"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 192,
+    "item_name": "The feeling of discovering a wine you love that you had never tried before",
+    "q_num": 18
+  },
+  {
+    "primary_topic": "food_joy",
+    "subtags": [
+      "social_sharing",
+      "wine_togetherness",
+      "connection"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 193,
+    "item_name": "Sharing a bottle with people you care about",
+    "q_num": 18
+  },
+  {
+    "primary_topic": "food_joy",
+    "subtags": [
+      "learning",
+      "wine_education",
+      "knowledge_building"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 194,
+    "item_name": "Learning something new about wine, a region, or how it is made",
+    "q_num": 18
+  },
+  {
+    "primary_topic": "food_joy",
+    "subtags": [
+      "elevation",
+      "meal_enhancement",
+      "special_moments"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 195,
+    "item_name": "The way a good wine makes an ordinary meal feel special",
+    "q_num": 18
+  },
+  {
+    "primary_topic": "food_joy",
+    "subtags": [
+      "craftsmanship_appreciation",
+      "quality_value",
+      "identity"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 196,
+    "item_name": "Being someone who appreciates beautiful, well-crafted things",
+    "q_num": 18
+  },
+  {
+    "primary_topic": "food_joy",
+    "subtags": [
+      "cultural_connection",
+      "place_story",
+      "wine_terroir"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 197,
+    "item_name": "Connecting with a place, a culture, or a story through what is in the glass",
+    "q_num": 18
+  },
+  {
+    "primary_topic": "food_joy",
+    "subtags": [
+      "ritual_ceremony",
+      "anticipation",
+      "wine_opening"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 198,
+    "item_name": "The ritual of opening a bottle \u2014 the ceremony and the anticipation",
+    "q_num": 18
+  },
+  {
+    "primary_topic": "food_joy",
+    "subtags": [
+      "value_discovery",
+      "price_quality",
+      "deal_finding"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 199,
+    "item_name": "Finding a wine that is excellent at a surprisingly good price",
+    "q_num": 18
+  },
+  {
+    "primary_topic": "food_joy",
+    "subtags": [
+      "mindfulness",
+      "presence",
+      "slowing_down"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 200,
+    "item_name": "The feeling that wine slows things down and invites you to be present",
+    "q_num": 18
+  },
+  {
+    "primary_topic": "food_joy",
+    "subtags": [
+      "knowledge_sharing",
+      "expertise",
+      "social_role"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 201,
+    "item_name": "Sharing your wine knowledge with others",
+    "q_num": 18
+  },
+  {
+    "primary_topic": "food_joy",
+    "subtags": [
+      "expertise",
+      "authority",
+      "social_status"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 202,
+    "item_name": "Being a wine expert among your social circle",
+    "q_num": 18
+  },
+  {
+    "primary_topic": "food_joy",
+    "subtags": [
+      "playfulness",
+      "fun",
+      "lighthearted",
+      "unpretentious"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 203,
+    "item_name": "Playful \u2014 it is fun, lighthearted, and unpretentious",
+    "q_num": 19
+  },
+  {
+    "primary_topic": "food_joy",
+    "subtags": [
+      "aesthetic_beauty",
+      "sensory_craft",
+      "design_appreciation"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 204,
+    "item_name": "Aesthetic \u2014 it is beautiful, sensory, and carefully crafted",
+    "q_num": 19
+  },
+  {
+    "primary_topic": "food_joy",
+    "subtags": [
+      "hedonism",
+      "sensory_pleasure",
+      "immediate_gratification"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 205,
+    "item_name": "Hedonic \u2014 pure sensory pleasure in the moment",
+    "q_num": 19
+  },
+  {
+    "primary_topic": "food_joy",
+    "subtags": [
+      "wine_joy",
+      "sentimental_connection",
+      "memory_nostalgia"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 206,
+    "item_name": "Sentimental \u2014 it connects me to memories, people, or places",
+    "q_num": 19
+  },
+  {
+    "primary_topic": "food_joy",
+    "subtags": [
+      "wine_joy",
+      "social_connection",
+      "relational"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 207,
+    "item_name": "Relational \u2014 it brings me closer to the people I share it with",
+    "q_num": 19
+  },
+  {
+    "primary_topic": "food_joy",
+    "subtags": [
+      "wine_joy",
+      "achievement",
+      "competence"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 208,
+    "item_name": "Achievement \u2014 I feel capable and knowledgeable when I choose well",
+    "q_num": 19
+  },
+  {
+    "primary_topic": "food_joy",
+    "subtags": [
+      "wine_joy",
+      "freedom",
+      "indulgence"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 209,
+    "item_name": "Freedom \u2014 it represents leisure, indulgence, and time that is mine",
+    "q_num": 19
+  },
+  {
+    "primary_topic": "food_joy",
+    "subtags": [
+      "wine_joy",
+      "awe",
+      "amazement"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 210,
+    "item_name": "Awe \u2014 certain wines genuinely amaze me with their complexity or quality",
+    "q_num": 19
+  },
+  {
+    "primary_topic": "food_joy",
+    "subtags": [
+      "wine_joy",
+      "inspiration",
+      "curiosity"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 211,
+    "item_name": "Inspiration \u2014 wine makes me curious and motivated to learn and discover more",
+    "q_num": 19
+  },
+  {
+    "primary_topic": "food_joy",
+    "subtags": [
+      "wine_joy",
+      "no_joy",
+      "neutral"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 212,
+    "item_name": "Wine does not bring me any particular type of joy",
+    "q_num": 19
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine",
+      "beverage_choice",
+      "relaxation_celebration"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 213,
+    "item_name": "Wine",
+    "q_num": 20
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "beer",
+      "craft_beer",
+      "beverage_choice"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 214,
+    "item_name": "Craft or specialty beer",
+    "q_num": 20
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "cocktails",
+      "mixed_drinks",
+      "beverage_choice"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 215,
+    "item_name": "Cocktails or mixed drinks",
+    "q_num": 20
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "spirits",
+      "liquor",
+      "beverage_choice"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 216,
+    "item_name": "Spirits \u2014 whiskey, tequila, gin, etc. \u2014 on their own",
+    "q_num": 20
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "hard_seltzer",
+      "canned_cocktails",
+      "beverage_choice"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 217,
+    "item_name": "Hard seltzers or canned cocktails",
+    "q_num": 20
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "non_alcoholic",
+      "beer_alternative",
+      "wine_alternative"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 218,
+    "item_name": "Non-alcoholic beer or wine",
+    "q_num": 20
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "sparkling_water",
+      "botanical_drinks",
+      "non_alcoholic"
+    ],
+    "is_brand": true,
+    "canonical_brand": "Seedlip, Ghia",
+    "confidence": "medium",
+    "col_idx": 219,
+    "item_name": "Sparkling water or botanical drinks such as Seedlip or Ghia",
+    "q_num": 20
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "mocktail",
+      "non_alcoholic",
+      "cocktail_alternative"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 220,
+    "item_name": "A non-alcoholic cocktail or mocktail",
+    "q_num": 20
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "cannabis",
+      "legal_alternatives",
+      "beverage_choice"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 221,
+    "item_name": "Cannabis or other legal alternatives",
+    "q_num": 20
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "beer",
+      "beverage_choice",
+      "relaxation_celebration"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 222,
+    "item_name": "Beer",
+    "q_num": 20
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "ingredient_transparency",
+      "production_knowledge",
+      "beverage_criteria"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 223,
+    "item_name": "Knowing what is in it and how it was made",
+    "q_num": 21
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "sustainability",
+      "responsible_production",
+      "beverage_criteria"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 224,
+    "item_name": "It being produced sustainably or responsibly",
+    "q_num": 21
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "brand_story",
+      "origin_narrative",
+      "beverage_criteria"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 225,
+    "item_name": "It having a compelling story or origin",
+    "q_num": 21
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "identity_alignment",
+      "lifestyle_fit",
+      "beverage_criteria"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 226,
+    "item_name": "It feeling appropriate for who I am and how I live",
+    "q_num": 21
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "social_shareability",
+      "conversation_starter",
+      "beverage_criteria"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 227,
+    "item_name": "It being something I can talk about or share with friends",
+    "q_num": 21
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "overall_experience",
+      "occasion_fit",
+      "beverage_criteria"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 228,
+    "item_name": "The overall experience it creates, beyond just the taste",
+    "q_num": 21
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "mood",
+      "emotional_impact",
+      "beverage_criteria"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 229,
+    "item_name": "How it makes me feel \u2014 the mood it puts me in",
+    "q_num": 21
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "low_alcohol",
+      "health_conscious",
+      "beverage_criteria"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 230,
+    "item_name": "Low or no alcohol content",
+    "q_num": 21
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "price_value",
+      "affordability",
+      "beverage_criteria"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 231,
+    "item_name": "Value for the price",
+    "q_num": 21
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "ease_of_choice",
+      "confidence",
+      "beverage_criteria"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 232,
+    "item_name": "How easy it is to choose with confidence",
+    "q_num": 21
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_intimidation",
+      "choice_difficulty",
+      "wine_barriers"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 233,
+    "item_name": "I find wine intimidating or hard to choose with confidence",
+    "q_num": 22
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "non_drinker",
+      "alcohol_abstinence",
+      "wine_barriers"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 234,
+    "item_name": "I do not drink alcohol.",
+    "q_num": 22
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "taste_preference",
+      "flavor_profile",
+      "wine_barriers"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 235,
+    "item_name": "I prefer the taste of other drinks",
+    "q_num": 22
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "alcohol_reduction",
+      "health_conscious",
+      "wine_barriers"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 236,
+    "item_name": "I am trying to reduce my alcohol consumption overall",
+    "q_num": 22
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "social_perception",
+      "identity_fit",
+      "wine_barriers"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 237,
+    "item_name": "Wine can feel like it is for a certain type of person and I do not always feel that is me",
+    "q_num": 22
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "price_barrier",
+      "cost_perception",
+      "wine_barriers"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 238,
+    "item_name": "Wine feels expensive relative to other options I enjoy",
+    "q_num": 22
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "quality_unpredictability",
+      "purchase_uncertainty",
+      "wine_barriers"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 239,
+    "item_name": "I do not always know what to expect from a wine before I buy it",
+    "q_num": 22
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "non_alcoholic_alternatives",
+      "product_satisfaction",
+      "wine_barriers"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 240,
+    "item_name": "I have found non-alcoholic options I genuinely enjoy",
+    "q_num": 22
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "social_context",
+      "occasion_fit",
+      "wine_barriers"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 241,
+    "item_name": "Other beverages feel more fun or social in the settings I am in",
+    "q_num": 22
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "age_perception",
+      "generational_association",
+      "wine_barriers"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 242,
+    "item_name": "I associate wine with older generations more than my own",
+    "q_num": 22
+  },
+  {
+    "primary_topic": "health_wellness",
+    "subtags": [
+      "health_concern",
+      "wine_specific",
+      "wine_barriers"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 243,
+    "item_name": "Health concerns specifically related to wine",
+    "q_num": 22
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "open_ended",
+      "other_reason",
+      "wine_barriers"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 244,
+    "item_name": "Other - Write In",
+    "q_num": 22
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_consumption",
+      "established_habit",
+      "wine_engagement"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 245,
+    "item_name": "None of these \u2014 wine is already a significant part of my life",
+    "q_num": 22
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_preferences",
+      "open_ended_response"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 246,
+    "item_name": "Other - Write In",
+    "q_num": 22
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_interest",
+      "no_response"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 247,
+    "item_name": null,
+    "q_num": 23
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_identity",
+      "personal_relevance"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 248,
+    "item_name": "Wine feels like it was made for people like me",
+    "q_num": 24
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_knowledge",
+      "confidence_barrier"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 249,
+    "item_name": "Choosing wine confidently feels out of reach without expert knowledge",
+    "q_num": 24
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_culture",
+      "gatekeeping",
+      "inclusivity"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 250,
+    "item_name": "Wine has a culture of gatekeeping that can feel unwelcoming",
+    "q_num": 24
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_learning",
+      "expertise"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 251,
+    "item_name": "I think of wine as something that gets better the more you learn about it",
+    "q_num": 24
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_category",
+      "evolution",
+      "relevance"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 252,
+    "item_name": "Wine feels like a category that is genuinely evolving and becoming more relevant",
+    "q_num": 24
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_industry",
+      "resonance"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 253,
+    "item_name": "The wine industry speaks to me and people like me",
+    "q_num": 24
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_exploration",
+      "accessibility"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 254,
+    "item_name": "Wine is a category I would like to explore more if it was easier to start exploring",
+    "q_num": 24
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_nonalcoholic",
+      "alternatives"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 255,
+    "item_name": "Non-alcoholic wine options are something I would genuinely consider",
+    "q_num": 24
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_choice",
+      "challenge",
+      "enjoyment"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 256,
+    "item_name": "The challenge of choosing a wine is a big part of the joy of wine",
+    "q_num": 24
+  },
+  {
+    "primary_topic": "food_joy",
+    "subtags": [
+      "wine_experience",
+      "no_response"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 257,
+    "item_name": null,
+    "q_num": 25
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_identity",
+      "passion",
+      "central_role"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 258,
+    "item_name": "Wine is a genuine passion \u2014 it is a significant part of who I am",
+    "q_num": 26
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_identity",
+      "occasional_use"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 259,
+    "item_name": "Wine is something I enjoy when the occasion calls for it, but it is not central to my identity",
+    "q_num": 26
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_identity",
+      "curiosity",
+      "exploration"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 260,
+    "item_name": "Wine is something I am curious about and would like to explore more",
+    "q_num": 26
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_identity",
+      "social_tolerance"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 261,
+    "item_name": "Wine is something I tolerate or go along with in social situations",
+    "q_num": 26
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_identity",
+      "generational",
+      "lifestyle"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 262,
+    "item_name": "Wine feels like it belongs to a different generation or lifestyle than mine",
+    "q_num": 26
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_identity",
+      "deliberate_avoidance"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 263,
+    "item_name": "Wine is something I have consciously moved away from",
+    "q_num": 26
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_identity",
+      "neutral_stance"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 264,
+    "item_name": "Wine is simply not something I think about much",
+    "q_num": 26
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_category_direction",
+      "accessibility",
+      "inclusivity"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 265,
+    "item_name": "Wine is becoming more accessible and welcoming to new drinkers",
+    "q_num": 27
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_category_direction",
+      "generational_relevance"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 266,
+    "item_name": "Wine is losing relevance with younger generations",
+    "q_num": 27
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_category_direction",
+      "nonalcoholic_wine"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 267,
+    "item_name": "The growth of non-alcoholic wine options is making the category more interesting",
+    "q_num": 27
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_category_direction",
+      "craft",
+      "heritage"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 268,
+    "item_name": "Wine has a story and a craft that other beverages cannot match",
+    "q_num": 27
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_category_direction",
+      "technology",
+      "apps"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 269,
+    "item_name": "Social media and apps have made choosing wine less intimidating",
+    "q_num": 27
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_category_direction",
+      "inclusivity",
+      "culture"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 270,
+    "item_name": "Wine culture still needs to do more to feel genuinely inclusive",
+    "q_num": 27
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_category_direction",
+      "accessibility",
+      "inclusivity"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 271,
+    "item_name": "I believe wine can be for everyone, regardless of age, background, or expertise",
+    "q_num": 27
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_purchase",
+      "price_range"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 272,
+    "item_name": null,
+    "q_num": 28
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_purchase",
+      "price_range",
+      "on_premise"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 273,
+    "item_name": null,
+    "q_num": 29
+  },
+  {
+    "primary_topic": "brand_trust",
+    "subtags": [
+      "cross_category_comparison",
+      "no_response"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 274,
+    "item_name": null,
+    "q_num": 30
+  },
+  {
+    "primary_topic": "general_joy",
+    "subtags": [
+      "playful",
+      "fun",
+      "lighthearted",
+      "spontaneous"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 275,
+    "item_name": "Playful joy \u2014 fun, lighthearted, and spontaneous",
+    "q_num": 31
+  },
+  {
+    "primary_topic": "general_joy",
+    "subtags": [
+      "aesthetic",
+      "beautiful",
+      "crafted",
+      "sensory"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 276,
+    "item_name": "Aesthetic joy \u2014 beautiful, thoughtfully crafted, and sensory",
+    "q_num": 31
+  },
+  {
+    "primary_topic": "general_joy",
+    "subtags": [
+      "hedonic",
+      "pleasure",
+      "moment"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 277,
+    "item_name": "Hedonic joy \u2014 pure pleasure in the moment",
+    "q_num": 31
+  },
+  {
+    "primary_topic": "general_joy",
+    "subtags": [
+      "relational",
+      "connection",
+      "people"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 278,
+    "item_name": "Relational joy \u2014 connecting me more deeply with people I care about",
+    "q_num": 31
+  },
+  {
+    "primary_topic": "general_joy",
+    "subtags": [
+      "achievement",
+      "capability",
+      "knowledge",
+      "control"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 279,
+    "item_name": "Achievement joy \u2014 making me feel capable, knowledgeable, and in control",
+    "q_num": 31
+  },
+  {
+    "primary_topic": "general_joy",
+    "subtags": [
+      "freedom",
+      "independence",
+      "possibility"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 280,
+    "item_name": "Freedom joy \u2014 giving me a feeling of independence and open possibility",
+    "q_num": 31
+  },
+  {
+    "primary_topic": "general_joy",
+    "subtags": [
+      "awe",
+      "extraordinary"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 281,
+    "item_name": "Awe \u2014 occasionally stopping me in my tracks with something extraordinary",
+    "q_num": 31
+  },
+  {
+    "primary_topic": "general_joy",
+    "subtags": [
+      "inspirational",
+      "curiosity",
+      "learning",
+      "growth"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 282,
+    "item_name": "Inspirational joy \u2014 sparking my curiosity and motivating me to learn and grow",
+    "q_num": 31
+  },
+  {
+    "primary_topic": "general_joy",
+    "subtags": [
+      "sentimental",
+      "memories",
+      "nostalgia",
+      "connection"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 283,
+    "item_name": "Sentimental joy \u2014 connecting me to memories, people, and the past",
+    "q_num": 31
+  },
+  {
+    "primary_topic": "general_joy",
+    "subtags": [
+      "self_actualization",
+      "values",
+      "purpose"
+    ],
+    "is_brand": false,
+    "canonical_brand": null,
+    "confidence": "high",
+    "col_idx": 284,
+    "item_name": "Self-actualization joy \u2014 aligning with my deepest values and sense of purpose",
+    "q_num": 31
+  }
+]

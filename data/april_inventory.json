@@ -1,0 +1,1698 @@
+[
+  {
+    "q_num": 1,
+    "question_text": "Which of the following best describes your current banking situation? (Select one.)",
+    "n_items": 1,
+    "col_range": [
+      84,
+      84
+    ],
+    "items": [
+      {
+        "col_idx": 84,
+        "item_name": null,
+        "raw": "Which of the following best describes your current banking situation? (Select one.)"
+      }
+    ],
+    "sample_values": [
+      "I do not currently have a bank account",
+      "I have one primary bank that I use for most of my financial needs",
+      "I use four or more banks or financial institutions",
+      "I use two or three banks or financial institutions for different purposes"
+    ],
+    "inferred_type": "single_select"
+  },
+  {
+    "q_num": 2,
+    "question_text": "Which of the following types of financial institutions do you currently use? (Select all that apply.)",
+    "n_items": 7,
+    "col_range": [
+      85,
+      91
+    ],
+    "items": [
+      {
+        "col_idx": 85,
+        "item_name": "A national bank (such as Chase, Bank of America, or Wells Fargo)",
+        "raw": "A national bank (such as Chase, Bank of America, or Wells Fargo):Which of the following types of financial institutions do you currently use? (Select all that apply.)"
+      },
+      {
+        "col_idx": 86,
+        "item_name": "A regional or community bank",
+        "raw": "A regional or community bank:Which of the following types of financial institutions do you currently use? (Select all that apply.)"
+      },
+      {
+        "col_idx": 87,
+        "item_name": "A credit union",
+        "raw": "A credit union:Which of the following types of financial institutions do you currently use? (Select all that apply.)"
+      },
+      {
+        "col_idx": 88,
+        "item_name": "An online-only bank (such as Ally, Marcus, or Discover)",
+        "raw": "An online-only bank (such as Ally, Marcus, or Discover):Which of the following types of financial institutions do you currently use? (Select all that apply.)"
+      },
+      {
+        "col_idx": 89,
+        "item_name": "A neobank or fintech app (such as Chime, SoFi, Cash App, or Venmo)",
+        "raw": "A neobank or fintech app (such as Chime, SoFi, Cash App, or Venmo):Which of the following types of financial institutions do you currently use? (Select all that apply.)"
+      },
+      {
+        "col_idx": 90,
+        "item_name": "A brokerage with banking features (such as Fidelity or Charles Schwab)",
+        "raw": "A brokerage with banking features (such as Fidelity or Charles Schwab):Which of the following types of financial institutions do you currently use? (Select all that apply.)"
+      },
+      {
+        "col_idx": 91,
+        "item_name": "None \u2014 I do not currently have a bank account",
+        "raw": "None \u2014 I do not currently have a bank account:Which of the following types of financial institutions do you currently use? (Select all that apply.)"
+      }
+    ],
+    "sample_values": [
+      "A brokerage with banking features (such as Fidelity or Charles Schwab)",
+      "A credit union",
+      "A national bank (such as Chase, Bank of America, or Wells Fargo)",
+      "A neobank or fintech app (such as Chime, SoFi, Cash App, or Venmo)",
+      "A regional or community bank",
+      "An online-only bank (such as Ally, Marcus, or Discover)",
+      "None \u2014 I do not currently have a bank account"
+    ],
+    "inferred_type": "multi_select"
+  },
+  {
+    "q_num": 3,
+    "question_text": "How long have you been with your primary bank or financial institution? (Select one.)",
+    "n_items": 1,
+    "col_range": [
+      92,
+      92
+    ],
+    "items": [
+      {
+        "col_idx": 92,
+        "item_name": null,
+        "raw": "How long have you been with your primary bank or financial institution? (Select one.)"
+      }
+    ],
+    "sample_values": [
+      "I do not have a primary bank",
+      "Less than one year",
+      "More than ten years",
+      "One to two years",
+      "Six to ten years",
+      "Three to five years"
+    ],
+    "inferred_type": "single_select"
+  },
+  {
+    "q_num": 4,
+    "question_text": "Think about the last time you opened a new bank account or seriously considered opening one. Which of the following best describes what triggered that moment? (Select up to 2.)",
+    "n_items": 11,
+    "col_range": [
+      93,
+      103
+    ],
+    "items": [
+      {
+        "col_idx": 93,
+        "item_name": "I found a better interest rate or financial return elsewhere",
+        "raw": "I found a better interest rate or financial return elsewhere:Think about the last time you opened a new bank account or seriously considered opening one. Which of the following best describes what triggered that moment? (Select up to 2.) \u00a0"
+      },
+      {
+        "col_idx": 94,
+        "item_name": "I was offered a sign-up bonus, promotion, or cash incentive",
+        "raw": "I was offered a sign-up bonus, promotion, or cash incentive:Think about the last time you opened a new bank account or seriously considered opening one. Which of the following best describes what triggered that moment? (Select up to 2.) \u00a0"
+      },
+      {
+        "col_idx": 95,
+        "item_name": "Someone I trust recommended an institution to me",
+        "raw": "Someone I trust recommended an institution to me:Think about the last time you opened a new bank account or seriously considered opening one. Which of the following best describes what triggered that moment? (Select up to 2.) \u00a0"
+      },
+      {
+        "col_idx": 96,
+        "item_name": "I had a frustrating or disappointing experience with my current bank",
+        "raw": "I had a frustrating or disappointing experience with my current bank:Think about the last time you opened a new bank account or seriously considered opening one. Which of the following best describes what triggered that moment? (Select up to 2.) \u00a0"
+      },
+      {
+        "col_idx": 97,
+        "item_name": "I was going through a life change such as a new job, a move, or a major purchase",
+        "raw": "I was going through a life change such as a new job, a move, or a major purchase:Think about the last time you opened a new bank account or seriously considered opening one. Which of the following best describes what triggered that moment? (Select up to 2.) \u00a0"
+      },
+      {
+        "col_idx": 98,
+        "item_name": "I saw advertising or content online or on social media",
+        "raw": "I saw advertising or content online or on social media:Think about the last time you opened a new bank account or seriously considered opening one. Which of the following best describes what triggered that moment? (Select up to 2.) \u00a0"
+      },
+      {
+        "col_idx": 99,
+        "item_name": "I was looking for a specific feature or tool my current bank did not offer",
+        "raw": "I was looking for a specific feature or tool my current bank did not offer:Think about the last time you opened a new bank account or seriously considered opening one. Which of the following best describes what triggered that moment? (Select up to 2.) \u00a0"
+      },
+      {
+        "col_idx": 100,
+        "item_name": "My financial situation changed and I needed something different",
+        "raw": "My financial situation changed and I needed something different:Think about the last time you opened a new bank account or seriously considered opening one. Which of the following best describes what triggered that moment? (Select up to 2.) \u00a0"
+      },
+      {
+        "col_idx": 101,
+        "item_name": "I have not opened a new account or considered doing so recently",
+        "raw": "I have not opened a new account or considered doing so recently:Think about the last time you opened a new bank account or seriously considered opening one. Which of the following best describes what triggered that moment? (Select up to 2.) \u00a0"
+      },
+      {
+        "col_idx": 102,
+        "item_name": "Other - Write In",
+        "raw": "Other - Write In:Think about the last time you opened a new bank account or seriously considered opening one. Which of the following best describes what triggered that moment? (Select up to 2.) \u00a0"
+      },
+      {
+        "col_idx": 103,
+        "item_name": "Other - Write In",
+        "raw": "Other - Write In:Think about the last time you opened a new bank account or seriously considered opening one. Which of the following best describes what triggered that moment? (Select up to 2.) \u00a0"
+      }
+    ],
+    "sample_values": [
+      "Also still going through the divorce that I needed a account to put money in secretly",
+      "Divorce",
+      "Got a divorce",
+      "I don't have a bank",
+      "I don't trust traditional banks",
+      "I found a better interest rate or financial return elsewhere",
+      "I had a frustrating or disappointing experience with my current bank",
+      "I have not opened a new account or considered doing so recently",
+      "I prefer Credit Unions over banks",
+      "I saw advertising or content online or on social media",
+      "I was going through a life change such as a new job, a move, or a major purchase",
+      "I was looking for a specific feature or tool my current bank did not offer",
+      "I was offered a sign-up bonus, promotion, or cash incentive",
+      "Location ",
+      "Merget"
+    ],
+    "inferred_type": "multi_select"
+  },
+  {
+    "q_num": 5,
+    "question_text": "When you discover a bank or financial institution that you feel genuinely good about, to what degree do each of the following bring you joy?",
+    "n_items": 10,
+    "col_range": [
+      104,
+      113
+    ],
+    "items": [
+      {
+        "col_idx": 104,
+        "item_name": "Feeling like it was built for people like me",
+        "raw": "Feeling like it was built for people like me:When you discover a bank or financial institution that you feel genuinely good about, to what degree do each of the following bring you joy?"
+      },
+      {
+        "col_idx": 105,
+        "item_name": "Knowing exactly what I will and will not be charged",
+        "raw": "Knowing exactly what I will and will not be charged:When you discover a bank or financial institution that you feel genuinely good about, to what degree do each of the following bring you joy?"
+      },
+      {
+        "col_idx": 106,
+        "item_name": "A recommendation from someone whose financial judgment I trust",
+        "raw": "A recommendation from someone whose financial judgment I trust:When you discover a bank or financial institution that you feel genuinely good about, to what degree do each of the following bring you joy?"
+      },
+      {
+        "col_idx": 107,
+        "item_name": "Seeing that other people my age use it and feel good about it",
+        "raw": "Seeing that other people my age use it and feel good about it:When you discover a bank or financial institution that you feel genuinely good about, to what degree do each of the following bring you joy?"
+      },
+      {
+        "col_idx": 108,
+        "item_name": "Having tools or features that help me understand my own finances better",
+        "raw": "Having tools or features that help me understand my own finances better:When you discover a bank or financial institution that you feel genuinely good about, to what degree do each of the following bring you joy?"
+      },
+      {
+        "col_idx": 109,
+        "item_name": "The feeling that this institution actually wants me to succeed financially",
+        "raw": "The feeling that this institution actually wants me to succeed financially:When you discover a bank or financial institution that you feel genuinely good about, to what degree do each of the following bring you joy?"
+      },
+      {
+        "col_idx": 110,
+        "item_name": "Feeling like I am getting a genuinely good deal",
+        "raw": "Feeling like I am getting a genuinely good deal:When you discover a bank or financial institution that you feel genuinely good about, to what degree do each of the following bring you joy?"
+      },
+      {
+        "col_idx": 111,
+        "item_name": "Knowing my money is safe and protected",
+        "raw": "Knowing my money is safe and protected:When you discover a bank or financial institution that you feel genuinely good about, to what degree do each of the following bring you joy?"
+      },
+      {
+        "col_idx": 112,
+        "item_name": "Being able to manage everything from my phone without visiting a branch",
+        "raw": "Being able to manage everything from my phone without visiting a branch:When you discover a bank or financial institution that you feel genuinely good about, to what degree do each of the following bring you joy?"
+      },
+      {
+        "col_idx": 113,
+        "item_name": "Feeling welcomed and respected rather than evaluated or judged",
+        "raw": "Feeling welcomed and respected rather than evaluated or judged:When you discover a bank or financial institution that you feel genuinely good about, to what degree do each of the following bring you joy?"
+      }
+    ],
+    "sample_values": [
+      "0 = No joy at all",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5 = Maximum Joy"
+    ],
+    "inferred_type": "joy_scale_0_to_5"
+  },
+  {
+    "q_num": 6,
+    "question_text": "When you are choosing a new bank or financial institution, how important is each of the following to you personally?",
+    "n_items": 11,
+    "col_range": [
+      114,
+      124
+    ],
+    "items": [
+      {
+        "col_idx": 114,
+        "item_name": "High interest rates on savings",
+        "raw": "High interest rates on savings:When you are choosing a new bank or financial institution, how important is each of the following to you personally?"
+      },
+      {
+        "col_idx": 115,
+        "item_name": "Low or no fees",
+        "raw": "Low or no fees:When you are choosing a new bank or financial institution, how important is each of the following to you personally?"
+      },
+      {
+        "col_idx": 116,
+        "item_name": "A good mobile app experience",
+        "raw": "A good mobile app experience:When you are choosing a new bank or financial institution, how important is each of the following to you personally?"
+      },
+      {
+        "col_idx": 117,
+        "item_name": "The ability to speak to a real person when I need to",
+        "raw": "The ability to speak to a real person when I need to:When you are choosing a new bank or financial institution, how important is each of the following to you personally?"
+      },
+      {
+        "col_idx": 118,
+        "item_name": "Physical branch locations near me",
+        "raw": "Physical branch locations near me:When you are choosing a new bank or financial institution, how important is each of the following to you personally?"
+      },
+      {
+        "col_idx": 119,
+        "item_name": "A company that shares my values",
+        "raw": "A company that shares my values:When you are choosing a new bank or financial institution, how important is each of the following to you personally?"
+      },
+      {
+        "col_idx": 120,
+        "item_name": "A strong reputation and long track record",
+        "raw": "A strong reputation and long track record:When you are choosing a new bank or financial institution, how important is each of the following to you personally?"
+      },
+      {
+        "col_idx": 121,
+        "item_name": "Speed and ease of getting started",
+        "raw": "Speed and ease of getting started:When you are choosing a new bank or financial institution, how important is each of the following to you personally?"
+      },
+      {
+        "col_idx": 122,
+        "item_name": "Transparency about how they make money",
+        "raw": "Transparency about how they make money:When you are choosing a new bank or financial institution, how important is each of the following to you personally?"
+      },
+      {
+        "col_idx": 123,
+        "item_name": "Tools that help me budget, save, or track spending",
+        "raw": "Tools that help me budget, save, or track spending:When you are choosing a new bank or financial institution, how important is each of the following to you personally?"
+      },
+      {
+        "col_idx": 124,
+        "item_name": "A brand that feels modern and relevant to my life",
+        "raw": "A brand that feels modern and relevant to my life:When you are choosing a new bank or financial institution, how important is each of the following to you personally?"
+      }
+    ],
+    "sample_values": [
+      "0 = Not at all important",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5 = Essential"
+    ],
+    "inferred_type": "importance_scale_0_to_5"
+  },
+  {
+    "q_num": 7,
+    "question_text": "Thinking about the bank or financial institution you use most, to what degree does each of the following describe your relationship with it?",
+    "n_items": 10,
+    "col_range": [
+      125,
+      134
+    ],
+    "items": [
+      {
+        "col_idx": 125,
+        "item_name": "I feel like they treat me as an individual, not just an account number",
+        "raw": "I feel like they treat me as an individual, not just an account number:Thinking about the bank or financial institution you use most, to what degree does each of the following describe your relationship with it?"
+      },
+      {
+        "col_idx": 126,
+        "item_name": "I trust them to be upfront about fees and any changes to my account",
+        "raw": "I trust them to be upfront about fees and any changes to my account:Thinking about the bank or financial institution you use most, to what degree does each of the following describe your relationship with it?"
+      },
+      {
+        "col_idx": 127,
+        "item_name": "I feel like they are genuinely invested in my financial wellbeing",
+        "raw": "I feel like they are genuinely invested in my financial wellbeing:Thinking about the bank or financial institution you use most, to what degree does each of the following describe your relationship with it?"
+      },
+      {
+        "col_idx": 128,
+        "item_name": "I would recommend them to a close friend without hesitation",
+        "raw": "I would recommend them to a close friend without hesitation:Thinking about the bank or financial institution you use most, to what degree does each of the following describe your relationship with it?"
+      },
+      {
+        "col_idx": 129,
+        "item_name": "I feel some loyalty to them even when I see better offers elsewhere",
+        "raw": "I feel some loyalty to them even when I see better offers elsewhere:Thinking about the bank or financial institution you use most, to what degree does each of the following describe your relationship with it?"
+      },
+      {
+        "col_idx": 130,
+        "item_name": "Managing my finances through them brings me a sense of confidence",
+        "raw": "Managing my finances through them brings me a sense of confidence:Thinking about the bank or financial institution you use most, to what degree does each of the following describe your relationship with it?"
+      },
+      {
+        "col_idx": 131,
+        "item_name": "They make me feel capable and in control of my financial life",
+        "raw": "They make me feel capable and in control of my financial life:Thinking about the bank or financial institution you use most, to what degree does each of the following describe your relationship with it?"
+      },
+      {
+        "col_idx": 132,
+        "item_name": "I feel like they understand the financial realities people my age face",
+        "raw": "I feel like they understand the financial realities people my age face:Thinking about the bank or financial institution you use most, to what degree does each of the following describe your relationship with it?"
+      },
+      {
+        "col_idx": 133,
+        "item_name": "I have thought about leaving them in the past year",
+        "raw": "I have thought about leaving them in the past year:Thinking about the bank or financial institution you use most, to what degree does each of the following describe your relationship with it?"
+      },
+      {
+        "col_idx": 134,
+        "item_name": "I feel proud to be a customer of theirs",
+        "raw": "I feel proud to be a customer of theirs:Thinking about the bank or financial institution you use most, to what degree does each of the following describe your relationship with it?"
+      }
+    ],
+    "sample_values": [
+      "0 = Not at all",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5 = Perfectly"
+    ],
+    "inferred_type": "description_scale_0_to_5"
+  },
+  {
+    "q_num": 8,
+    "question_text": "Have you switched your primary bank or significantly changed your main banking relationship in the past three years?",
+    "n_items": 1,
+    "col_range": [
+      135,
+      135
+    ],
+    "items": [
+      {
+        "col_idx": 135,
+        "item_name": null,
+        "raw": "Have you switched your primary bank or significantly changed your main banking relationship in the past three years?"
+      }
+    ],
+    "sample_values": [
+      "No, and I have not seriously considered it",
+      "No, but I have seriously considered it",
+      "Yes, I added a new bank and demoted my previous one",
+      "Yes, I switched completely to a new primary bank"
+    ],
+    "inferred_type": "single_select"
+  },
+  {
+    "q_num": 9,
+    "question_text": "What was the most important reason you switched \u2014 or seriously considered switching \u2014 your primary banking relationship? (Select up to two.)",
+    "n_items": 11,
+    "col_range": [
+      136,
+      146
+    ],
+    "items": [
+      {
+        "col_idx": 136,
+        "item_name": "I was charged unexpected or unfair fees",
+        "raw": "I was charged unexpected or unfair fees:What was the most important reason you switched \u2014 or seriously considered switching \u2014 your primary banking relationship? (Select up to two.)"
+      },
+      {
+        "col_idx": 137,
+        "item_name": "I had a poor customer service experience",
+        "raw": "I had a poor customer service experience:What was the most important reason you switched \u2014 or seriously considered switching \u2014 your primary banking relationship? (Select up to two.)"
+      },
+      {
+        "col_idx": 138,
+        "item_name": "I found significantly better interest rates elsewhere",
+        "raw": "I found significantly better interest rates elsewhere:What was the most important reason you switched \u2014 or seriously considered switching \u2014 your primary banking relationship? (Select up to two.)"
+      },
+      {
+        "col_idx": 139,
+        "item_name": "I found an institution that felt more modern or more suited to my lifestyle",
+        "raw": "I found an institution that felt more modern or more suited to my lifestyle:What was the most important reason you switched \u2014 or seriously considered switching \u2014 your primary banking relationship? (Select up to two.)"
+      },
+      {
+        "col_idx": 140,
+        "item_name": "I felt like my bank did not value me as a customer",
+        "raw": "I felt like my bank did not value me as a customer:What was the most important reason you switched \u2014 or seriously considered switching \u2014 your primary banking relationship? (Select up to two.)"
+      },
+      {
+        "col_idx": 141,
+        "item_name": "I needed features or services my bank did not offer",
+        "raw": "I needed features or services my bank did not offer:What was the most important reason you switched \u2014 or seriously considered switching \u2014 your primary banking relationship? (Select up to two.)"
+      },
+      {
+        "col_idx": 142,
+        "item_name": "My financial situation changed and my needs evolved",
+        "raw": "My financial situation changed and my needs evolved:What was the most important reason you switched \u2014 or seriously considered switching \u2014 your primary banking relationship? (Select up to two.)"
+      },
+      {
+        "col_idx": 143,
+        "item_name": "I went through a major life change such as moving, a new job, or a new relationship",
+        "raw": "I went through a major life change such as moving, a new job, or a new relationship:What was the most important reason you switched \u2014 or seriously considered switching \u2014 your primary banking relationship? (Select up to two.)"
+      },
+      {
+        "col_idx": 144,
+        "item_name": "A recommendation from someone I trust",
+        "raw": "A recommendation from someone I trust:What was the most important reason you switched \u2014 or seriously considered switching \u2014 your primary banking relationship? (Select up to two.)"
+      },
+      {
+        "col_idx": 145,
+        "item_name": "Other - Write In",
+        "raw": "Other - Write In:What was the most important reason you switched \u2014 or seriously considered switching \u2014 your primary banking relationship? (Select up to two.)"
+      },
+      {
+        "col_idx": 146,
+        "item_name": "Other - Write In",
+        "raw": "Other - Write In:What was the most important reason you switched \u2014 or seriously considered switching \u2014 your primary banking relationship? (Select up to two.)"
+      }
+    ],
+    "sample_values": [
+      "A recommendation from someone I trust",
+      "Bonus offer to join",
+      "Don't trust",
+      "Extra account ",
+      "Fraud",
+      "I felt like my bank did not value me as a customer",
+      "I found an institution that felt more modern or more suited to my lifestyle",
+      "I found significantly better interest rates elsewhere",
+      "I had a poor customer service experience",
+      "I needed features or services my bank did not offer",
+      "I was charged unexpected or unfair fees",
+      "I went through a major life change such as moving, a new job, or a new relationship",
+      "My financial situation changed and my needs evolved",
+      "Other - Write In"
+    ],
+    "inferred_type": "multi_select"
+  },
+  {
+    "q_num": 10,
+    "question_text": "What is the single most important thing your current bank does that keeps you from looking elsewhere? (Select one.)",
+    "n_items": 2,
+    "col_range": [
+      147,
+      148
+    ],
+    "items": [
+      {
+        "col_idx": 147,
+        "item_name": null,
+        "raw": "What is the single most important thing your current bank does that keeps you from looking elsewhere? (Select one.)"
+      },
+      {
+        "col_idx": 148,
+        "item_name": "Other - Write In",
+        "raw": "Other - Write In:What is the single most important thing your current bank does that keeps you from looking elsewhere? (Select one.)"
+      }
+    ],
+    "sample_values": [
+      "Former employee ",
+      "Honestly, nothing in particular \u2014 I might switch if something better came along",
+      "I Dont use a Bank",
+      "I do not think about it \u2014 I am just used to them",
+      "I don't have a bank",
+      "I don't have an account",
+      "I feel like they genuinely understand and respect me",
+      "I have been with them so long it feels like a real relationship",
+      "I trust them completely",
+      "No fees",
+      "Other - Write In",
+      "Overdrafts",
+      "Switching feels like too much effort",
+      "Their app or digital experience is excellent",
+      "They have helped me through a difficult financial moment"
+    ],
+    "inferred_type": "multi_select"
+  },
+  {
+    "q_num": 11,
+    "question_text": "When you think about your relationship with your primary bank or financial institution, which of the following types of joy, if any, does it bring you? (Select all that apply.)",
+    "n_items": 8,
+    "col_range": [
+      149,
+      157
+    ],
+    "items": [
+      {
+        "col_idx": 149,
+        "item_name": "A sense of freedom \u2014 feeling financially unencumbered and in control of my choices",
+        "raw": "A sense of freedom \u2014 feeling financially unencumbered and in control of my choices:When you think about your relationship with your primary bank or financial institution, which of the following types of joy, if any, does it bring you? (Select all that apply.)"
+      },
+      {
+        "col_idx": 150,
+        "item_name": "A sense of achievement \u2014 feeling capable, competent, and on top of my finances",
+        "raw": "A sense of achievement \u2014 feeling capable, competent, and on top of my finances:When you think about your relationship with your primary bank or financial institution, which of the following types of joy, if any, does it bring you? (Select all that apply.)"
+      },
+      {
+        "col_idx": 151,
+        "item_name": "A sense of connection \u2014 feeling genuinely understood and cared for",
+        "raw": "A sense of connection \u2014 feeling genuinely understood and cared for:When you think about your relationship with your primary bank or financial institution, which of the following types of joy, if any, does it bring you? (Select all that apply.)"
+      },
+      {
+        "col_idx": 152,
+        "item_name": "A sense of peace \u2014 feeling secure, stable, and protected",
+        "raw": "A sense of peace \u2014 feeling secure, stable, and protected:When you think about your relationship with your primary bank or financial institution, which of the following types of joy, if any, does it bring you? (Select all that apply.)"
+      },
+      {
+        "col_idx": 153,
+        "item_name": "A sense of inspiration \u2014 feeling motivated and energized about my financial future",
+        "raw": "A sense of inspiration \u2014 feeling motivated and energized about my financial future:When you think about your relationship with your primary bank or financial institution, which of the following types of joy, if any, does it bring you? (Select all that apply.)"
+      },
+      {
+        "col_idx": 154,
+        "item_name": "A sense of pride \u2014 feeling like I am making smart, responsible choices",
+        "raw": "A sense of pride \u2014 feeling like I am making smart, responsible choices:When you think about your relationship with your primary bank or financial institution, which of the following types of joy, if any, does it bring you? (Select all that apply.)"
+      },
+      {
+        "col_idx": 156,
+        "item_name": "Honestly, my bank does not bring me any particular kind of joy",
+        "raw": "Honestly, my bank does not bring me any particular kind of joy:When you think about your relationship with your primary bank or financial institution, which of the following types of joy, if any, does it bring you? (Select all that apply.)"
+      },
+      {
+        "col_idx": 157,
+        "item_name": "I have never thought about my bank in terms of joy before",
+        "raw": "I have never thought about my bank in terms of joy before:When you think about your relationship with your primary bank or financial institution, which of the following types of joy, if any, does it bring you? (Select all that apply.)"
+      }
+    ],
+    "sample_values": [
+      "A sense of achievement \u2014 feeling capable, competent, and on top of my finances",
+      "A sense of connection \u2014 feeling genuinely understood and cared for",
+      "A sense of freedom \u2014 feeling financially unencumbered and in control of my choices",
+      "A sense of inspiration \u2014 feeling motivated and energized about my financial future",
+      "A sense of peace \u2014 feeling secure, stable, and protected",
+      "A sense of pride \u2014 feeling like I am making smart, responsible choices",
+      "Honestly, my bank does not bring me any particular kind of joy",
+      "I have never thought about my bank in terms of joy before"
+    ],
+    "inferred_type": "multi_select"
+  },
+  {
+    "q_num": 12,
+    "question_text": "To what degree does each of the following describe your current relationship with money and financial institutions generally?\u00a0Scale: 0 = Does not describe me at all, 5 = Describes me completely\u00a0Rate each item",
+    "n_items": 8,
+    "col_range": [
+      159,
+      166
+    ],
+    "items": [
+      {
+        "col_idx": 159,
+        "item_name": "I feel confident about where my finances are headed",
+        "raw": "I feel confident about where my finances are headed:To what degree does each of the following describe your current relationship with money and financial institutions generally?\u00a0Scale: 0 = Does not describe me at all, 5 = Describes me completely\u00a0Rate each item"
+      },
+      {
+        "col_idx": 160,
+        "item_name": "I feel like the financial system is designed to work for people like me",
+        "raw": "I feel like the financial system is designed to work for people like me:To what degree does each of the following describe your current relationship with money and financial institutions generally?\u00a0Scale: 0 = Does not describe me at all, 5 = Describes me completely\u00a0Rate each item"
+      },
+      {
+        "col_idx": 161,
+        "item_name": "I feel like my bank genuinely understands the financial realities of my life",
+        "raw": "I feel like my bank genuinely understands the financial realities of my life:To what degree does each of the following describe your current relationship with money and financial institutions generally?\u00a0Scale: 0 = Does not describe me at all, 5 = Describes me completely\u00a0Rate each item"
+      },
+      {
+        "col_idx": 162,
+        "item_name": "Managing my finances brings me more stress than joy",
+        "raw": "Managing my finances brings me more stress than joy:To what degree does each of the following describe your current relationship with money and financial institutions generally?\u00a0Scale: 0 = Does not describe me at all, 5 = Describes me completely\u00a0Rate each item"
+      },
+      {
+        "col_idx": 163,
+        "item_name": "I feel like I have the tools and knowledge I need to make good financial decisions",
+        "raw": "I feel like I have the tools and knowledge I need to make good financial decisions:To what degree does each of the following describe your current relationship with money and financial institutions generally?\u00a0Scale: 0 = Does not describe me at all, 5 = Describes me completely\u00a0Rate each item"
+      },
+      {
+        "col_idx": 164,
+        "item_name": "I feel like achieving real financial security is within reach for me",
+        "raw": "I feel like achieving real financial security is within reach for me:To what degree does each of the following describe your current relationship with money and financial institutions generally?\u00a0Scale: 0 = Does not describe me at all, 5 = Describes me completely\u00a0Rate each item"
+      },
+      {
+        "col_idx": 165,
+        "item_name": "I often feel behind financially compared to where I thought I would be at this stage of life",
+        "raw": "I often feel behind financially compared to where I thought I would be at this stage of life:To what degree does each of the following describe your current relationship with money and financial institutions generally?\u00a0Scale: 0 = Does not describe me at all, 5 = Describes me completely\u00a0Rate each item"
+      },
+      {
+        "col_idx": 166,
+        "item_name": "I believe a great banking relationship could genuinely change someone's financial trajectory",
+        "raw": "I believe a great banking relationship could genuinely change someone's financial trajectory:To what degree does each of the following describe your current relationship with money and financial institutions generally?\u00a0Scale: 0 = Does not describe me at all, 5 = Describes me completely\u00a0Rate each item"
+      }
+    ],
+    "sample_values": [
+      "0 = Not at all",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5 = Describes me completely"
+    ],
+    "inferred_type": "description_scale_0_to_5"
+  },
+  {
+    "q_num": 13,
+    "question_text": "If your bank truly understood what your financial life feels like right now \u2014 the pressures, the goals, the moments of progress and setback \u2014 what would you most want it to do differently?",
+    "n_items": 1,
+    "col_range": [
+      167,
+      167
+    ],
+    "items": [
+      {
+        "col_idx": 167,
+        "item_name": null,
+        "raw": "If your bank truly understood what your financial life feels like right now \u2014 the pressures, the goals, the moments of progress and setback \u2014 what would you most want it to do differently?"
+      }
+    ],
+    "sample_values": [
+      " Customer service ",
+      ".",
+      "Access to my funds a day or two earlier I know that its in the account because its always pending about a week before so maybe a day or two earlier but im very happy with them",
+      "Actually nothing",
+      "All banks offer the same products. All banks are worried about their bottom line. It's an industry where they have a service and we use the service but they are looking out for them themselves first.",
+      "Bank with them more and refer them to help them grow ",
+      "Be able to give higher loans or completely do a way with fees",
+      "Be able to perform most actions without having to go in a branch.",
+      "Be closer ",
+      "Be more knowledgeable about my particular industry",
+      "Be more lenient with loans and rates",
+      "Be more productive over my money ",
+      "Be secure ",
+      "Be there for me and support me",
+      "Better communication from the bank"
+    ],
+    "inferred_type": "open_end"
+  },
+  {
+    "q_num": 14,
+    "question_text": "Which of the following best describes your relationship with wine? (Select one.)",
+    "n_items": 1,
+    "col_range": [
+      168,
+      168
+    ],
+    "items": [
+      {
+        "col_idx": 168,
+        "item_name": null,
+        "raw": "Which of the following best describes your relationship with wine? (Select one.)"
+      }
+    ],
+    "sample_values": [
+      "I drink wine occasionally \u2014 a few times a month",
+      "I drink wine rarely \u2014 a few times a year or less",
+      "I drink wine regularly \u2014 at least once or twice a week",
+      "I have never really tried wine",
+      "I have tried wine but it is not really for me",
+      "I used to drink wine but I no longer do"
+    ],
+    "inferred_type": "single_select"
+  },
+  {
+    "q_num": 15,
+    "question_text": "On which of these occasions do you tend to drink wine? (Select all that apply.)",
+    "n_items": 11,
+    "col_range": [
+      169,
+      179
+    ],
+    "items": [
+      {
+        "col_idx": 169,
+        "item_name": "A relaxed evening at home, winding down",
+        "raw": "A relaxed evening at home, winding down:On which of these occasions do you tend to drink wine? (Select all that apply.)"
+      },
+      {
+        "col_idx": 170,
+        "item_name": "Dinner at home with family or a partner",
+        "raw": "Dinner at home with family or a partner:On which of these occasions do you tend to drink wine? (Select all that apply.)"
+      },
+      {
+        "col_idx": 171,
+        "item_name": "Dinner at a restaurant",
+        "raw": "Dinner at a restaurant:On which of these occasions do you tend to drink wine? (Select all that apply.)"
+      },
+      {
+        "col_idx": 172,
+        "item_name": "A social gathering or party",
+        "raw": "A social gathering or party:On which of these occasions do you tend to drink wine? (Select all that apply.)"
+      },
+      {
+        "col_idx": 173,
+        "item_name": "A special occasion or celebration",
+        "raw": "A special occasion or celebration:On which of these occasions do you tend to drink wine? (Select all that apply.)"
+      },
+      {
+        "col_idx": 174,
+        "item_name": "Outdoors \u2014 a picnic, a concert, or a casual outdoor setting",
+        "raw": "Outdoors \u2014 a picnic, a concert, or a casual outdoor setting:On which of these occasions do you tend to drink wine? (Select all that apply.)"
+      },
+      {
+        "col_idx": 175,
+        "item_name": "A tasting, winery visit, or wine-focused event",
+        "raw": "A tasting, winery visit, or wine-focused event:On which of these occasions do you tend to drink wine? (Select all that apply.)"
+      },
+      {
+        "col_idx": 176,
+        "item_name": "Pairing with a specific food I am cooking or eating",
+        "raw": "Pairing with a specific food I am cooking or eating:On which of these occasions do you tend to drink wine? (Select all that apply.)"
+      },
+      {
+        "col_idx": 177,
+        "item_name": "With no particular occasion \u2014 just when I feel like it",
+        "raw": "With no particular occasion \u2014 just when I feel like it:On which of these occasions do you tend to drink wine? (Select all that apply.)"
+      },
+      {
+        "col_idx": 178,
+        "item_name": "Other - Write In",
+        "raw": "Other - Write In:On which of these occasions do you tend to drink wine? (Select all that apply.)"
+      },
+      {
+        "col_idx": 179,
+        "item_name": "Other - Write In",
+        "raw": "Other - Write In:On which of these occasions do you tend to drink wine? (Select all that apply.)"
+      }
+    ],
+    "sample_values": [
+      "A relaxed evening at home, winding down",
+      "A social gathering or party",
+      "A special occasion or celebration",
+      "A tasting, winery visit, or wine-focused event",
+      "Dinner at a restaurant",
+      "Dinner at home with family or a partner",
+      "Just sometimes when I'm visiting family out of town ",
+      "Other - Write In",
+      "Outdoors \u2014 a picnic, a concert, or a casual outdoor setting",
+      "Pairing with a specific food I am cooking or eating",
+      "With no particular occasion \u2014 just when I feel like it"
+    ],
+    "inferred_type": "multi_select"
+  },
+  {
+    "q_num": 16,
+    "question_text": "(Select one.)",
+    "n_items": 1,
+    "col_range": [
+      180,
+      180
+    ],
+    "items": [
+      {
+        "col_idx": 180,
+        "item_name": "In the past year, would you say your wine drinking has",
+        "raw": "In the past year, would you say your wine drinking has: (Select one.)"
+      }
+    ],
+    "sample_values": [
+      "Decreased \u2014 I am drinking less wine than I used to",
+      "Hard to say",
+      "Increased \u2014 I am drinking more wine than I used to",
+      "Stayed about the same"
+    ],
+    "inferred_type": "single_select"
+  },
+  {
+    "q_num": 17,
+    "question_text": "You mentioned your wine drinking has decreased. Which of the following best describes why? (Select up to three.)",
+    "n_items": 10,
+    "col_range": [
+      181,
+      190
+    ],
+    "items": [
+      {
+        "col_idx": 181,
+        "item_name": "I am trying to drink less alcohol overall",
+        "raw": "I am trying to drink less alcohol overall:You mentioned your wine drinking has decreased. Which of the following best describes why? (Select up to three.)"
+      },
+      {
+        "col_idx": 182,
+        "item_name": "I gave up alcohol entirely",
+        "raw": "I gave up alcohol entirely:You mentioned your wine drinking has decreased. Which of the following best describes why? (Select up to three.)"
+      },
+      {
+        "col_idx": 183,
+        "item_name": "I have found non-alcoholic drinks I genuinely enjoy",
+        "raw": "I have found non-alcoholic drinks I genuinely enjoy:You mentioned your wine drinking has decreased. Which of the following best describes why? (Select up to three.)"
+      },
+      {
+        "col_idx": 184,
+        "item_name": "I have been drinking other alcoholic beverages more",
+        "raw": "I have been drinking other alcoholic beverages more:You mentioned your wine drinking has decreased. Which of the following best describes why? (Select up to three.)"
+      },
+      {
+        "col_idx": 185,
+        "item_name": "Wine feels too expensive for what I get",
+        "raw": "Wine feels too expensive for what I get:You mentioned your wine drinking has decreased. Which of the following best describes why? (Select up to three.)"
+      },
+      {
+        "col_idx": 186,
+        "item_name": "I am more health-conscious than I used to be",
+        "raw": "I am more health-conscious than I used to be:You mentioned your wine drinking has decreased. Which of the following best describes why? (Select up to three.)"
+      },
+      {
+        "col_idx": 187,
+        "item_name": "My social occasions have changed and wine fits less naturally",
+        "raw": "My social occasions have changed and wine fits less naturally:You mentioned your wine drinking has decreased. Which of the following best describes why? (Select up to three.)"
+      },
+      {
+        "col_idx": 188,
+        "item_name": "I never felt fully confident choosing wine and it got tiring",
+        "raw": "I never felt fully confident choosing wine and it got tiring:You mentioned your wine drinking has decreased. Which of the following best describes why? (Select up to three.)"
+      },
+      {
+        "col_idx": 189,
+        "item_name": "Other - Write In",
+        "raw": "Other - Write In:You mentioned your wine drinking has decreased. Which of the following best describes why? (Select up to three.)"
+      },
+      {
+        "col_idx": 190,
+        "item_name": "Other - Write In",
+        "raw": "Other - Write In:You mentioned your wine drinking has decreased. Which of the following best describes why? (Select up to three.)"
+      }
+    ],
+    "sample_values": [
+      "I am more health-conscious than I used to be",
+      "I am trying to drink less alcohol overall",
+      "I gave up alcohol entirely",
+      "I have been drinking other alcoholic beverages more",
+      "I have found non-alcoholic drinks I genuinely enjoy",
+      "I love the taste of wine but my system doesn't anymore for unknown reasons so I rarely drink it anymore",
+      "I never felt fully confident choosing wine and it got tiring",
+      "I preferred homemade and my uncle stopped making it. ",
+      "I was never crazy about the taste of wine ",
+      "My social occasions have changed and wine fits less naturally",
+      "Other - Write In",
+      "Wine feels too expensive for what I get",
+      "diabetic"
+    ],
+    "inferred_type": "multi_select"
+  },
+  {
+    "q_num": 18,
+    "question_text": "When you drink wine, to what degree do each of the following bring you joy?",
+    "n_items": 12,
+    "col_range": [
+      191,
+      202
+    ],
+    "items": [
+      {
+        "col_idx": 191,
+        "item_name": "The pleasure of a glass that tastes exactly right in the moment",
+        "raw": "The pleasure of a glass that tastes exactly right in the moment:When you drink wine, to what degree do each of the following bring you joy?"
+      },
+      {
+        "col_idx": 192,
+        "item_name": "The feeling of discovering a wine you love that you had never tried before",
+        "raw": "The feeling of discovering a wine you love that you had never tried before:When you drink wine, to what degree do each of the following bring you joy?"
+      },
+      {
+        "col_idx": 193,
+        "item_name": "Sharing a bottle with people you care about",
+        "raw": "Sharing a bottle with people you care about:When you drink wine, to what degree do each of the following bring you joy?"
+      },
+      {
+        "col_idx": 194,
+        "item_name": "Learning something new about wine, a region, or how it is made",
+        "raw": "Learning something new about wine, a region, or how it is made:When you drink wine, to what degree do each of the following bring you joy?"
+      },
+      {
+        "col_idx": 195,
+        "item_name": "The way a good wine makes an ordinary meal feel special",
+        "raw": "The way a good wine makes an ordinary meal feel special:When you drink wine, to what degree do each of the following bring you joy?"
+      },
+      {
+        "col_idx": 196,
+        "item_name": "Being someone who appreciates beautiful, well-crafted things",
+        "raw": "Being someone who appreciates beautiful, well-crafted things:When you drink wine, to what degree do each of the following bring you joy?"
+      },
+      {
+        "col_idx": 197,
+        "item_name": "Connecting with a place, a culture, or a story through what is in the glass",
+        "raw": "Connecting with a place, a culture, or a story through what is in the glass:When you drink wine, to what degree do each of the following bring you joy?"
+      },
+      {
+        "col_idx": 198,
+        "item_name": "The ritual of opening a bottle \u2014 the ceremony and the anticipation",
+        "raw": "The ritual of opening a bottle \u2014 the ceremony and the anticipation:When you drink wine, to what degree do each of the following bring you joy?"
+      },
+      {
+        "col_idx": 199,
+        "item_name": "Finding a wine that is excellent at a surprisingly good price",
+        "raw": "Finding a wine that is excellent at a surprisingly good price:When you drink wine, to what degree do each of the following bring you joy?"
+      },
+      {
+        "col_idx": 200,
+        "item_name": "The feeling that wine slows things down and invites you to be present",
+        "raw": "The feeling that wine slows things down and invites you to be present:When you drink wine, to what degree do each of the following bring you joy?"
+      },
+      {
+        "col_idx": 201,
+        "item_name": "Sharing your wine knowledge with others",
+        "raw": "Sharing your wine knowledge with others:When you drink wine, to what degree do each of the following bring you joy?"
+      },
+      {
+        "col_idx": 202,
+        "item_name": "Being a wine expert among your social circle",
+        "raw": "Being a wine expert among your social circle:When you drink wine, to what degree do each of the following bring you joy?"
+      }
+    ],
+    "sample_values": [
+      "0 = No joy at all",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5 = Maximum joy"
+    ],
+    "inferred_type": "joy_scale_0_to_5"
+  },
+  {
+    "q_num": 19,
+    "question_text": "Still thinking about wine \u2014 which of the following joys, if any, does wine bring you? (Select all that apply.)",
+    "n_items": 10,
+    "col_range": [
+      203,
+      212
+    ],
+    "items": [
+      {
+        "col_idx": 203,
+        "item_name": "Playful \u2014 it is fun, lighthearted, and unpretentious",
+        "raw": "Playful \u2014 it is fun, lighthearted, and unpretentious:Still thinking about wine \u2014 which of the following joys, if any, does wine bring you? (Select all that apply.)"
+      },
+      {
+        "col_idx": 204,
+        "item_name": "Aesthetic \u2014 it is beautiful, sensory, and carefully crafted",
+        "raw": "Aesthetic \u2014 it is beautiful, sensory, and carefully crafted:Still thinking about wine \u2014 which of the following joys, if any, does wine bring you? (Select all that apply.)"
+      },
+      {
+        "col_idx": 205,
+        "item_name": "Hedonic \u2014 pure sensory pleasure in the moment",
+        "raw": "Hedonic \u2014 pure sensory pleasure in the moment:Still thinking about wine \u2014 which of the following joys, if any, does wine bring you? (Select all that apply.)"
+      },
+      {
+        "col_idx": 206,
+        "item_name": "Sentimental \u2014 it connects me to memories, people, or places",
+        "raw": "Sentimental \u2014 it connects me to memories, people, or places:Still thinking about wine \u2014 which of the following joys, if any, does wine bring you? (Select all that apply.)"
+      },
+      {
+        "col_idx": 207,
+        "item_name": "Relational \u2014 it brings me closer to the people I share it with",
+        "raw": "Relational \u2014 it brings me closer to the people I share it with:Still thinking about wine \u2014 which of the following joys, if any, does wine bring you? (Select all that apply.)"
+      },
+      {
+        "col_idx": 208,
+        "item_name": "Achievement \u2014 I feel capable and knowledgeable when I choose well",
+        "raw": "Achievement \u2014 I feel capable and knowledgeable when I choose well:Still thinking about wine \u2014 which of the following joys, if any, does wine bring you? (Select all that apply.)"
+      },
+      {
+        "col_idx": 209,
+        "item_name": "Freedom \u2014 it represents leisure, indulgence, and time that is mine",
+        "raw": "Freedom \u2014 it represents leisure, indulgence, and time that is mine:Still thinking about wine \u2014 which of the following joys, if any, does wine bring you? (Select all that apply.)"
+      },
+      {
+        "col_idx": 210,
+        "item_name": "Awe \u2014 certain wines genuinely amaze me with their complexity or quality",
+        "raw": "Awe \u2014 certain wines genuinely amaze me with their complexity or quality:Still thinking about wine \u2014 which of the following joys, if any, does wine bring you? (Select all that apply.)"
+      },
+      {
+        "col_idx": 211,
+        "item_name": "Inspiration \u2014 wine makes me curious and motivated to learn and discover more",
+        "raw": "Inspiration \u2014 wine makes me curious and motivated to learn and discover more:Still thinking about wine \u2014 which of the following joys, if any, does wine bring you? (Select all that apply.)"
+      },
+      {
+        "col_idx": 212,
+        "item_name": "Wine does not bring me any particular type of joy",
+        "raw": "Wine does not bring me any particular type of joy:Still thinking about wine \u2014 which of the following joys, if any, does wine bring you? (Select all that apply.)"
+      }
+    ],
+    "sample_values": [
+      "Achievement \u2014 I feel capable and knowledgeable when I choose well",
+      "Aesthetic \u2014 it is beautiful, sensory, and carefully crafted",
+      "Awe \u2014 certain wines genuinely amaze me with their complexity or quality",
+      "Freedom \u2014 it represents leisure, indulgence, and time that is mine",
+      "Hedonic \u2014 pure sensory pleasure in the moment",
+      "Inspiration \u2014 wine makes me curious and motivated to learn and discover more",
+      "Playful \u2014 it is fun, lighthearted, and unpretentious",
+      "Relational \u2014 it brings me closer to the people I share it with",
+      "Sentimental \u2014 it connects me to memories, people, or places",
+      "Wine does not bring me any particular type of joy"
+    ],
+    "inferred_type": "multi_select"
+  },
+  {
+    "q_num": 20,
+    "question_text": "When you are choosing what to drink to relax, celebrate, or enjoy socially, to what degree does each of the following bring you joy?",
+    "n_items": 10,
+    "col_range": [
+      213,
+      222
+    ],
+    "items": [
+      {
+        "col_idx": 213,
+        "item_name": "Wine",
+        "raw": "Wine:When you are choosing what to drink to relax, celebrate, or enjoy socially, to what degree does each of the following bring you joy?"
+      },
+      {
+        "col_idx": 214,
+        "item_name": "Craft or specialty beer",
+        "raw": "Craft or specialty beer:When you are choosing what to drink to relax, celebrate, or enjoy socially, to what degree does each of the following bring you joy?"
+      },
+      {
+        "col_idx": 215,
+        "item_name": "Cocktails or mixed drinks",
+        "raw": "Cocktails or mixed drinks:When you are choosing what to drink to relax, celebrate, or enjoy socially, to what degree does each of the following bring you joy?"
+      },
+      {
+        "col_idx": 216,
+        "item_name": "Spirits \u2014 whiskey, tequila, gin, etc. \u2014 on their own",
+        "raw": "Spirits \u2014 whiskey, tequila, gin, etc. \u2014 on their own:When you are choosing what to drink to relax, celebrate, or enjoy socially, to what degree does each of the following bring you joy?"
+      },
+      {
+        "col_idx": 217,
+        "item_name": "Hard seltzers or canned cocktails",
+        "raw": "Hard seltzers or canned cocktails:When you are choosing what to drink to relax, celebrate, or enjoy socially, to what degree does each of the following bring you joy?"
+      },
+      {
+        "col_idx": 218,
+        "item_name": "Non-alcoholic beer or wine",
+        "raw": "Non-alcoholic beer or wine:When you are choosing what to drink to relax, celebrate, or enjoy socially, to what degree does each of the following bring you joy?"
+      },
+      {
+        "col_idx": 219,
+        "item_name": "Sparkling water or botanical drinks such as Seedlip or Ghia",
+        "raw": "Sparkling water or botanical drinks such as Seedlip or Ghia:When you are choosing what to drink to relax, celebrate, or enjoy socially, to what degree does each of the following bring you joy?"
+      },
+      {
+        "col_idx": 220,
+        "item_name": "A non-alcoholic cocktail or mocktail",
+        "raw": "A non-alcoholic cocktail or mocktail:When you are choosing what to drink to relax, celebrate, or enjoy socially, to what degree does each of the following bring you joy?"
+      },
+      {
+        "col_idx": 221,
+        "item_name": "Cannabis or other legal alternatives",
+        "raw": "Cannabis or other legal alternatives:When you are choosing what to drink to relax, celebrate, or enjoy socially, to what degree does each of the following bring you joy?"
+      },
+      {
+        "col_idx": 222,
+        "item_name": "Beer",
+        "raw": "Beer:When you are choosing what to drink to relax, celebrate, or enjoy socially, to what degree does each of the following bring you joy?"
+      }
+    ],
+    "sample_values": [
+      "0 = No joy at all",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5 = Maximum joy"
+    ],
+    "inferred_type": "joy_scale_0_to_5"
+  },
+  {
+    "q_num": 21,
+    "question_text": "When you choose what to drink for an evening, how important is each of the following to you?",
+    "n_items": 10,
+    "col_range": [
+      223,
+      232
+    ],
+    "items": [
+      {
+        "col_idx": 223,
+        "item_name": "Knowing what is in it and how it was made",
+        "raw": "Knowing what is in it and how it was made:When you choose what to drink for an evening, how important is each of the following to you?"
+      },
+      {
+        "col_idx": 224,
+        "item_name": "It being produced sustainably or responsibly",
+        "raw": "It being produced sustainably or responsibly:When you choose what to drink for an evening, how important is each of the following to you?"
+      },
+      {
+        "col_idx": 225,
+        "item_name": "It having a compelling story or origin",
+        "raw": "It having a compelling story or origin:When you choose what to drink for an evening, how important is each of the following to you?"
+      },
+      {
+        "col_idx": 226,
+        "item_name": "It feeling appropriate for who I am and how I live",
+        "raw": "It feeling appropriate for who I am and how I live:When you choose what to drink for an evening, how important is each of the following to you?"
+      },
+      {
+        "col_idx": 227,
+        "item_name": "It being something I can talk about or share with friends",
+        "raw": "It being something I can talk about or share with friends:When you choose what to drink for an evening, how important is each of the following to you?"
+      },
+      {
+        "col_idx": 228,
+        "item_name": "The overall experience it creates, beyond just the taste",
+        "raw": "The overall experience it creates, beyond just the taste:When you choose what to drink for an evening, how important is each of the following to you?"
+      },
+      {
+        "col_idx": 229,
+        "item_name": "How it makes me feel \u2014 the mood it puts me in",
+        "raw": "How it makes me feel \u2014 the mood it puts me in:When you choose what to drink for an evening, how important is each of the following to you?"
+      },
+      {
+        "col_idx": 230,
+        "item_name": "Low or no alcohol content",
+        "raw": "Low or no alcohol content:When you choose what to drink for an evening, how important is each of the following to you?"
+      },
+      {
+        "col_idx": 231,
+        "item_name": "Value for the price",
+        "raw": "Value for the price:When you choose what to drink for an evening, how important is each of the following to you?"
+      },
+      {
+        "col_idx": 232,
+        "item_name": "How easy it is to choose with confidence",
+        "raw": "How easy it is to choose with confidence:When you choose what to drink for an evening, how important is each of the following to you?"
+      }
+    ],
+    "sample_values": [
+      "0 = Not at all important",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5 = Essential"
+    ],
+    "inferred_type": "importance_scale_0_to_5"
+  },
+  {
+    "q_num": 22,
+    "question_text": "Which of the following, if any, describe why you tend to choose something other than wine, or why wine is not a bigger part of your life? (Select all that apply.)",
+    "n_items": 14,
+    "col_range": [
+      233,
+      246
+    ],
+    "items": [
+      {
+        "col_idx": 233,
+        "item_name": "I find wine intimidating or hard to choose with confidence",
+        "raw": "I find wine intimidating or hard to choose with confidence:Which of the following, if any, describe why you tend to choose something other than wine, or why wine is not a bigger part of your life? (Select all that apply.)"
+      },
+      {
+        "col_idx": 234,
+        "item_name": "I do not drink alcohol.",
+        "raw": "I do not drink alcohol.:Which of the following, if any, describe why you tend to choose something other than wine, or why wine is not a bigger part of your life? (Select all that apply.)"
+      },
+      {
+        "col_idx": 235,
+        "item_name": "I prefer the taste of other drinks",
+        "raw": "I prefer the taste of other drinks:Which of the following, if any, describe why you tend to choose something other than wine, or why wine is not a bigger part of your life? (Select all that apply.)"
+      },
+      {
+        "col_idx": 236,
+        "item_name": "I am trying to reduce my alcohol consumption overall",
+        "raw": "I am trying to reduce my alcohol consumption overall:Which of the following, if any, describe why you tend to choose something other than wine, or why wine is not a bigger part of your life? (Select all that apply.)"
+      },
+      {
+        "col_idx": 237,
+        "item_name": "Wine can feel like it is for a certain type of person and I do not always feel that is me",
+        "raw": "Wine can feel like it is for a certain type of person and I do not always feel that is me:Which of the following, if any, describe why you tend to choose something other than wine, or why wine is not a bigger part of your life? (Select all that apply.)"
+      },
+      {
+        "col_idx": 238,
+        "item_name": "Wine feels expensive relative to other options I enjoy",
+        "raw": "Wine feels expensive relative to other options I enjoy:Which of the following, if any, describe why you tend to choose something other than wine, or why wine is not a bigger part of your life? (Select all that apply.)"
+      },
+      {
+        "col_idx": 239,
+        "item_name": "I do not always know what to expect from a wine before I buy it",
+        "raw": "I do not always know what to expect from a wine before I buy it:Which of the following, if any, describe why you tend to choose something other than wine, or why wine is not a bigger part of your life? (Select all that apply.)"
+      },
+      {
+        "col_idx": 240,
+        "item_name": "I have found non-alcoholic options I genuinely enjoy",
+        "raw": "I have found non-alcoholic options I genuinely enjoy:Which of the following, if any, describe why you tend to choose something other than wine, or why wine is not a bigger part of your life? (Select all that apply.)"
+      },
+      {
+        "col_idx": 241,
+        "item_name": "Other beverages feel more fun or social in the settings I am in",
+        "raw": "Other beverages feel more fun or social in the settings I am in:Which of the following, if any, describe why you tend to choose something other than wine, or why wine is not a bigger part of your life? (Select all that apply.)"
+      },
+      {
+        "col_idx": 242,
+        "item_name": "I associate wine with older generations more than my own",
+        "raw": "I associate wine with older generations more than my own:Which of the following, if any, describe why you tend to choose something other than wine, or why wine is not a bigger part of your life? (Select all that apply.)"
+      },
+      {
+        "col_idx": 243,
+        "item_name": "Health concerns specifically related to wine",
+        "raw": "Health concerns specifically related to wine:Which of the following, if any, describe why you tend to choose something other than wine, or why wine is not a bigger part of your life? (Select all that apply.)"
+      },
+      {
+        "col_idx": 244,
+        "item_name": "Other - Write In",
+        "raw": "Other - Write In:Which of the following, if any, describe why you tend to choose something other than wine, or why wine is not a bigger part of your life? (Select all that apply.)"
+      },
+      {
+        "col_idx": 245,
+        "item_name": "None of these \u2014 wine is already a significant part of my life",
+        "raw": "None of these \u2014 wine is already a significant part of my life:Which of the following, if any, describe why you tend to choose something other than wine, or why wine is not a bigger part of your life? (Select all that apply.)"
+      },
+      {
+        "col_idx": 246,
+        "item_name": "Other - Write In",
+        "raw": "Other - Write In:Which of the following, if any, describe why you tend to choose something other than wine, or why wine is not a bigger part of your life? (Select all that apply.)"
+      }
+    ],
+    "sample_values": [
+      "Health concerns specifically related to wine",
+      "I am on a budget.",
+      "I am trying to reduce my alcohol consumption overall",
+      "I associate wine with older generations more than my own",
+      "I cannot drink alcohol - medical condition",
+      "I do not always know what to expect from a wine before I buy it",
+      "I do not drink alcohol.",
+      "I dont drink wine ",
+      "I find wine intimidating or hard to choose with confidence",
+      "I have found non-alcoholic options I genuinely enjoy",
+      "I prefer the taste of other drinks",
+      "I'm just not much of a drinker anymore. I don't like to get past a certain buzzed happy point. Wine and coolers are my go to.",
+      "None of these \u2014 wine is already a significant part of my life",
+      "Other - Write In",
+      "Other beverages feel more fun or social in the settings I am in"
+    ],
+    "inferred_type": "multi_select"
+  },
+  {
+    "q_num": 23,
+    "question_text": "Is there anything that, if it were true about wine, would make you more interested in drinking it or drinking it more often?",
+    "n_items": 1,
+    "col_range": [
+      247,
+      247
+    ],
+    "items": [
+      {
+        "col_idx": 247,
+        "item_name": null,
+        "raw": "Is there anything that, if it were true about wine, would make you more interested in drinking it or drinking it more often?"
+      }
+    ],
+    "sample_values": [
+      " I love wine but the sugar is what I need to wstch",
+      "?",
+      "A great drink that's social",
+      "A legacy on more brands",
+      "Beer or wine does not make me more interested to drink",
+      "Better price deals ",
+      "Better price points",
+      "Better quality wine in restaurants around the area",
+      "Cannabis/THC based non alcoholic wines ",
+      "Cheaper and easier to try and get ",
+      "Depends on the brand of wine. ",
+      "Different flavors ",
+      "Different flavors or mixes.",
+      "Different varieties that are affordable.",
+      "Don't drink"
+    ],
+    "inferred_type": "open_end"
+  },
+  {
+    "q_num": 24,
+    "question_text": "Thinking about wine specifically \u2014 to what degree does each of the following describe your experience of the wine category?",
+    "n_items": 9,
+    "col_range": [
+      248,
+      256
+    ],
+    "items": [
+      {
+        "col_idx": 248,
+        "item_name": "Wine feels like it was made for people like me",
+        "raw": "Wine feels like it was made for people like me:Thinking about wine specifically \u2014 to what degree does each of the following describe your experience of the wine category?"
+      },
+      {
+        "col_idx": 249,
+        "item_name": "Choosing wine confidently feels out of reach without expert knowledge",
+        "raw": "Choosing wine confidently feels out of reach without expert knowledge:Thinking about wine specifically \u2014 to what degree does each of the following describe your experience of the wine category?"
+      },
+      {
+        "col_idx": 250,
+        "item_name": "Wine has a culture of gatekeeping that can feel unwelcoming",
+        "raw": "Wine has a culture of gatekeeping that can feel unwelcoming:Thinking about wine specifically \u2014 to what degree does each of the following describe your experience of the wine category?"
+      },
+      {
+        "col_idx": 251,
+        "item_name": "I think of wine as something that gets better the more you learn about it",
+        "raw": "I think of wine as something that gets better the more you learn about it:Thinking about wine specifically \u2014 to what degree does each of the following describe your experience of the wine category?"
+      },
+      {
+        "col_idx": 252,
+        "item_name": "Wine feels like a category that is genuinely evolving and becoming more relevant",
+        "raw": "Wine feels like a category that is genuinely evolving and becoming more relevant:Thinking about wine specifically \u2014 to what degree does each of the following describe your experience of the wine category?"
+      },
+      {
+        "col_idx": 253,
+        "item_name": "The wine industry speaks to me and people like me",
+        "raw": "The wine industry speaks to me and people like me:Thinking about wine specifically \u2014 to what degree does each of the following describe your experience of the wine category?"
+      },
+      {
+        "col_idx": 254,
+        "item_name": "Wine is a category I would like to explore more if it was easier to start exploring",
+        "raw": "Wine is a category I would like to explore more if it was easier to start exploring:Thinking about wine specifically \u2014 to what degree does each of the following describe your experience of the wine category?"
+      },
+      {
+        "col_idx": 255,
+        "item_name": "Non-alcoholic wine options are something I would genuinely consider",
+        "raw": "Non-alcoholic wine options are something I would genuinely consider:Thinking about wine specifically \u2014 to what degree does each of the following describe your experience of the wine category?"
+      },
+      {
+        "col_idx": 256,
+        "item_name": "The challenge of choosing a wine is a big part of the joy of wine",
+        "raw": "The challenge of choosing a wine is a big part of the joy of wine:Thinking about wine specifically \u2014 to what degree does each of the following describe your experience of the wine category?"
+      }
+    ],
+    "sample_values": [
+      "0 = Not at all",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5 = Describes perfectly"
+    ],
+    "inferred_type": "description_scale_0_to_5"
+  },
+  {
+    "q_num": 25,
+    "question_text": "Thinking about the wine you have most enjoyed \u2014 or the wine experience that has most stayed with you \u2014 what made it memorable?\u00a0",
+    "n_items": 1,
+    "col_range": [
+      257,
+      257
+    ],
+    "items": [
+      {
+        "col_idx": 257,
+        "item_name": null,
+        "raw": "Thinking about the wine you have most enjoyed \u2014 or the wine experience that has most stayed with you \u2014 what made it memorable?\u00a0"
+      }
+    ],
+    "sample_values": [
+      " Had wine on my anniversary at a very nice place",
+      " Visiting wineries ",
+      "?",
+      "A great tasting wine served in a comfortable atmosphere",
+      "A memorable experience I had with wine was when I went out with my friends and we tried very good wines",
+      "Awesome stuff ",
+      "BEING WITH FAMILY WHILE ENJOYING IT",
+      "Being introduced to a really good Argentinian wine",
+      "Being with family eating a good meal and great wine",
+      "Being with friends",
+      "Blueberry wine with my boyfriend on our first date was lovely",
+      "Boones farm strawberry hill in high school till I puked",
+      "Cupcake wine is great. ",
+      "Discovering a wine I liked everything about it and repeatedly purchasing it.",
+      "Discovering it at a winery with my friends. "
+    ],
+    "inferred_type": "open_end"
+  },
+  {
+    "q_num": 26,
+    "question_text": "When you think about how wine fits into your life and identity, which of the following feels most true for you? (Select up to two.)",
+    "n_items": 7,
+    "col_range": [
+      258,
+      264
+    ],
+    "items": [
+      {
+        "col_idx": 258,
+        "item_name": "Wine is a genuine passion \u2014 it is a significant part of who I am",
+        "raw": "Wine is a genuine passion \u2014 it is a significant part of who I am:When you think about how wine fits into your life and identity, which of the following feels most true for you? (Select up to two.)"
+      },
+      {
+        "col_idx": 259,
+        "item_name": "Wine is something I enjoy when the occasion calls for it, but it is not central to my identity",
+        "raw": "Wine is something I enjoy when the occasion calls for it, but it is not central to my identity:When you think about how wine fits into your life and identity, which of the following feels most true for you? (Select up to two.)"
+      },
+      {
+        "col_idx": 260,
+        "item_name": "Wine is something I am curious about and would like to explore more",
+        "raw": "Wine is something I am curious about and would like to explore more:When you think about how wine fits into your life and identity, which of the following feels most true for you? (Select up to two.)"
+      },
+      {
+        "col_idx": 261,
+        "item_name": "Wine is something I tolerate or go along with in social situations",
+        "raw": "Wine is something I tolerate or go along with in social situations:When you think about how wine fits into your life and identity, which of the following feels most true for you? (Select up to two.)"
+      },
+      {
+        "col_idx": 262,
+        "item_name": "Wine feels like it belongs to a different generation or lifestyle than mine",
+        "raw": "Wine feels like it belongs to a different generation or lifestyle than mine:When you think about how wine fits into your life and identity, which of the following feels most true for you? (Select up to two.)"
+      },
+      {
+        "col_idx": 263,
+        "item_name": "Wine is something I have consciously moved away from",
+        "raw": "Wine is something I have consciously moved away from:When you think about how wine fits into your life and identity, which of the following feels most true for you? (Select up to two.)"
+      },
+      {
+        "col_idx": 264,
+        "item_name": "Wine is simply not something I think about much",
+        "raw": "Wine is simply not something I think about much:When you think about how wine fits into your life and identity, which of the following feels most true for you? (Select up to two.)"
+      }
+    ],
+    "sample_values": [
+      "Wine feels like it belongs to a different generation or lifestyle than mine",
+      "Wine is a genuine passion \u2014 it is a significant part of who I am",
+      "Wine is simply not something I think about much",
+      "Wine is something I am curious about and would like to explore more",
+      "Wine is something I enjoy when the occasion calls for it, but it is not central to my identity",
+      "Wine is something I have consciously moved away from",
+      "Wine is something I tolerate or go along with in social situations"
+    ],
+    "inferred_type": "multi_select"
+  },
+  {
+    "q_num": 27,
+    "question_text": "How much do you agree with each of the following statements about the direction wine is heading as a category?",
+    "n_items": 7,
+    "col_range": [
+      265,
+      271
+    ],
+    "items": [
+      {
+        "col_idx": 265,
+        "item_name": "Wine is becoming more accessible and welcoming to new drinkers",
+        "raw": "Wine is becoming more accessible and welcoming to new drinkers:How much do you agree with each of the following statements about the direction wine is heading as a category?\u00a0"
+      },
+      {
+        "col_idx": 266,
+        "item_name": "Wine is losing relevance with younger generations",
+        "raw": "Wine is losing relevance with younger generations:How much do you agree with each of the following statements about the direction wine is heading as a category?\u00a0"
+      },
+      {
+        "col_idx": 267,
+        "item_name": "The growth of non-alcoholic wine options is making the category more interesting",
+        "raw": "The growth of non-alcoholic wine options is making the category more interesting:How much do you agree with each of the following statements about the direction wine is heading as a category?\u00a0"
+      },
+      {
+        "col_idx": 268,
+        "item_name": "Wine has a story and a craft that other beverages cannot match",
+        "raw": "Wine has a story and a craft that other beverages cannot match:How much do you agree with each of the following statements about the direction wine is heading as a category?\u00a0"
+      },
+      {
+        "col_idx": 269,
+        "item_name": "Social media and apps have made choosing wine less intimidating",
+        "raw": "Social media and apps have made choosing wine less intimidating:How much do you agree with each of the following statements about the direction wine is heading as a category?\u00a0"
+      },
+      {
+        "col_idx": 270,
+        "item_name": "Wine culture still needs to do more to feel genuinely inclusive",
+        "raw": "Wine culture still needs to do more to feel genuinely inclusive:How much do you agree with each of the following statements about the direction wine is heading as a category?\u00a0"
+      },
+      {
+        "col_idx": 271,
+        "item_name": "I believe wine can be for everyone, regardless of age, background, or expertise",
+        "raw": "I believe wine can be for everyone, regardless of age, background, or expertise:How much do you agree with each of the following statements about the direction wine is heading as a category?\u00a0"
+      }
+    ],
+    "sample_values": [
+      "0 = Strongly Disagree",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5 = Strongly Agree",
+      "Don't Know"
+    ],
+    "inferred_type": "multi_select"
+  },
+  {
+    "q_num": 28,
+    "question_text": "In what price range are the BOTTLES of wine you most frequently purchase at STORES?",
+    "n_items": 1,
+    "col_range": [
+      272,
+      272
+    ],
+    "items": [
+      {
+        "col_idx": 272,
+        "item_name": null,
+        "raw": "In what price range are the BOTTLES of wine you most frequently purchase at STORES?"
+      }
+    ],
+    "sample_values": [
+      "$10 to $15",
+      "$15 to $20",
+      "$20 to $30",
+      "$30 to $50",
+      "$5 to $10",
+      "Less than $5",
+      "Not applicable",
+      "Over $50"
+    ],
+    "inferred_type": "mixed"
+  },
+  {
+    "q_num": 29,
+    "question_text": "In what price range are the GLASSES of wine you most frequently purchase at bars or restaurants?",
+    "n_items": 1,
+    "col_range": [
+      273,
+      273
+    ],
+    "items": [
+      {
+        "col_idx": 273,
+        "item_name": null,
+        "raw": "In what price range are the GLASSES of wine you most frequently purchase at bars or restaurants?"
+      }
+    ],
+    "sample_values": [
+      "$10 to $15",
+      "$15 to $20",
+      "$5 to $10",
+      "Less than $5",
+      "Not applicable",
+      "Over $20"
+    ],
+    "inferred_type": "mixed"
+  },
+  {
+    "q_num": 30,
+    "question_text": "We have asked you about two very different topics \u2014 banking and wine. Looking across both, which of the following comes closest to how you feel about traditional, established categories like these? (Select one.)",
+    "n_items": 1,
+    "col_range": [
+      274,
+      274
+    ],
+    "items": [
+      {
+        "col_idx": 274,
+        "item_name": null,
+        "raw": "We have asked you about two very different topics \u2014 banking and wine. Looking across both, which of the following comes closest to how you feel about traditional, established categories like these? (Select one.)"
+      }
+    ],
+    "sample_values": [
+      "I am generally drawn to newer, more modern alternatives over traditional ones",
+      "I am open to both traditional and newer options depending on what works best",
+      "I value what is established and trusted \u2014 heritage and track record matter to me",
+      "It depends entirely on the category \u2014 I do not have a general preference"
+    ],
+    "inferred_type": "single_select"
+  },
+  {
+    "q_num": 31,
+    "question_text": "Thinking across all the categories and brands that are part of your life \u2014 from banking to food and drink to entertainment \u2014 which of the following types of joy do you most want the things you choose to bring you? (Select your top three.)",
+    "n_items": 10,
+    "col_range": [
+      275,
+      284
+    ],
+    "items": [
+      {
+        "col_idx": 275,
+        "item_name": "Playful joy \u2014 fun, lighthearted, and spontaneous",
+        "raw": "Playful joy \u2014 fun, lighthearted, and spontaneous:Thinking across all the categories and brands that are part of your life \u2014 from banking to food and drink to entertainment \u2014 which of the following types of joy do you most want the things you choose to bring you? (Select your top three.)"
+      },
+      {
+        "col_idx": 276,
+        "item_name": "Aesthetic joy \u2014 beautiful, thoughtfully crafted, and sensory",
+        "raw": "Aesthetic joy \u2014 beautiful, thoughtfully crafted, and sensory:Thinking across all the categories and brands that are part of your life \u2014 from banking to food and drink to entertainment \u2014 which of the following types of joy do you most want the things you choose to bring you? (Select your top three.)"
+      },
+      {
+        "col_idx": 277,
+        "item_name": "Hedonic joy \u2014 pure pleasure in the moment",
+        "raw": "Hedonic joy \u2014 pure pleasure in the moment:Thinking across all the categories and brands that are part of your life \u2014 from banking to food and drink to entertainment \u2014 which of the following types of joy do you most want the things you choose to bring you? (Select your top three.)"
+      },
+      {
+        "col_idx": 278,
+        "item_name": "Relational joy \u2014 connecting me more deeply with people I care about",
+        "raw": "Relational joy \u2014 connecting me more deeply with people I care about:Thinking across all the categories and brands that are part of your life \u2014 from banking to food and drink to entertainment \u2014 which of the following types of joy do you most want the things you choose to bring you? (Select your top three.)"
+      },
+      {
+        "col_idx": 279,
+        "item_name": "Achievement joy \u2014 making me feel capable, knowledgeable, and in control",
+        "raw": "Achievement joy \u2014 making me feel capable, knowledgeable, and in control:Thinking across all the categories and brands that are part of your life \u2014 from banking to food and drink to entertainment \u2014 which of the following types of joy do you most want the things you choose to bring you? (Select your top three.)"
+      },
+      {
+        "col_idx": 280,
+        "item_name": "Freedom joy \u2014 giving me a feeling of independence and open possibility",
+        "raw": "Freedom joy \u2014 giving me a feeling of independence and open possibility:Thinking across all the categories and brands that are part of your life \u2014 from banking to food and drink to entertainment \u2014 which of the following types of joy do you most want the things you choose to bring you? (Select your top three.)"
+      },
+      {
+        "col_idx": 281,
+        "item_name": "Awe \u2014 occasionally stopping me in my tracks with something extraordinary",
+        "raw": "Awe \u2014 occasionally stopping me in my tracks with something extraordinary:Thinking across all the categories and brands that are part of your life \u2014 from banking to food and drink to entertainment \u2014 which of the following types of joy do you most want the things you choose to bring you? (Select your top three.)"
+      },
+      {
+        "col_idx": 282,
+        "item_name": "Inspirational joy \u2014 sparking my curiosity and motivating me to learn and grow",
+        "raw": "Inspirational joy \u2014 sparking my curiosity and motivating me to learn and grow:Thinking across all the categories and brands that are part of your life \u2014 from banking to food and drink to entertainment \u2014 which of the following types of joy do you most want the things you choose to bring you? (Select your top three.)"
+      },
+      {
+        "col_idx": 283,
+        "item_name": "Sentimental joy \u2014 connecting me to memories, people, and the past",
+        "raw": "Sentimental joy \u2014 connecting me to memories, people, and the past:Thinking across all the categories and brands that are part of your life \u2014 from banking to food and drink to entertainment \u2014 which of the following types of joy do you most want the things you choose to bring you? (Select your top three.)"
+      },
+      {
+        "col_idx": 284,
+        "item_name": "Self-actualization joy \u2014 aligning with my deepest values and sense of purpose",
+        "raw": "Self-actualization joy \u2014 aligning with my deepest values and sense of purpose:Thinking across all the categories and brands that are part of your life \u2014 from banking to food and drink to entertainment \u2014 which of the following types of joy do you most want the things you choose to bring you? (Select your top three.)"
+      }
+    ],
+    "sample_values": [
+      "Achievement joy \u2014 making me feel capable, knowledgeable, and in control",
+      "Aesthetic joy \u2014 beautiful, thoughtfully crafted, and sensory",
+      "Awe \u2014 occasionally stopping me in my tracks with something extraordinary",
+      "Freedom joy \u2014 giving me a feeling of independence and open possibility",
+      "Hedonic joy \u2014 pure pleasure in the moment",
+      "Inspirational joy \u2014 sparking my curiosity and motivating me to learn and grow",
+      "Playful joy \u2014 fun, lighthearted, and spontaneous",
+      "Relational joy \u2014 connecting me more deeply with people I care about",
+      "Self-actualization joy \u2014 aligning with my deepest values and sense of purpose",
+      "Sentimental joy \u2014 connecting me to memories, people, and the past"
+    ],
+    "inferred_type": "multi_select"
+  }
+]
