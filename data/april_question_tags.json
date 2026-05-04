@@ -1,0 +1,317 @@
+[
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "banking_relationship",
+      "account_consolidation",
+      "primary_bank_selection"
+    ],
+    "short_label": "Current banking situation and account structure",
+    "confidence": "high"
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "financial_institution_types",
+      "banking_channels",
+      "neobank_adoption"
+    ],
+    "short_label": "Types of financial institutions currently used",
+    "confidence": "high"
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "banking_tenure",
+      "customer_longevity",
+      "relationship_duration"
+    ],
+    "short_label": "Length of relationship with primary bank",
+    "confidence": "high"
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "account_opening_triggers",
+      "switching_motivations",
+      "life_changes"
+    ],
+    "short_label": "Reasons for opening new bank accounts",
+    "confidence": "high"
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "banking_joy_drivers",
+      "emotional_satisfaction",
+      "trust_signals"
+    ],
+    "short_label": "Joy sources in banking relationships",
+    "confidence": "high"
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "bank_selection_criteria",
+      "feature_importance",
+      "decision_factors"
+    ],
+    "short_label": "Importance of bank selection factors",
+    "confidence": "high"
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "banking_relationship_quality",
+      "trust_assessment",
+      "loyalty_drivers"
+    ],
+    "short_label": "Satisfaction with primary banking relationship",
+    "confidence": "high"
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "banking_switching_behavior",
+      "account_changes",
+      "primary_bank_retention"
+    ],
+    "short_label": "Bank switching and relationship changes",
+    "confidence": "high"
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "switching_reasons",
+      "dissatisfaction_factors",
+      "competitive_alternatives"
+    ],
+    "short_label": "Primary reasons for switching banks",
+    "confidence": "high"
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "retention_drivers",
+      "switching_barriers",
+      "loyalty_factors"
+    ],
+    "short_label": "Reasons for staying with current bank",
+    "confidence": "high"
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "banking_emotional_benefits",
+      "psychological_satisfaction",
+      "joy_types"
+    ],
+    "short_label": "Emotional joy from banking relationships",
+    "confidence": "high"
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "financial_confidence",
+      "system_trust",
+      "money_attitudes"
+    ],
+    "short_label": "General attitudes toward money and financial institutions",
+    "confidence": "high"
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "banking_expectations",
+      "personalization_desires",
+      "customer_feedback"
+    ],
+    "short_label": "Desired improvements in banking experience",
+    "confidence": "high"
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_consumption_frequency",
+      "drinking_patterns",
+      "category_engagement"
+    ],
+    "short_label": "Wine drinking frequency and relationship",
+    "confidence": "high"
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_consumption_occasions",
+      "usage_contexts",
+      "drinking_situations"
+    ],
+    "short_label": "Occasions for drinking wine",
+    "confidence": "high"
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_consumption_trends",
+      "behavior_change",
+      "drinking_trajectory"
+    ],
+    "short_label": "Changes in wine consumption over time",
+    "confidence": "high"
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_drinking_decreased_reasons",
+      "consumption_barriers",
+      "category_resistance"
+    ],
+    "short_label": "Reasons for decreased wine consumption",
+    "confidence": "high"
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_tasting_joy",
+      "sensory_pleasure",
+      "discovery_satisfaction"
+    ],
+    "short_label": "Joy sources from wine drinking",
+    "confidence": "high",
+    "_override_note": "Eli review: wine-specific questions stay with the wine battery's primary_topic for study cohesion."
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_emotional_benefits",
+      "joy_types",
+      "psychological_satisfaction"
+    ],
+    "short_label": "Types of joy wine brings to life",
+    "confidence": "high",
+    "_override_note": "Eli review: wine-specific questions stay with the wine battery's primary_topic for study cohesion."
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "beverage_choice_joy",
+      "drink_selection",
+      "relaxation_beverages"
+    ],
+    "short_label": "Joy from choosing different beverages",
+    "confidence": "high"
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "beverage_selection_criteria",
+      "decision_importance",
+      "purchase_factors"
+    ],
+    "short_label": "Importance of drink selection factors",
+    "confidence": "high"
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_category_barriers",
+      "consumption_obstacles",
+      "preference_drivers"
+    ],
+    "short_label": "Reasons for choosing alternatives to wine",
+    "confidence": "high"
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_category_improvement",
+      "consumption_incentives",
+      "category_evolution"
+    ],
+    "short_label": "Factors that would increase wine consumption",
+    "confidence": "high"
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_category_perception",
+      "accessibility_beliefs",
+      "gatekeeping_concerns"
+    ],
+    "short_label": "Perceptions of wine as a category",
+    "confidence": "high"
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "memorable_wine_experiences",
+      "emotional_resonance",
+      "experience_narratives"
+    ],
+    "short_label": "Memorable wine experiences and moments",
+    "confidence": "high",
+    "_override_note": "Eli review: wine-specific questions stay with the wine battery's primary_topic for study cohesion."
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_identity_role",
+      "category_relevance",
+      "lifestyle_alignment"
+    ],
+    "short_label": "Wine's role in personal identity",
+    "confidence": "high"
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_category_outlook",
+      "industry_trends",
+      "generational_relevance"
+    ],
+    "short_label": "Beliefs about wine category direction",
+    "confidence": "high"
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_price_sensitivity",
+      "retail_spending",
+      "purchase_price_point"
+    ],
+    "short_label": "Wine bottle price range preferences",
+    "confidence": "high"
+  },
+  {
+    "primary_topic": "food_beverage",
+    "subtags": [
+      "wine_on_premise_pricing",
+      "restaurant_spending",
+      "glass_price_point"
+    ],
+    "short_label": "Wine glass price range at on-premise venues",
+    "confidence": "high"
+  },
+  {
+    "primary_topic": "financial_services",
+    "subtags": [
+      "legacy_vs_challenger",
+      "consumer_attitudes",
+      "banking",
+      "wine"
+    ],
+    "short_label": "Legacy versus challenger brand preference across categories",
+    "confidence": "high",
+    "_override_note": "Eli review: the question's strategic intent is consumer attitudes on legacy vs challenger brands in the financial category, with banking and wine used as exemplar categories. primary_topic=financial_services; subtags carry the legacy_vs_challenger angle plus both category contexts so investigator queries scoped to either category surface this question."
+  },
+  {
+    "primary_topic": "general_joy",
+    "subtags": [
+      "joy_type_priorities",
+      "life_satisfaction_drivers",
+      "emotional_benefits"
+    ],
+    "short_label": "Top joy types desired across all categories",
+    "confidence": "high"
+  }
+]
