@@ -18,12 +18,13 @@
       "institution_type",
       "national_bank"
     ],
-    "is_brand": true,
-    "canonical_brand": "Chase, Bank of America, Wells Fargo",
+    "is_brand": false,
+    "canonical_brand": null,
     "confidence": "high",
     "col_idx": 85,
     "item_name": "A national bank (such as Chase, Bank of America, or Wells Fargo)",
-    "q_num": 2
+    "q_num": 2,
+    "_override_note": "Eli review: items are brand categories with examples, not specific brands. is_brand=false, canonical_brand=null. Brand search still surfaces via item_name text match."
   },
   {
     "primary_topic": "financial_services",
@@ -57,12 +58,13 @@
       "institution_type",
       "online_bank"
     ],
-    "is_brand": true,
-    "canonical_brand": "Ally, Marcus, Discover",
+    "is_brand": false,
+    "canonical_brand": null,
     "confidence": "high",
     "col_idx": 88,
     "item_name": "An online-only bank (such as Ally, Marcus, or Discover)",
-    "q_num": 2
+    "q_num": 2,
+    "_override_note": "Eli review: items are brand categories with examples, not specific brands. is_brand=false, canonical_brand=null. Brand search still surfaces via item_name text match."
   },
   {
     "primary_topic": "financial_services",
@@ -70,12 +72,13 @@
       "institution_type",
       "neobank_fintech"
     ],
-    "is_brand": true,
-    "canonical_brand": "Chime, SoFi, Cash App, Venmo",
+    "is_brand": false,
+    "canonical_brand": null,
     "confidence": "high",
     "col_idx": 89,
     "item_name": "A neobank or fintech app (such as Chime, SoFi, Cash App, or Venmo)",
-    "q_num": 2
+    "q_num": 2,
+    "_override_note": "Eli review: items are brand categories with examples, not specific brands. is_brand=false, canonical_brand=null. Brand search still surfaces via item_name text match."
   },
   {
     "primary_topic": "financial_services",
@@ -83,12 +86,13 @@
       "institution_type",
       "brokerage_banking"
     ],
-    "is_brand": true,
-    "canonical_brand": "Fidelity, Charles Schwab",
+    "is_brand": false,
+    "canonical_brand": null,
     "confidence": "high",
     "col_idx": 90,
     "item_name": "A brokerage with banking features (such as Fidelity or Charles Schwab)",
-    "q_num": 2
+    "q_num": 2,
+    "_override_note": "Eli review: items are brand categories with examples, not specific brands. is_brand=false, canonical_brand=null. Brand search still surfaces via item_name text match."
   },
   {
     "primary_topic": "financial_services",
@@ -1420,7 +1424,7 @@
     "q_num": 17
   },
   {
-    "primary_topic": "food_joy",
+    "primary_topic": "food_beverage",
     "subtags": [
       "taste_pleasure",
       "sensory_enjoyment",
@@ -1431,10 +1435,11 @@
     "confidence": "high",
     "col_idx": 191,
     "item_name": "The pleasure of a glass that tastes exactly right in the moment",
-    "q_num": 18
+    "q_num": 18,
+    "_override_note": "Eli review: parent question moved to food_beverage; item inherits."
   },
   {
-    "primary_topic": "food_joy",
+    "primary_topic": "food_beverage",
     "subtags": [
       "discovery",
       "wine_exploration",
@@ -1445,10 +1450,11 @@
     "confidence": "high",
     "col_idx": 192,
     "item_name": "The feeling of discovering a wine you love that you had never tried before",
-    "q_num": 18
+    "q_num": 18,
+    "_override_note": "Eli review: parent question moved to food_beverage; item inherits."
   },
   {
-    "primary_topic": "food_joy",
+    "primary_topic": "food_beverage",
     "subtags": [
       "social_sharing",
       "wine_togetherness",
@@ -1459,10 +1465,11 @@
     "confidence": "high",
     "col_idx": 193,
     "item_name": "Sharing a bottle with people you care about",
-    "q_num": 18
+    "q_num": 18,
+    "_override_note": "Eli review: parent question moved to food_beverage; item inherits."
   },
   {
-    "primary_topic": "food_joy",
+    "primary_topic": "food_beverage",
     "subtags": [
       "learning",
       "wine_education",
@@ -1473,10 +1480,11 @@
     "confidence": "high",
     "col_idx": 194,
     "item_name": "Learning something new about wine, a region, or how it is made",
-    "q_num": 18
+    "q_num": 18,
+    "_override_note": "Eli review: parent question moved to food_beverage; item inherits."
   },
   {
-    "primary_topic": "food_joy",
+    "primary_topic": "food_beverage",
     "subtags": [
       "elevation",
       "meal_enhancement",
@@ -1487,10 +1495,11 @@
     "confidence": "high",
     "col_idx": 195,
     "item_name": "The way a good wine makes an ordinary meal feel special",
-    "q_num": 18
+    "q_num": 18,
+    "_override_note": "Eli review: parent question moved to food_beverage; item inherits."
   },
   {
-    "primary_topic": "food_joy",
+    "primary_topic": "food_beverage",
     "subtags": [
       "craftsmanship_appreciation",
       "quality_value",
@@ -1501,10 +1510,11 @@
     "confidence": "high",
     "col_idx": 196,
     "item_name": "Being someone who appreciates beautiful, well-crafted things",
-    "q_num": 18
+    "q_num": 18,
+    "_override_note": "Eli review: parent question moved to food_beverage; item inherits."
   },
   {
-    "primary_topic": "food_joy",
+    "primary_topic": "food_beverage",
     "subtags": [
       "cultural_connection",
       "place_story",
@@ -1515,10 +1525,11 @@
     "confidence": "high",
     "col_idx": 197,
     "item_name": "Connecting with a place, a culture, or a story through what is in the glass",
-    "q_num": 18
+    "q_num": 18,
+    "_override_note": "Eli review: parent question moved to food_beverage; item inherits."
   },
   {
-    "primary_topic": "food_joy",
+    "primary_topic": "food_beverage",
     "subtags": [
       "ritual_ceremony",
       "anticipation",
@@ -1529,10 +1540,11 @@
     "confidence": "high",
     "col_idx": 198,
     "item_name": "The ritual of opening a bottle \u2014 the ceremony and the anticipation",
-    "q_num": 18
+    "q_num": 18,
+    "_override_note": "Eli review: parent question moved to food_beverage; item inherits."
   },
   {
-    "primary_topic": "food_joy",
+    "primary_topic": "food_beverage",
     "subtags": [
       "value_discovery",
       "price_quality",
@@ -1543,10 +1555,11 @@
     "confidence": "high",
     "col_idx": 199,
     "item_name": "Finding a wine that is excellent at a surprisingly good price",
-    "q_num": 18
+    "q_num": 18,
+    "_override_note": "Eli review: parent question moved to food_beverage; item inherits."
   },
   {
-    "primary_topic": "food_joy",
+    "primary_topic": "food_beverage",
     "subtags": [
       "mindfulness",
       "presence",
@@ -1557,10 +1570,11 @@
     "confidence": "high",
     "col_idx": 200,
     "item_name": "The feeling that wine slows things down and invites you to be present",
-    "q_num": 18
+    "q_num": 18,
+    "_override_note": "Eli review: parent question moved to food_beverage; item inherits."
   },
   {
-    "primary_topic": "food_joy",
+    "primary_topic": "food_beverage",
     "subtags": [
       "knowledge_sharing",
       "expertise",
@@ -1571,10 +1585,11 @@
     "confidence": "high",
     "col_idx": 201,
     "item_name": "Sharing your wine knowledge with others",
-    "q_num": 18
+    "q_num": 18,
+    "_override_note": "Eli review: parent question moved to food_beverage; item inherits."
   },
   {
-    "primary_topic": "food_joy",
+    "primary_topic": "food_beverage",
     "subtags": [
       "expertise",
       "authority",
@@ -1585,10 +1600,11 @@
     "confidence": "high",
     "col_idx": 202,
     "item_name": "Being a wine expert among your social circle",
-    "q_num": 18
+    "q_num": 18,
+    "_override_note": "Eli review: parent question moved to food_beverage; item inherits."
   },
   {
-    "primary_topic": "food_joy",
+    "primary_topic": "food_beverage",
     "subtags": [
       "playfulness",
       "fun",
@@ -1600,10 +1616,11 @@
     "confidence": "high",
     "col_idx": 203,
     "item_name": "Playful \u2014 it is fun, lighthearted, and unpretentious",
-    "q_num": 19
+    "q_num": 19,
+    "_override_note": "Eli review: parent question moved to food_beverage; item inherits."
   },
   {
-    "primary_topic": "food_joy",
+    "primary_topic": "food_beverage",
     "subtags": [
       "aesthetic_beauty",
       "sensory_craft",
@@ -1614,10 +1631,11 @@
     "confidence": "high",
     "col_idx": 204,
     "item_name": "Aesthetic \u2014 it is beautiful, sensory, and carefully crafted",
-    "q_num": 19
+    "q_num": 19,
+    "_override_note": "Eli review: parent question moved to food_beverage; item inherits."
   },
   {
-    "primary_topic": "food_joy",
+    "primary_topic": "food_beverage",
     "subtags": [
       "hedonism",
       "sensory_pleasure",
@@ -1628,10 +1646,11 @@
     "confidence": "high",
     "col_idx": 205,
     "item_name": "Hedonic \u2014 pure sensory pleasure in the moment",
-    "q_num": 19
+    "q_num": 19,
+    "_override_note": "Eli review: parent question moved to food_beverage; item inherits."
   },
   {
-    "primary_topic": "food_joy",
+    "primary_topic": "food_beverage",
     "subtags": [
       "wine_joy",
       "sentimental_connection",
@@ -1642,10 +1661,11 @@
     "confidence": "high",
     "col_idx": 206,
     "item_name": "Sentimental \u2014 it connects me to memories, people, or places",
-    "q_num": 19
+    "q_num": 19,
+    "_override_note": "Eli review: parent question moved to food_beverage; item inherits."
   },
   {
-    "primary_topic": "food_joy",
+    "primary_topic": "food_beverage",
     "subtags": [
       "wine_joy",
       "social_connection",
@@ -1656,10 +1676,11 @@
     "confidence": "high",
     "col_idx": 207,
     "item_name": "Relational \u2014 it brings me closer to the people I share it with",
-    "q_num": 19
+    "q_num": 19,
+    "_override_note": "Eli review: parent question moved to food_beverage; item inherits."
   },
   {
-    "primary_topic": "food_joy",
+    "primary_topic": "food_beverage",
     "subtags": [
       "wine_joy",
       "achievement",
@@ -1670,10 +1691,11 @@
     "confidence": "high",
     "col_idx": 208,
     "item_name": "Achievement \u2014 I feel capable and knowledgeable when I choose well",
-    "q_num": 19
+    "q_num": 19,
+    "_override_note": "Eli review: parent question moved to food_beverage; item inherits."
   },
   {
-    "primary_topic": "food_joy",
+    "primary_topic": "food_beverage",
     "subtags": [
       "wine_joy",
       "freedom",
@@ -1684,10 +1706,11 @@
     "confidence": "high",
     "col_idx": 209,
     "item_name": "Freedom \u2014 it represents leisure, indulgence, and time that is mine",
-    "q_num": 19
+    "q_num": 19,
+    "_override_note": "Eli review: parent question moved to food_beverage; item inherits."
   },
   {
-    "primary_topic": "food_joy",
+    "primary_topic": "food_beverage",
     "subtags": [
       "wine_joy",
       "awe",
@@ -1698,10 +1721,11 @@
     "confidence": "high",
     "col_idx": 210,
     "item_name": "Awe \u2014 certain wines genuinely amaze me with their complexity or quality",
-    "q_num": 19
+    "q_num": 19,
+    "_override_note": "Eli review: parent question moved to food_beverage; item inherits."
   },
   {
-    "primary_topic": "food_joy",
+    "primary_topic": "food_beverage",
     "subtags": [
       "wine_joy",
       "inspiration",
@@ -1712,10 +1736,11 @@
     "confidence": "high",
     "col_idx": 211,
     "item_name": "Inspiration \u2014 wine makes me curious and motivated to learn and discover more",
-    "q_num": 19
+    "q_num": 19,
+    "_override_note": "Eli review: parent question moved to food_beverage; item inherits."
   },
   {
-    "primary_topic": "food_joy",
+    "primary_topic": "food_beverage",
     "subtags": [
       "wine_joy",
       "no_joy",
@@ -1726,7 +1751,8 @@
     "confidence": "high",
     "col_idx": 212,
     "item_name": "Wine does not bring me any particular type of joy",
-    "q_num": 19
+    "q_num": 19,
+    "_override_note": "Eli review: parent question moved to food_beverage; item inherits."
   },
   {
     "primary_topic": "food_beverage",
@@ -1819,12 +1845,13 @@
       "botanical_drinks",
       "non_alcoholic"
     ],
-    "is_brand": true,
-    "canonical_brand": "Seedlip, Ghia",
+    "is_brand": false,
+    "canonical_brand": null,
     "confidence": "medium",
     "col_idx": 219,
     "item_name": "Sparkling water or botanical drinks such as Seedlip or Ghia",
-    "q_num": 20
+    "q_num": 20,
+    "_override_note": "Eli review: items are brand categories with examples, not specific brands. is_brand=false, canonical_brand=null. Brand search still surfaces via item_name text match."
   },
   {
     "primary_topic": "food_beverage",
@@ -2337,7 +2364,7 @@
     "q_num": 24
   },
   {
-    "primary_topic": "food_joy",
+    "primary_topic": "food_beverage",
     "subtags": [
       "wine_experience",
       "no_response"
@@ -2347,7 +2374,8 @@
     "confidence": "high",
     "col_idx": 257,
     "item_name": null,
-    "q_num": 25
+    "q_num": 25,
+    "_override_note": "Eli review: parent question moved to food_beverage; item inherits."
   },
   {
     "primary_topic": "food_beverage",
@@ -2567,17 +2595,18 @@
     "q_num": 29
   },
   {
-    "primary_topic": "brand_trust",
+    "primary_topic": "financial_services",
     "subtags": [
-      "cross_category_comparison",
-      "no_response"
+      "legacy_vs_challenger",
+      "consumer_attitudes"
     ],
     "is_brand": false,
     "canonical_brand": null,
     "confidence": "high",
     "col_idx": 274,
     "item_name": null,
-    "q_num": 30
+    "q_num": 30,
+    "_override_note": "Eli review: parent Q30 moved to financial_services; item inherits."
   },
   {
     "primary_topic": "general_joy",

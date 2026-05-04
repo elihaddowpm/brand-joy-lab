@@ -170,24 +170,26 @@
     "confidence": "high"
   },
   {
-    "primary_topic": "food_joy",
+    "primary_topic": "food_beverage",
     "subtags": [
       "wine_tasting_joy",
       "sensory_pleasure",
       "discovery_satisfaction"
     ],
     "short_label": "Joy sources from wine drinking",
-    "confidence": "high"
+    "confidence": "high",
+    "_override_note": "Eli review: wine-specific questions stay with the wine battery's primary_topic for study cohesion."
   },
   {
-    "primary_topic": "food_joy",
+    "primary_topic": "food_beverage",
     "subtags": [
       "wine_emotional_benefits",
       "joy_types",
       "psychological_satisfaction"
     ],
     "short_label": "Types of joy wine brings to life",
-    "confidence": "high"
+    "confidence": "high",
+    "_override_note": "Eli review: wine-specific questions stay with the wine battery's primary_topic for study cohesion."
   },
   {
     "primary_topic": "food_beverage",
@@ -240,14 +242,15 @@
     "confidence": "high"
   },
   {
-    "primary_topic": "food_joy",
+    "primary_topic": "food_beverage",
     "subtags": [
       "memorable_wine_experiences",
       "emotional_resonance",
       "experience_narratives"
     ],
     "short_label": "Memorable wine experiences and moments",
-    "confidence": "high"
+    "confidence": "high",
+    "_override_note": "Eli review: wine-specific questions stay with the wine battery's primary_topic for study cohesion."
   },
   {
     "primary_topic": "food_beverage",
@@ -290,14 +293,16 @@
     "confidence": "high"
   },
   {
-    "primary_topic": "brand_trust",
+    "primary_topic": "financial_services",
     "subtags": [
-      "category_modernization_preference",
-      "traditional_vs_new",
-      "brand_philosophy"
+      "legacy_vs_challenger",
+      "consumer_attitudes",
+      "banking",
+      "wine"
     ],
-    "short_label": "Preference for established versus modern categories",
-    "confidence": "high"
+    "short_label": "Legacy versus challenger brand preference across categories",
+    "confidence": "high",
+    "_override_note": "Eli review: the question's strategic intent is consumer attitudes on legacy vs challenger brands in the financial category, with banking and wine used as exemplar categories. primary_topic=financial_services; subtags carry the legacy_vs_challenger angle plus both category contexts so investigator queries scoped to either category surface this question."
   },
   {
     "primary_topic": "general_joy",
