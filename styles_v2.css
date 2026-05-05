@@ -2001,3 +2001,73 @@ textarea { font-family: var(--font-text); }
   padding: 10px 24px;
   font-size: 14px;
 }
+
+/* ---------- Auth gate (login / rejected / loading) ---------- */
+/* Visual idiom mirrors the welcome modal — same card on the same wash —
+   so signing in feels like the normal entry to the tool, not a security
+   checkpoint. */
+.bjl-auth-shell {
+  position: fixed;
+  inset: 0;
+  background: var(--cloud);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.bjl-auth-card {
+  background: var(--cloud);
+  padding: 40px 48px 36px;
+  border-radius: 6px;
+  max-width: 440px;
+  width: calc(100% - 40px);
+  text-align: center;
+  box-shadow: 0 24px 80px -12px rgba(0,0,0,0.18);
+  animation: fadeIn 200ms ease;
+}
+.bjl-auth-logo {
+  width: 180px;
+  height: auto;
+  display: block;
+  margin: 0 auto 20px;
+}
+.bjl-auth-title {
+  font-family: var(--font-display);
+  font-size: 28px;
+  line-height: 1.1;
+  margin: 0 0 8px;
+  letter-spacing: -0.005em;
+}
+.bjl-auth-subtitle {
+  font-size: 15px;
+  color: var(--grey-2);
+  margin: 0 0 18px;
+  line-height: 1.45;
+}
+.bjl-auth-subtitle a { color: var(--iron); text-decoration: underline; }
+.bjl-auth-cta {
+  padding: 10px 24px;
+  font-size: 14px;
+  margin-top: 8px;
+}
+.bjl-auth-cta:disabled { opacity: 0.6; cursor: progress; }
+
+/* ---------- Top-bar user identity + sign-out ---------- */
+.bjl-user-menu {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 12px;
+  padding-left: 12px;
+  border-left: 1px solid var(--hairline);
+}
+.bjl-user-email {
+  font-size: 13px;
+  color: var(--grey-2);
+  max-width: 220px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bjl-user-signout { font-size: 13px; }
+
