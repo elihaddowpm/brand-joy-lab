@@ -385,13 +385,30 @@ async function runSynthesis(triage, scratch) {
   const systemPrompt = buildSynthesizerSystemPrompt(triage);
   const userMessage = `Investigator scratch (${scratch.length} entries):\n${JSON.stringify(scratch, null, 2)}\n\nProduce the response now as JSON: {"response_text": "...", "followup_chips": ["...", "...", "..."]}`;
 
+  // Output-volume cap: when any single investigator query returned more
+  // than HEAVY_RESULT_THRESHOLD rows, augment the synthesizer's system
+  // prompt at runtime to ask it to summarize + offer narrowing rather
+  // than enumerate. Prevents the 242-item joy-index dump symptom from a
+  // prior session, where a thorough investigation produced a query with
+  // n>200 rows that the synthesizer rendered as a literal list, hitting
+  // the max_tokens ceiling and truncating mid-line. This is gentler than
+  // a hard cap on the function side — the synthesizer can adapt response
+  // shape based on actual data volume rather than the function
+  // truncating output bytes after the fact.
+  const HEAVY_RESULT_THRESHOLD = 200;
+  const hasHeavyResult = Array.isArray(scratch)
+    && scratch.some(s => s && s.type === 'query' && (s.rowcount || 0) > HEAVY_RESULT_THRESHOLD);
+  const augmentedSystemPrompt = hasHeavyResult
+    ? `${systemPrompt}\n\n## OUTPUT VOLUME CAP\n\nNOTE: One or more queries returned more than ${HEAVY_RESULT_THRESHOLD} rows. Do NOT enumerate every row. Show the top 50 by relevance, total count, and add: "I can show more if you narrow the query — try filtering by [demographic/topic/etc]."`
+    : systemPrompt;
+
   const lengthKey = (triage && triage.response_length) || 'medium';
   const maxTokens = LENGTH_TO_MAX_TOKENS[lengthKey] || LENGTH_TO_MAX_TOKENS.medium;
 
   const response = await anthropic.messages.create({
     model: SONNET_MODEL,
     max_tokens: maxTokens,
-    system: systemPrompt,
+    system: augmentedSystemPrompt,
     messages: [{ role: 'user', content: userMessage }]
   });
 
