@@ -23,13 +23,16 @@
  */
 
 const { createClient } = require('@supabase/supabase-js');
+const { verifyAndAuthorize } = require('./bjl-auth-helper');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-const STATUS_COLUMNS = 'job_id, status, query_type, finding, scratch, query_count, error, created_at, completed_at, dispatch_status, dispatch_response_preview, triage_brief, triage_completed_at, followup_chips, clarifying_question';
+// auth_user_email included so we can verify the requester owns the job_id
+// they're polling (prevents users guessing each other's UUIDs).
+const STATUS_COLUMNS = 'job_id, status, query_type, finding, scratch, query_count, error, created_at, completed_at, dispatch_status, dispatch_response_preview, triage_brief, triage_completed_at, followup_chips, clarifying_question, auth_user_email';
 
 function deriveStage(row) {
   switch (row.status) {
@@ -47,6 +50,17 @@ exports.handler = async (event) => {
     return { statusCode: 405, body: JSON.stringify({ error: 'Method not allowed' }) };
   }
 
+  // Auth + whitelist gate. Bypass mode short-circuits for the pre-Azure-live
+  // deploy window — see bjl-auth-helper.js for the toggle.
+  const auth = await verifyAndAuthorize(event.headers.authorization || event.headers.Authorization);
+  if (!auth.ok) {
+    return {
+      statusCode: auth.status,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ error: auth.error, message: auth.message, email: auth.email })
+    };
+  }
+
   const jobId = (event.queryStringParameters && event.queryStringParameters.id) || null;
   if (!jobId) {
     return { statusCode: 400, body: JSON.stringify({ error: 'Missing id' }) };
@@ -60,6 +74,20 @@ exports.handler = async (event) => {
 
   if (error || !data) {
     return { statusCode: 404, body: JSON.stringify({ error: 'Job not found' }) };
+  }
+
+  // Ownership check: in enforced mode, non-admins can only poll jobs they
+  // submitted. Admins can poll anyone's job (useful for debugging).
+  // Bypass-mode jobs have auth_user_email = null, which all users can see.
+  if (auth.user
+      && data.auth_user_email
+      && data.auth_user_email !== auth.user.email
+      && auth.user.role !== 'admin') {
+    return {
+      statusCode: 403,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ error: 'not_your_job', message: 'This job belongs to another user.' })
+    };
   }
 
   // Watchdog: any job stuck in 'pending' for > 90s never had its background

@@ -16,6 +16,7 @@
  */
 
 const { createClient } = require('@supabase/supabase-js');
+const { verifyAndAuthorize } = require('./bjl-auth-helper');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY;
@@ -82,6 +83,46 @@ exports.handler = async (event) => {
     return { statusCode: 400, body: JSON.stringify({ error: 'Missing prompt or query' }) };
   }
 
+  // Auth + whitelist gate. In bypass mode (AUTH_ENFORCED !== 'true') this
+  // returns { ok: true, user: null, bypass: true } and the rest of the
+  // handler runs as it did before this PR — preserving the unauthenticated
+  // experience until the Azure provider goes live in Supabase Auth.
+  const auth = await verifyAndAuthorize(event.headers.authorization || event.headers.Authorization);
+  if (!auth.ok) {
+    return {
+      statusCode: auth.status,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ error: auth.error, message: auth.message, email: auth.email })
+    };
+  }
+
+  // Rate-limit check — only when auth is enforced. Counts the user's
+  // bjl_rate_limit_log rows in the trailing hour and rejects with HTTP 429
+  // if they're at or over their per-user cap.
+  if (auth.user) {
+    const oneHourAgo = new Date(Date.now() - 3600 * 1000).toISOString();
+    const { count, error: rlErr } = await supabase
+      .from('bjl_rate_limit_log')
+      .select('*', { count: 'exact', head: true })
+      .eq('auth_user_email', auth.user.email)
+      .gte('query_at', oneHourAgo);
+    if (rlErr) {
+      // Fail open on lookup error — better to let a query through than
+      // lock everyone out because a count() failed. Logged for ops.
+      console.error('[bjl-query] rate-limit lookup error (failing open):', rlErr);
+    } else if (typeof count === 'number' && count >= auth.user.rate_limit_per_hour) {
+      return {
+        statusCode: 429,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          error: 'rate_limit_exceeded',
+          message: `You've reached your hourly limit of ${auth.user.rate_limit_per_hour} queries. Try again in a bit, or contact Eli if you need a higher cap.`,
+          retry_after_seconds: 3600
+        })
+      };
+    }
+  }
+
   const { data: jobRow, error: insertErr } = await supabase
     .from('bjl_query_jobs')
     .insert({
@@ -89,7 +130,9 @@ exports.handler = async (event) => {
       query_type: norm.query_type,
       prompt: norm.prompt,
       extra_context: norm.extra_context,
-      prior_conversation_context: norm.prior_conversation_context
+      prior_conversation_context: norm.prior_conversation_context,
+      auth_user_id: auth.user ? auth.user.id : null,
+      auth_user_email: auth.user ? auth.user.email : null
     })
     .select('job_id')
     .single();
@@ -170,6 +213,20 @@ exports.handler = async (event) => {
     .from('bjl_query_jobs')
     .update({ dispatch_status: dispatchStatus })
     .eq('job_id', jobId);
+
+  // Per-user rate-limit log row. One row per accepted query. Used by the
+  // pre-insert count check at the top of the handler. Best-effort — a
+  // failed insert here doesn't break the user's query, just under-counts
+  // their usage in the next hour.
+  if (auth.user) {
+    const { error: logErr } = await supabase.from('bjl_rate_limit_log').insert({
+      auth_user_email: auth.user.email,
+      job_id: jobId
+    });
+    if (logErr) {
+      console.warn('[bjl-query] rate_limit_log insert failed (non-fatal):', logErr);
+    }
+  }
 
   return {
     statusCode: 202,

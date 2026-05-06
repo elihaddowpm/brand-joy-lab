@@ -16,6 +16,9 @@
   <script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <!-- Supabase JS client for Microsoft 365 SSO via Supabase Auth. Exposes
+       window.supabase.createClient. The AuthGate component below uses it. -->
+  <script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 
   <script type="text/babel" data-presets="env,react">
 /* =========================================================================
@@ -542,6 +545,41 @@ const parseBatchFile = (file) => {
 // browser when the tab was backgrounded), return the completed job instead
 // of timing out. Only throw the timeout error if the final check confirms
 // the job is still running.
+
+// Auth-aware fetch init helper. Reads the current Supabase session token
+// from window.__bjlAuth (populated by AuthGate further down in this file)
+// and attaches it as a Bearer header. Resolved at call time, not module
+// load, because the token can refresh mid-conversation. When auth is in
+// bypass mode (pre-Azure-live), getToken() returns null and no header is
+// attached — preserving the existing unauthenticated behavior.
+const authedFetchInit = (extraInit = {}) => {
+  const token = (typeof window !== "undefined" && window.__bjlAuth && window.__bjlAuth.getToken)
+    ? window.__bjlAuth.getToken()
+    : null;
+  const baseHeaders = extraInit.headers || {};
+  const headers = token
+    ? { ...baseHeaders, Authorization: "Bearer " + token }
+    : { ...baseHeaders };
+  return { ...extraInit, headers };
+};
+
+// Detect auth-related responses on the bjl-query path so the AuthGate can
+// kick the user back to the login screen (401 = session expired) or to a
+// rejected screen (403 not_whitelisted). Called from the queryBJL /
+// investigateQuery error paths below.
+const handleAuthErrorResponse = (status, body) => {
+  if (status === 401 && typeof window !== "undefined" && window.__bjlAuth && window.__bjlAuth.signOut) {
+    window.__bjlAuth.signOut();
+    return true;
+  }
+  if (status === 403 && body && body.error === "not_whitelisted"
+      && typeof window !== "undefined" && window.__bjlRejected) {
+    window.__bjlRejected(body.email || (body.user && body.user.email) || null);
+    return true;
+  }
+  return false;
+};
+
 const _bjlPollJob = async (jobId, signal, opts = {}) => {
   const pollIntervalMs = opts.pollIntervalMs || 2000;
   const hardCapMs = opts.hardCapMs || 10 * 60 * 1000;
@@ -554,13 +592,19 @@ const _bjlPollJob = async (jobId, signal, opts = {}) => {
   // or upstream CDN) can't serve stale 'running' responses. Without this,
   // some browsers will satisfy a poll from cache and the loop never observes
   // the backend's terminal-state transition.
-  const POLL_FETCH_OPTS = { signal, cache: "no-store", headers: { "Cache-Control": "no-cache" } };
+  // Wrapped in a function so the Authorization header is re-read each call
+  // (Supabase session tokens can refresh mid-investigation).
+  const pollFetchOpts = () => authedFetchInit({
+    signal,
+    cache: "no-store",
+    headers: { "Cache-Control": "no-cache" }
+  });
 
   // One-shot final status check used for both the hard-cap timeout path and
   // any other dead-end exit so we don't drop a finding the backend produced.
   const finalCheck = async () => {
     try {
-      const res = await fetch("/api/bjl-query-status?id=" + encodeURIComponent(jobId), POLL_FETCH_OPTS);
+      const res = await fetch("/api/bjl-query-status?id=" + encodeURIComponent(jobId), pollFetchOpts());
       if (!res.ok) return null;
       return await res.json();
     } catch { return null; }
@@ -593,9 +637,22 @@ const _bjlPollJob = async (jobId, signal, opts = {}) => {
     }
     await new Promise(r => setTimeout(r, pollIntervalMs));
     let res;
-    try { res = await fetch("/api/bjl-query-status?id=" + encodeURIComponent(jobId), POLL_FETCH_OPTS); }
+    try { res = await fetch("/api/bjl-query-status?id=" + encodeURIComponent(jobId), pollFetchOpts()); }
     catch (err) { onPollError({ phase: "poll_network", message: err.message }); continue; }
-    if (!res.ok) { onPollError({ phase: "poll_http", status: res.status }); continue; }
+    if (!res.ok) {
+      // Surface auth failures from the status poll (session expired mid-poll)
+      // so the AuthGate can re-render the login screen.
+      if (res.status === 401 || res.status === 403) {
+        let body = null;
+        try { body = await res.json(); } catch {}
+        if (handleAuthErrorResponse(res.status, body)) {
+          const e = new Error((body && body.message) || "Authentication required");
+          e.phase = "auth"; e.job_id = jobId; e.status = res.status; throw e;
+        }
+      }
+      onPollError({ phase: "poll_http", status: res.status });
+      continue;
+    }
     let job;
     try { job = await res.json(); } catch { continue; }
     if (job.status !== lastStatus) {
@@ -649,7 +706,7 @@ const queryBJL = async ({
 }) => {
   let enqueueRes;
   try {
-    enqueueRes = await fetch(endpoint, {
+    enqueueRes = await fetch(endpoint, authedFetchInit({
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -658,13 +715,14 @@ const queryBJL = async ({
         prior_conversation_context: priorConversationContext,
       }),
       signal,
-    });
+    }));
   } catch (err) { onError({ message: err.message, phase: "fetch" }); return; }
 
   if (!enqueueRes.ok && enqueueRes.status !== 202) {
     let errBody;
     try { errBody = await enqueueRes.json(); } catch { errBody = { error: enqueueRes.statusText }; }
-    onError({ message: errBody.error || "Enqueue failed", phase: "http", status: enqueueRes.status });
+    handleAuthErrorResponse(enqueueRes.status, errBody);
+    onError({ message: errBody.message || errBody.error || "Enqueue failed", phase: "http", status: enqueueRes.status, error_code: errBody.error });
     return;
   }
 
@@ -746,7 +804,7 @@ const investigateQuery = async ({
 }) => {
   let enqueueRes;
   try {
-    enqueueRes = await fetch(endpoint, {
+    enqueueRes = await fetch(endpoint, authedFetchInit({
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -754,13 +812,14 @@ const investigateQuery = async ({
         prior_conversation_context: priorConversationContext,
       }),
       signal,
-    });
+    }));
   } catch (err) { onError({ message: err.message, phase: "fetch" }); return; }
 
   if (!enqueueRes.ok && enqueueRes.status !== 202) {
     let errBody;
     try { errBody = await enqueueRes.json(); } catch { errBody = { error: enqueueRes.statusText }; }
-    onError({ message: errBody.error || "Enqueue failed", phase: "http", status: enqueueRes.status });
+    handleAuthErrorResponse(enqueueRes.status, errBody);
+    onError({ message: errBody.message || errBody.error || "Enqueue failed", phase: "http", status: enqueueRes.status, error_code: errBody.error });
     return;
   }
 
@@ -2422,7 +2481,7 @@ const WelcomeModal = ({ onDismiss }) => (
   </div>
 );
 
-const App = () => {
+const App = ({ authedUser = null, onSignOut = null } = {}) => {
   const [mode, setMode] = useState(() => {
     const saved = localStorage.getItem("bjl_mode_v2");
     return saved === "batch" ? "outreach" : (saved || "intelligence");
@@ -2485,6 +2544,14 @@ const App = () => {
               </button>
               <button className="btn ghost icon-only" title="About the Lab"
                 onClick={() => setShowWelcome(true)}>?</button>
+              {authedUser && (
+                <div className="bjl-user-menu" title={authedUser.email}>
+                  <span className="bjl-user-email">{authedUser.email}</span>
+                  {onSignOut && (
+                    <button className="btn ghost bjl-user-signout" onClick={onSignOut}>Sign out</button>
+                  )}
+                </div>
+              )}
             </>
           }
         />
@@ -2510,7 +2577,186 @@ const App = () => {
   );
 };
 
-ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+/* =========================================================================
+ * AuthGate — Microsoft 365 SSO via Supabase Auth.
+ *
+ * Wraps <App />. On boot:
+ *   1. fetch /api/bjl-config → { supabaseUrl, supabaseAnonKey, authEnforced }
+ *   2. if authEnforced is false (pre-Azure-live), render App directly.
+ *   3. otherwise initialize Supabase client, check existing session,
+ *      render LoginScreen / RejectedScreen / App accordingly.
+ *
+ * Exposes window.__bjlAuth = { getToken, signOut, user, enforced } so the
+ * existing fetch helpers (authedFetchInit) can attach Bearer tokens. Also
+ * exposes window.__bjlRejected(email) so functions can flip the user to
+ * the rejected screen if a 403 not_whitelisted comes back from the API
+ * (covers the case where MS auth succeeds but the email isn't whitelisted).
+ * ========================================================================= */
+
+const LoginScreen = ({ onSignIn, signingIn }) => (
+  <div className="bjl-auth-shell">
+    <div className="bjl-auth-card">
+      <img src="assets/bjl-logo.png" alt="Brand Joy Lab" className="bjl-auth-logo" />
+      <h1 className="bjl-auth-title">Welcome to the Brand Joy Lab.</h1>
+      <p className="bjl-auth-subtitle">Sign in with your PETERMAYER Microsoft account to continue.</p>
+      <button
+        className="btn primary bjl-auth-cta"
+        onClick={onSignIn}
+        disabled={signingIn}
+      >
+        {signingIn ? "Redirecting…" : "Sign in with Microsoft"}
+      </button>
+    </div>
+  </div>
+);
+
+const RejectedScreen = ({ email, onRetry }) => (
+  <div className="bjl-auth-shell">
+    <div className="bjl-auth-card">
+      <h1 className="bjl-auth-title">Access not authorized</h1>
+      <p className="bjl-auth-subtitle">
+        You're signed in as <strong>{email || "(unknown)"}</strong>, but this email isn't on the BJL Intelligence Engine whitelist.
+      </p>
+      <p className="bjl-auth-subtitle">
+        Contact Eli at <a href="mailto:haddowe@peteramayer.com">haddowe@peteramayer.com</a> to request access.
+      </p>
+      <button className="btn ghost bjl-auth-cta" onClick={onRetry}>Sign out and try a different account</button>
+    </div>
+  </div>
+);
+
+const AuthLoadingScreen = () => (
+  <div className="bjl-auth-shell">
+    <div className="bjl-auth-card">
+      <img src="assets/bjl-logo.png" alt="Brand Joy Lab" className="bjl-auth-logo" />
+      <p className="bjl-auth-subtitle">Loading…</p>
+    </div>
+  </div>
+);
+
+const AuthGate = () => {
+  const [config, setConfig] = useState(null);
+  const [client, setClient] = useState(null);
+  const [session, setSession] = useState(null);
+  // authState: 'loading' | 'login' | 'authed' | 'rejected'
+  const [authState, setAuthState] = useState("loading");
+  const [rejectedEmail, setRejectedEmail] = useState(null);
+  const [signingIn, setSigningIn] = useState(false);
+
+  // Boot: load config, init client, hydrate session
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/bjl-config", { cache: "no-store" })
+      .then((r) => r.ok ? r.json() : null)
+      .then((cfg) => {
+        if (cancelled) return;
+        if (!cfg) {
+          // Config endpoint failed — fall through to authed=true to preserve
+          // legacy behavior. The function-level gate is the real enforcement
+          // layer; if AUTH_ENFORCED=true on the server, the user will get
+          // a 401 from the API and signOut will fire.
+          console.warn("[AuthGate] /api/bjl-config failed; falling back to authed=true");
+          setConfig({ authEnforced: false });
+          setAuthState("authed");
+          return;
+        }
+        setConfig(cfg);
+
+        // Pre-Azure-live: AUTH_ENFORCED is not set. Skip the gate entirely.
+        if (!cfg.authEnforced) {
+          setAuthState("authed");
+          return;
+        }
+
+        if (!cfg.supabaseUrl || !cfg.supabaseAnonKey || !window.supabase || !window.supabase.createClient) {
+          console.error("[AuthGate] missing supabase config or library; cannot enforce auth");
+          setAuthState("login");
+          return;
+        }
+        const sb = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey);
+        setClient(sb);
+        sb.auth.getSession().then(({ data }) => {
+          if (cancelled) return;
+          if (data && data.session) {
+            setSession(data.session);
+            setAuthState("authed");
+          } else {
+            setAuthState("login");
+          }
+        });
+        sb.auth.onAuthStateChange((event, sess) => {
+          if (sess) {
+            setSession(sess);
+            setAuthState((prev) => (prev === "rejected" ? "rejected" : "authed"));
+          } else {
+            setSession(null);
+            setAuthState("login");
+          }
+        });
+      })
+      .catch((e) => {
+        console.error("[AuthGate] boot threw:", e);
+        if (!cancelled) setAuthState("login");
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  const signIn = useCallback(() => {
+    if (!client) return;
+    setSigningIn(true);
+    client.auth.signInWithOAuth({
+      provider: "azure",
+      options: {
+        scopes: "openid email profile",
+        redirectTo: window.location.origin,
+      },
+    });
+  }, [client]);
+
+  const signOut = useCallback(async () => {
+    setRejectedEmail(null);
+    if (client) {
+      try { await client.auth.signOut(); } catch (e) { console.warn("[AuthGate] signOut threw:", e); }
+    }
+    setSession(null);
+    setAuthState("login");
+  }, [client]);
+
+  // Expose globals for the fetch helpers to read at call time.
+  useEffect(() => {
+    window.__bjlAuth = {
+      getToken: () => (session && session.access_token) || null,
+      signOut,
+      user: session && session.user ? {
+        id: session.user.id,
+        email: session.user.email,
+        name: (session.user.user_metadata && session.user.user_metadata.name) || null
+      } : null,
+      enforced: !!(config && config.authEnforced),
+    };
+    window.__bjlRejected = (email) => {
+      setRejectedEmail(email);
+      setAuthState("rejected");
+    };
+    return () => {
+      // Cleanup on unmount only (component lives for the page lifetime)
+    };
+  }, [session, signOut, config]);
+
+  if (authState === "loading") return <AuthLoadingScreen />;
+  if (authState === "rejected") return <RejectedScreen email={rejectedEmail} onRetry={signOut} />;
+  if (authState === "login") return <LoginScreen onSignIn={signIn} signingIn={signingIn} />;
+
+  // authed — render the main app, passing user info + sign-out
+  const user = (session && session.user) ? {
+    id: session.user.id,
+    email: session.user.email,
+    name: (session.user.user_metadata && session.user.user_metadata.name) || null
+  } : null;
+  return <App authedUser={user} onSignOut={config && config.authEnforced ? signOut : null} />;
+};
+
+ReactDOM.createRoot(document.getElementById("root")).render(<AuthGate />);
   </script>
 </body>
 </html>
