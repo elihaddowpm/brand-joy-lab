@@ -2071,3 +2071,306 @@ textarea { font-family: var(--font-text); }
 }
 .bjl-user-signout { font-size: 13px; }
 
+/* =========================================================================
+ * Print stylesheet — Export PDF
+ *
+ * The Export PDF button calls window.print(). The browser's print engine
+ * renders the live DOM to a paged PDF using these rules. No screenshot,
+ * no canvas, no third-party PDF lib — text in the resulting PDF is real
+ * text (selectable, searchable).
+ *
+ * Strategy:
+ *   1. Hide all UI chrome (rail, topbar, composer, evidence drawer,
+ *      followup chips, stage pills, action bar, etc.).
+ *   2. Reset every overflow/height container in the chain (.app → .main
+ *      → .body → .canvas → .brief-scroll → .intel-doc-shell) so the
+ *      conversation expands to its full height and pages naturally.
+ *   3. Style each turn as a printable Q+A block.
+ *   4. Promote the screen-hidden .print-header inside .intel-doc-shell to
+ *      display:block so the printed doc gets a proper title block.
+ *   5. @page rules add margins + a "Page X of Y" footer.
+ *
+ * Page-break behavior aims to keep questions adjacent to their answers
+ * and avoids orphaned trailing lines on long answers.
+ * ========================================================================= */
+
+.print-only { display: none; }
+
+@media print {
+  /* Reset the page itself */
+  @page {
+    margin: 0.75in 0.7in 0.85in;
+    size: letter;
+  }
+  @page {
+    /* Footer: "Page X of Y" centered. Browsers vary on @page margin-box
+       support; this is best-effort and graceful when not supported. */
+    @bottom-center {
+      content: "Page " counter(page) " of " counter(pages);
+      font-family: var(--font-sans);
+      font-size: 10px;
+      color: #666;
+    }
+  }
+
+  html, body {
+    background: #fff !important;
+    color: #111 !important;
+    font-family: var(--font-sans);
+    font-size: 11pt;
+    line-height: 1.45;
+  }
+
+  /* Show only the conversation. Everything else collapses out. */
+  .rail,
+  .topbar,
+  .commission,
+  .doc-head,
+  .followup-chips,
+  .followup-chip,
+  .phase-pill,
+  .investigation-notes,
+  .clarification-hint,
+  .welcome-overlay,
+  .welcome-modal,
+  .bjl-user-menu,
+  .bjl-auth-shell,
+  .evidence-drawer,
+  /* The hero/welcome header at the top of the brief-scroll (eyebrow +
+     "Ask the Lab." display + session metadata). It's a sibling of
+     .commission inside .brief-scroll. */
+  .brief-scroll > div:first-of-type,
+  /* Hide the print-only marker on screen-only items as a defense against
+     accidentally double-displaying. */
+  .screen-only {
+    display: none !important;
+  }
+
+  /* Promote the print-header out of its hidden state */
+  .print-only,
+  .print-header {
+    display: block !important;
+  }
+
+  /* Unwind the overflow/height chain so the entire conversation prints,
+     not just the slice currently visible inside the .canvas viewport. */
+  html, body,
+  .app,
+  .main,
+  .body,
+  .body.no-drawer,
+  .canvas,
+  .brief-scroll,
+  .intel-doc-shell {
+    display: block !important;
+    grid-template-columns: none !important;
+    grid-template-rows: none !important;
+    overflow: visible !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+    background: #fff !important;
+  }
+
+  .intel-doc-shell {
+    border: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  /* Print header block — the document title page content */
+  .print-header {
+    margin: 0 0 24pt;
+    padding: 0 0 12pt;
+    border-bottom: 1pt solid #ccc;
+  }
+  .print-header .print-brand {
+    display: flex;
+    align-items: center;
+    gap: 10pt;
+    margin-bottom: 18pt;
+  }
+  .print-header .print-logo {
+    height: 28pt;
+    width: auto;
+  }
+  .print-header .print-brand-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2pt;
+  }
+  .print-header .print-brand-title {
+    font-family: var(--font-display);
+    font-size: 14pt;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    line-height: 1;
+  }
+  .print-header .print-brand-sub {
+    font-size: 9pt;
+    color: #666;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    line-height: 1;
+  }
+  .print-header .print-conv-title {
+    font-family: var(--font-display);
+    font-size: 22pt;
+    font-weight: 600;
+    line-height: 1.15;
+    letter-spacing: -0.005em;
+    margin: 0 0 10pt;
+    color: #111;
+  }
+  .print-header .print-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16pt;
+    font-size: 10pt;
+    color: #555;
+  }
+
+  /* Each conversation turn — a Q+A block */
+  .turn {
+    margin: 0 0 18pt;
+    padding: 0;
+    border: 0 !important;
+    background: transparent !important;
+    /* Try not to break in the middle of a Q/A block when avoidable.
+       The printer will still split long answers across pages. */
+    break-inside: auto;
+    page-break-inside: auto;
+  }
+  .turn + .turn {
+    margin-top: 24pt;
+    padding-top: 18pt;
+    border-top: 1pt solid #e3e3e3 !important;
+  }
+
+  /* Question — italic + label, distinct from the answer body */
+  .turn-head {
+    display: block !important;
+    margin: 0 0 10pt;
+    page-break-after: avoid;
+    break-after: avoid;
+  }
+  .turn-idx {
+    display: inline-block !important;
+    font-family: var(--font-mono);
+    font-size: 9pt;
+    font-weight: 600;
+    color: #888;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    margin-right: 8pt;
+    vertical-align: baseline;
+  }
+  .turn-prompt {
+    font-style: italic;
+    font-size: 12pt;
+    color: #333;
+    line-height: 1.4;
+  }
+  .turn-prompt::before {
+    content: "Question: ";
+    font-style: normal;
+    font-weight: 600;
+    color: #111;
+  }
+
+  /* Answer body — normal prose */
+  .stream-doc {
+    font-size: 11pt;
+    line-height: 1.55;
+    color: #111;
+  }
+  .stream-doc h1,
+  .stream-doc h2,
+  .stream-doc h3 {
+    font-family: var(--font-display);
+    color: #111;
+    page-break-after: avoid;
+    break-after: avoid;
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+  .stream-doc h1 { font-size: 16pt; margin: 14pt 0 6pt; }
+  .stream-doc h2 { font-size: 13pt; margin: 12pt 0 5pt; }
+  .stream-doc h3 { font-size: 11.5pt; margin: 10pt 0 4pt; font-weight: 600; }
+  .stream-doc p { margin: 0 0 8pt; orphans: 3; widows: 3; }
+  .stream-doc ul,
+  .stream-doc ol { margin: 0 0 10pt 1.4em; padding: 0; }
+  .stream-doc li { margin: 0 0 3pt; page-break-inside: avoid; break-inside: avoid; }
+  .stream-doc strong { font-weight: 700; }
+  .stream-doc em { font-style: italic; }
+  .stream-doc blockquote {
+    margin: 8pt 0;
+    padding: 0 12pt;
+    border-left: 2pt solid #ccc;
+    color: #444;
+  }
+  .stream-doc blockquote p { margin: 0; }
+  .stream-doc hr {
+    border: 0;
+    border-top: 1pt solid #e3e3e3;
+    margin: 12pt 0;
+  }
+  .stream-doc code {
+    font-family: var(--font-mono);
+    font-size: 10pt;
+    background: #f3f3f3;
+    padding: 1pt 4pt;
+    border-radius: 2pt;
+  }
+  .stream-doc pre {
+    font-family: var(--font-mono);
+    font-size: 9.5pt;
+    background: #f7f7f7;
+    border: 1pt solid #e3e3e3;
+    padding: 8pt 10pt;
+    margin: 8pt 0;
+    overflow: visible;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    page-break-inside: auto;
+    break-inside: auto;
+  }
+  .stream-doc pre code {
+    background: transparent;
+    padding: 0;
+  }
+  .stream-doc table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 10pt 0;
+    font-size: 10pt;
+    page-break-inside: auto;
+    break-inside: auto;
+  }
+  .stream-doc th,
+  .stream-doc td {
+    border: 1pt solid #ccc;
+    padding: 4pt 6pt;
+    text-align: left;
+    vertical-align: top;
+  }
+  .stream-doc th { background: #f3f3f3; font-weight: 600; }
+  .stream-doc tr { page-break-inside: avoid; break-inside: avoid; }
+
+  /* Anchors: print URL inline so the PDF is self-contained */
+  .stream-doc a { color: #111; text-decoration: underline; }
+  /* (Skipping URL-after-anchor expansion — citations in BJL responses
+     are inline notation like (n=240), not hyperlinks.) */
+
+  /* Belt-and-suspenders: any element that's been hidden by display:none
+     dynamically (e.g. fade-in transitions) shouldn't reappear in print. */
+  *[hidden] { display: none !important; }
+}
+
+

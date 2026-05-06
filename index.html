@@ -1294,6 +1294,54 @@ const FOLLOWUP_SUGGESTIONS = [
 
 const INTEL_WELCOME = "Welcome to the Brand Joy Lab. Ask about a brand, an audience, a category, or an angle. Use the tags above if you want to suggest a direction. The lab will dig.";
 
+/* =========================================================================
+ * PrintHeader — only visible during browser print.
+ *
+ * Renders a document-style header at the top of the printed PDF: BJL
+ * branding, the conversation title (first user question, truncated), the
+ * generation timestamp, and the authenticated user's identity from the
+ * Supabase session via window.__bjlAuth.user.
+ *
+ * Hidden on screen via .print-only (display: none). Promoted to display:
+ * block inside @media print rules in styles_v2.css. Lives in the normal
+ * DOM flow so the browser's print engine picks it up — no separate window
+ * or print-specific render pass is needed. Typography is set in the print
+ * stylesheet so the header reads as a real document header on paper.
+ *
+ * Re-renders whenever turns updates (so the conversation title tracks the
+ * actual first question) and when printedAt updates (set by the Export PDF
+ * button click handler immediately before window.print() so the timestamp
+ * reflects when the user pressed export, not when the component first
+ * mounted).
+ * ========================================================================= */
+const PrintHeader = ({ turns, printedAt }) => {
+  const firstQ = (turns || []).find(t => t && typeof t.prompt === "string" && t.prompt.trim());
+  const titleRaw = firstQ ? firstQ.prompt.trim() : "BJL Intelligence Engine session";
+  const title = titleRaw.length > 80 ? titleRaw.slice(0, 79).trimEnd() + "…" : titleRaw;
+  const ts = (printedAt instanceof Date ? printedAt : new Date()).toLocaleString(undefined, {
+    year: "numeric", month: "long", day: "numeric",
+    hour: "numeric", minute: "2-digit"
+  });
+  const user = (typeof window !== "undefined" && window.__bjlAuth && window.__bjlAuth.user) || null;
+  const userLine = user ? (user.name ? `${user.name} (${user.email})` : user.email) : null;
+  return (
+    <div className="print-only print-header">
+      <div className="print-brand">
+        <img src="assets/bjl-logo.png" alt="Brand Joy Lab" className="print-logo" />
+        <div className="print-brand-text">
+          <div className="print-brand-title">BJL Intelligence Engine</div>
+          <div className="print-brand-sub">PETERMAYER · brandjoylab.com</div>
+        </div>
+      </div>
+      <h1 className="print-conv-title">{title}</h1>
+      <div className="print-meta">
+        <span>{ts}</span>
+        {userLine && <span>{userLine}</span>}
+      </div>
+    </div>
+  );
+};
+
 const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistContext }) => {
   const [intent, setIntent] = useState(null); // null means no chip selected
   const [prompt, setPrompt] = useState("");
@@ -1310,6 +1358,17 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
   const [currentPrompt, setCurrentPrompt] = useState("");
   const [currentStream, setCurrentStream] = useState("");
   const [currentIsFollowup, setCurrentIsFollowup] = useState(false);
+
+  // printedAt drives the timestamp on PrintHeader. Set by the Export PDF
+  // button right before window.print() so the printed doc shows when the
+  // user actually exported, not when the component last re-rendered.
+  const [printedAt, setPrintedAt] = useState(null);
+  const exportPdf = useCallback(() => {
+    setPrintedAt(new Date());
+    // Wait one tick so React commits the new printedAt prop into the
+    // PrintHeader DOM before the browser's print snapshot is taken.
+    setTimeout(() => window.print(), 0);
+  }, []);
 
   const [followupText, setFollowupText] = useState("");
 
@@ -1529,6 +1588,10 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
 
         {docOpen ? (
           <article className="intel-doc-shell fade-in">
+            {/* Print-only document header. Hidden on screen via CSS;
+                promoted to display:block inside @media print. Reads
+                turns + printedAt to fill in title/timestamp at print time. */}
+            <PrintHeader turns={turns} printedAt={printedAt} />
             <div className="doc-head">
               <div className="doc-meta">
                 <span><b>Tag</b> {intent ? INTEL_CHIPS.find(c => c.k === intent).label : "none"}</span>
@@ -1539,7 +1602,7 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
               <div className="doc-actions">
                 <button className="icon-btn" title="Clear conversation" onClick={clearConversation} disabled={running || turns.length === 0}><Icon name="regen" /></button>
                 <button className="icon-btn" title="Copy full conversation" onClick={copyConversation} disabled={turns.length === 0}><Icon name="copy" /></button>
-                <button className="btn ghost" onClick={() => window.print()}><Icon name="download" size={12} /> Export PDF</button>
+                <button className="btn ghost" onClick={exportPdf} disabled={turns.length === 0}><Icon name="download" size={12} /> Export PDF</button>
               </div>
             </div>
             {error && <div className="phase-pill err"><span className="dot" /> {error}</div>}
