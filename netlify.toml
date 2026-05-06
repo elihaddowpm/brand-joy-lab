@@ -38,3 +38,8 @@
   from = "/api/bjl-query-status"
   to = "/.netlify/functions/bjl-query-status"
   status = 200
+
+[[redirects]]
+  from = "/api/bjl-config"
+  to = "/.netlify/functions/bjl-config"
+  status = 200
