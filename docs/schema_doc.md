@@ -255,19 +255,37 @@ ORDER BY p.generation, p.gender;
 
 ### Pattern 2 — topic-level scan (find what's strongest in a category)
 
+**`primary_topic` and `subtags` are SEPARATE taxonomy levels** (16 canonical primary topics, 78 canonical subtags — see `bjl_taxonomy_v2.tag_type`). A category name like `home_goods_furniture` lives in only ONE of them. Filtering on the wrong level returns zero rows even when the category has dozens of items.
+
+When the user names a category and you're unsure which level it belongs to, **default to the OR-against-both pattern**:
+
 ```sql
 SELECT i.item_name, COUNT(*) AS n,
        ROUND(AVG(r.joy_index)::numeric, 1) AS ji
 FROM bjl_responses r
 JOIN bjl_items i ON i.item_id = r.item_id
-WHERE i.primary_topic = 'financial_services'
-  AND 'investing' = ANY(i.subtags)
+WHERE (i.primary_topic = 'home_goods_furniture'
+       OR 'home_goods_furniture' = ANY(i.subtags))
   AND r.joy_index IS NOT NULL
 GROUP BY i.item_name
 HAVING COUNT(*) >= 200
 ORDER BY ji DESC
 LIMIT 20;
 ```
+
+This catches all matching items regardless of where the term sits in the taxonomy. Worked examples:
+- `home_goods_furniture` is a **subtag only** — the 41 furniture items all have `primary_topic = 'home_life'` and `'home_goods_furniture' = ANY(subtags)`. A bare `primary_topic = 'home_goods_furniture'` filter returns zero rows.
+- `financial_services` is a **primary_topic** — items have `primary_topic = 'financial_services'` and possibly subtags like `'investing'` or `'banking'`.
+- `wine` is a **subtag** under `food_beverage` primary_topic.
+
+Use the AND form (`primary_topic = X AND tag = ANY(subtags)`) only when you're deliberately narrowing within a known parent — e.g. "investing items WITHIN financial services":
+
+```sql
+WHERE i.primary_topic = 'financial_services'
+  AND 'investing' = ANY(i.subtags)
+```
+
+When in doubt, query `bjl_taxonomy_v2 WHERE tag = $cat` to confirm the level before filtering, or just use the OR form — it's the safe default.
 
 ### Pattern 3 — label distribution (for non-numeric scales)
 
