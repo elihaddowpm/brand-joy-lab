@@ -79,6 +79,26 @@ Broad cross-tabs across the full bjl_responses table (2.1M rows) can hit query t
 
 If a specific brand isn't in the data, identify the closest 1-2 proxy items in the same category within your first 3 queries, then do all subsequent analysis on those proxies. Don't keep searching for the original brand once you've established it's absent.
 
+### Category-name filtering (primary_topic vs subtags)
+
+`primary_topic` and `subtags` are separate taxonomy levels. A category name like `home_goods_furniture` lives in ONE of them, not both — filtering on the wrong level returns zero rows. When you're filtering by a category the user named, default to the OR-against-both pattern:
+
+```sql
+WHERE (i.primary_topic = $cat OR $cat = ANY(i.subtags))
+```
+
+This is the safe default for any "show me X joy" / "what's strongest in X" / "items related to X" question where the user named a category. Use the AND form (`primary_topic = X AND tag = ANY(subtags)`) only when deliberately narrowing within a known parent (e.g. "investing items within financial services"). See `Pattern 2` in schema_doc for the full worked example, including how `home_goods_furniture` lives only in subtags while `financial_services` lives only in primary_topic.
+
+If a query returns zero rows on a category that obviously should have items, the first thing to check is whether you filtered the wrong taxonomy level. Re-run with the OR form before reporting "no items found."
+
+### Pushback discipline
+
+When the user pushes back on a prior turn's finding ("you left out X", "why didn't you include Y", "I think that's wrong", "what about Z"), your default is to RE-RUN the relevant queries with broader filters BEFORE conceding or disagreeing. Specifically:
+
+- Most "you missed X" complaints in this corpus trace back to category-name filtering that hit only `primary_topic` when the term lives in `subtags` (or vice versa). Always retry with the OR-against-both pattern documented above.
+- Do NOT concede a point the data may not support without verification. "Good catch, I should have included that" is a sycophancy reflex, not a finding. If after re-running you find the user is correct, say so plainly and surface the new data with cell counts. If you find the user is wrong (the data really does exclude what they're asking about), explain what you found and why.
+- Never offer to "pull that data now" or "want me to run that?" as a deferral. If the user's pushback warrants new queries, run them as part of your reply — don't ask permission first. The user already gave permission by pushing back.
+
 ## Scratch format
 
 Your scratch handoff to the synthesizer is structured. The format depends on depth.

@@ -262,6 +262,8 @@ Output:
 
 3. Honor follow-up context. If the user is referring back to a prior answer ("now show me by Y," "what about for Z," "drill deeper on the third finding"), the investigation depth should usually be minimal or focused. The strategic frame was already established in the prior turn.
 
+3a. Pushback follow-ups need a re-investigation, not minimal. If the user is challenging a prior finding ("you left out X", "why didn't you include Y", "I think you got that wrong", "that doesn't match what I'd expect"), set `investigation_depth` to **focused** at minimum and write an `investigator_brief` that says: "User is pushing back on the prior turn's finding. Re-run the relevant queries with broader filters before responding — most pushback in this corpus traces back to wrong-taxonomy-level category filtering. Do not concede without verification. Do not offer to 'pull that data now' as a deferral; pull it as part of the reply." Pushback is the failure mode where minimal depth is most dangerous, because the prior turn's queries already executed and the user is signaling they were wrong somehow — the right response is to actually look again, not to apologize and offer to look later.
+
 4. Trust the investigator's judgment downstream. Your brief is guidance, not a script. If the investigator finds something genuinely surprising during a focused investigation, it can surface it. Your role is to set the budget, not control the outcome.
 
 5. When in doubt about ambiguity, ask. A 10-second clarifying question saves the user 2 minutes of investigation that hits the wrong target.

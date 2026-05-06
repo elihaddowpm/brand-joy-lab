@@ -2126,8 +2126,14 @@ textarea { font-family: var(--font-text); }
   .topbar,
   .commission,
   .doc-head,
+  .followup,           /* the "Stay curious. Ask a follow-up." composer */
   .followup-chips,
   .followup-chip,
+  .followup-pills,
+  .followup-pill,
+  .followup-row,
+  .followup-input,
+  .followup-label,
   .phase-pill,
   .investigation-notes,
   .clarification-hint,
@@ -2135,7 +2141,10 @@ textarea { font-family: var(--font-text); }
   .welcome-modal,
   .bjl-user-menu,
   .bjl-auth-shell,
-  .evidence-drawer,
+  .drawer,             /* EvidenceDrawer renders as <aside class="drawer">,
+                          NOT .evidence-drawer — the prior selector was a
+                          miss and the panel leaked into prints */
+  .doc-placeholder,
   /* The hero/welcome header at the top of the brief-scroll (eyebrow +
      "Ask the Lab." display + session metadata). It's a sibling of
      .commission inside .brief-scroll. */
@@ -2205,14 +2214,22 @@ textarea { font-family: var(--font-text); }
     flex-direction: column;
     gap: 2pt;
   }
+  /* Print headings use a system sans, NOT --font-display.
+     The display font (FK Screamer / Anton fallback) is a tightly-tracked
+     condensed display face whose space glyph collapses in some print
+     drivers, producing "BJLIntelligenceEngine" instead of
+     "BJL Intelligence Engine". A system sans avoids the issue and reads
+     better at document-header sizes anyway. We also drop the negative
+     letter-spacing for the same reason. */
   .print-header .print-brand-title {
-    font-family: var(--font-display);
+    font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
     font-size: 14pt;
-    font-weight: 600;
-    letter-spacing: -0.01em;
-    line-height: 1;
+    font-weight: 700;
+    letter-spacing: 0;
+    line-height: 1.1;
   }
   .print-header .print-brand-sub {
+    font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
     font-size: 9pt;
     color: #666;
     letter-spacing: 0.04em;
@@ -2220,11 +2237,11 @@ textarea { font-family: var(--font-text); }
     line-height: 1;
   }
   .print-header .print-conv-title {
-    font-family: var(--font-display);
+    font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
     font-size: 22pt;
-    font-weight: 600;
-    line-height: 1.15;
-    letter-spacing: -0.005em;
+    font-weight: 700;
+    line-height: 1.2;
+    letter-spacing: 0;
     margin: 0 0 10pt;
     color: #111;
   }
@@ -2290,10 +2307,14 @@ textarea { font-family: var(--font-text); }
     line-height: 1.55;
     color: #111;
   }
+  /* Same display-font space-glyph issue as .print-brand-title — markdown
+     headings rendered through .stream-doc were also showing collapsed
+     spaces in the printed PDF. Use a system sans for print-only. */
   .stream-doc h1,
   .stream-doc h2,
   .stream-doc h3 {
-    font-family: var(--font-display);
+    font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    letter-spacing: 0;
     color: #111;
     page-break-after: avoid;
     break-after: avoid;
