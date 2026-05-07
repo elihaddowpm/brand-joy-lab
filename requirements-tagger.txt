@@ -1,0 +1,19 @@
+# Python dependencies for the BJL framework tagger build.
+#
+# Used by:
+#   bin/framework_tagger.py
+#   bin/backfill_frameworks.py
+#   bin/test_framework_regression.py
+#   bin/ingest_wave.py phase 5 (the per-wave integration; phases 3+4 only
+#     need pandas/openpyxl as documented in that script's docstring)
+#
+# Install:
+#   pip install -r requirements-tagger.txt
+#
+# This file is intentionally tagger-scoped, not a global requirements.txt.
+# When more scripts accumulate their own deps we can consolidate.
+
+anthropic>=0.34
+psycopg2-binary>=2.9
+python-dotenv>=1.0
+pyyaml>=6.0

@@ -14,16 +14,24 @@ Usage:
 Phases:
   3 — load respondents from year_month rows (writes bjl_respondents)
   4 — load responses + verbatims (writes bjl_responses + bjl_verbatims)
-  5 — framework Haiku scan on this wave's verbatims (writes joy_modes etc.)
+  5 — framework Haiku scan on this wave's verbatims (writes *_haiku
+      staging columns; live columns untouched until operator promotes)
   6 — populate bjl_respondent_usage from screener-style questions
   7 — emit schema_doc.md update notes
 
-Output: each phase emits SQL files under <out>/ that the operator applies
-via Supabase MCP apply_migration. This keeps the script side-effect-free
-and human-reviewable.
+Output: phases 3 and 4 emit SQL files under <out>/ that the operator
+applies via Supabase MCP apply_migration — keeps those phases
+side-effect-free and human-reviewable. Phase 5 is different: it calls
+Anthropic's Haiku API and writes directly to the *_haiku staging
+columns on bjl_verbatims (concurrency-bounded, with retry). Live
+columns are NOT touched by phase 5 — promotion is a separate manual
+SQL step Eli runs after reviewing the staged tags.
 
-Required env: ANTHROPIC_API_KEY (for phase 5 only).
-Required deps: pandas, openpyxl. (pip install pandas openpyxl)
+Required env:
+  ANTHROPIC_API_KEY  (for phase 5 only)
+  DATABASE_URL       (for phase 5 only — Supavisor-pooler URL pattern)
+Required deps: pandas, openpyxl always. For phase 5 also psycopg2-binary,
+  anthropic, pyyaml — see requirements-tagger.txt.
 """
 
 import argparse
@@ -487,26 +495,170 @@ def phase_4(df, year_month, fielding_id, col_to_ids, max_resp_id, max_verbatim_i
 
 
 # ---------------------------------------------------------------------------
+# Phase 5 — framework Haiku scan on this wave's verbatims
+# ---------------------------------------------------------------------------
+# Unlike phases 3 and 4 (which emit SQL files for the operator to apply
+# via Supabase MCP), phase 5 calls Anthropic and writes directly to
+# bjl_verbatims._haiku staging columns. Live columns (joy_modes,
+# tensions, etc.) are NOT touched here — promotion is a separate manual
+# SQL step Eli runs after reviewing.
+#
+# The actual tagger lives in bin/framework_tagger.py; this is a thin
+# wrapper that pulls verbatims for the given year_month and runs them
+# through tag_verbatims_batch.
+
+def phase_5(year_month, *, concurrency=8, batch_size=100, dry_run=False):
+    """Tag this wave's verbatims via the framework tagger.
+
+    Loads framework definitions from bjl_joy_modes / bjl_tensions /
+    bjl_functional_jobs / bjl_occasions, pulls every substantive verbatim
+    for `year_month` (response_text length >= 5), runs them through Haiku
+    in concurrency-bounded batches, and writes results to the *_haiku
+    staging columns + framework_scanned_at.
+
+    Prints a wave diff summary at the end: total tagged, top 5 tags per
+    framework, cost (USD), wall time, count of verbatims with zero tags.
+    """
+    import asyncio
+    sys.path.insert(0, str(Path(__file__).parent))
+    import psycopg2  # type: ignore
+    from psycopg2.extras import execute_values  # type: ignore
+    from framework_tagger import (  # type: ignore
+        load_frameworks_from_db, tag_verbatims_batch,
+    )
+    from backfill_frameworks import (  # type: ignore
+        STAGING_COLUMNS, bulk_update_staging,
+    )
+
+    if not os.environ.get('ANTHROPIC_API_KEY'):
+        sys.exit('[phase 5] ANTHROPIC_API_KEY not set')
+    if not os.environ.get('DATABASE_URL'):
+        sys.exit('[phase 5] DATABASE_URL not set (use the Supavisor-pooler URL)')
+
+    conn = psycopg2.connect(os.environ['DATABASE_URL'])
+    try:
+        frameworks = load_frameworks_from_db(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                'SELECT id, response_text, question_text FROM bjl_verbatims '
+                'WHERE year_month = %s AND LENGTH(TRIM(response_text)) >= 5 '
+                'ORDER BY id ASC',
+                (year_month,)
+            )
+            rows = cur.fetchall()
+        verbatims = [{'id': r[0], 'response_text': r[1], 'question_text': r[2]} for r in rows]
+        print(f"[phase 5] {len(verbatims):,} substantive verbatims for year_month={year_month}")
+        if not verbatims:
+            print('[phase 5] nothing to tag — phase 4 should have run first')
+            return
+
+        async def run():
+            return await tag_verbatims_batch(
+                verbatims, frameworks, concurrency=concurrency,
+            )
+
+        # Tag in one big batch (the inner asyncio.Semaphore caps concurrency
+        # to `concurrency` regardless of total batch size). A typical wave
+        # is ~1000 verbatims, well within the SDK's batch-size tolerance.
+        results, stats = asyncio.run(run())
+
+        if not dry_run:
+            frameworks_to_write = list(STAGING_COLUMNS.keys())
+            n_updated = bulk_update_staging(conn, results, frameworks_to_write)
+            print(f"[phase 5] wrote {n_updated} rows to staging columns "
+                  f"({', '.join(STAGING_COLUMNS.values())})")
+        else:
+            print('[phase 5] DRY RUN — DB not written')
+
+        # Wave diff summary
+        tag_counts = {fwk: Counter() for fwk in STAGING_COLUMNS}
+        zero_count = 0
+        per_verbatim_total = 0
+        for r in results:
+            v_total = 0
+            for fwk in STAGING_COLUMNS:
+                for t in r.get(fwk, []):
+                    tag_counts[fwk][t] += 1
+                    v_total += 1
+            per_verbatim_total += v_total
+            if v_total == 0:
+                zero_count += 1
+
+        print()
+        print('[phase 5] wave diff summary')
+        print('-' * 60)
+        for fwk, counts in tag_counts.items():
+            top = counts.most_common(5)
+            print(f"  {fwk}:")
+            print(f"    avg tags/verbatim: "
+                  f"{sum(counts.values()) / max(len(verbatims), 1):.2f}")
+            for tag, n in top:
+                print(f"    {tag:30s}  {n}")
+        print(f"  verbatims with zero tags: {zero_count} "
+              f"({100.0*zero_count/max(len(verbatims),1):.1f}%)")
+        print(f"  cost (USD): ${stats.est_cost_usd:.4f}")
+        print(f"  wall time:  {stats.wall_seconds:.1f}s")
+        print(f"  failures:   {stats.n_failed}")
+        if stats.n_failed:
+            print(f"  failure ids (first 10): {stats.failures[:10]}")
+        print()
+        print('[phase 5] tags landed in *_haiku staging columns. '
+              'Review with random samples; promote to live columns via:')
+        print("  UPDATE bjl_verbatims SET joy_modes = joy_modes_haiku "
+              f"WHERE year_month = '{year_month}' AND joy_modes_haiku IS NOT NULL;")
+        print('  -- and similarly for tensions / functional_jobs / occasions')
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--xlsx', required=True)
+    # --xlsx and --max-resp-id are required for phases 3/4 only — phase 5
+    # reads directly from the DB. Validation happens after parse.
+    ap.add_argument('--xlsx', help='Path to wave xlsx (required for phase 3/4)')
     ap.add_argument('--year-month', required=True, help='YYYY-MM')
-    ap.add_argument('--phase', required=True, choices=['3', '4'], help='Phase number')
+    ap.add_argument('--phase', required=True, choices=['3', '4', '5'], help='Phase number')
     ap.add_argument('--col-map', help='Path to col_idx -> {question_id, item_id} JSON')
-    ap.add_argument('--max-resp-id', type=int, required=True, help='Current max respondent_id (numeric)')
+    ap.add_argument('--max-resp-id', type=int, default=None,
+                    help='Current max respondent_id (required for phase 3/4)')
     ap.add_argument('--max-verbatim-id', type=int, default=0, help='Current max verbatim id (for phase 4)')
-    ap.add_argument('--out', default='out/', help='Output directory for SQL files')
+    ap.add_argument('--out', default='out/', help='Output directory for SQL files (phase 3/4 only)')
+    # Phase-5-specific knobs
+    ap.add_argument('--concurrency', type=int, default=8,
+                    help='Parallel Haiku calls (phase 5 only, default 8)')
+    ap.add_argument('--batch-size', type=int, default=100,
+                    help='Verbatims per batch (phase 5 only, default 100)')
+    ap.add_argument('--dry-run', action='store_true',
+                    help='Phase 5 only: tag but do NOT write to DB')
     args = ap.parse_args()
 
     fielding_id = 'm_' + args.year_month.replace('-', '_')
     print(f"=== ingest_wave.py ===")
-    print(f"  xlsx:        {args.xlsx}")
     print(f"  year_month:  {args.year_month}")
     print(f"  fielding_id: {fielding_id}")
     print(f"  phase:       {args.phase}")
+    if args.xlsx:
+        print(f"  xlsx:        {args.xlsx}")
     print()
+
+    # Phase 5 does NOT load the spreadsheet — it reads from bjl_verbatims
+    # directly. Phases 3/4 load the spreadsheet and emit SQL.
+    if args.phase == '5':
+        phase_5(
+            args.year_month,
+            concurrency=args.concurrency,
+            batch_size=args.batch_size,
+            dry_run=args.dry_run,
+        )
+        return
+
+    if not args.xlsx:
+        sys.exit(f'--xlsx required for phase {args.phase}')
+    if args.max_resp_id is None:
+        sys.exit(f'--max-resp-id required for phase {args.phase}')
 
     print(f"loading Excel ({Path(args.xlsx).stat().st_size:,} bytes)...", flush=True)
     df = pd.read_excel(args.xlsx, header=None, dtype=str)
