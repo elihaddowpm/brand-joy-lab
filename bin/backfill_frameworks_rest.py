@@ -106,6 +106,39 @@ def count_remaining(resume: bool) -> int:
     return 0
 
 
+def _http_with_retry(method: str, url: str, *, headers: dict, max_retries: int = 5, **kwargs):
+    """Wraps requests.{get,post} with exponential backoff on transient
+    network/timeout errors and 5xx responses. Returns the requests.Response.
+
+    Retries on:
+      - requests.ConnectionError (includes TimeoutError on connection)
+      - requests.Timeout
+      - 5xx status codes (server errors)
+      - 429 rate limiting
+
+    Does NOT retry on 4xx client errors (other than 429).
+    Backoff: 2s, 4s, 8s, 16s, 32s.
+    """
+    import time
+    last_err: Exception | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            r = requests.request(method, url, headers=headers, **kwargs)
+            if r.status_code < 500 and r.status_code != 429:
+                return r
+            # 5xx or 429 — fall through to retry path
+            last_err = RuntimeError(f'HTTP {r.status_code}: {r.text[:200]}')
+        except (requests.ConnectionError, requests.Timeout) as e:
+            last_err = e
+        if attempt >= max_retries:
+            break
+        sleep_s = min(2 ** (attempt + 1), 32)
+        sys.stderr.write(f'    [retry {attempt+1}/{max_retries} after {sleep_s}s] {method} {url.split("?")[0]}: {last_err}\n')
+        sys.stderr.flush()
+        time.sleep(sleep_s)
+    raise last_err  # type: ignore[misc]
+
+
 def fetch_batch(batch_size: int, resume: bool, last_id: int | None = None) -> tuple[list[dict], int | None]:
     """Fetches the next batch of verbatims. Uses keyset pagination by id ASC.
 
@@ -126,7 +159,7 @@ def fetch_batch(batch_size: int, resume: bool, last_id: int | None = None) -> tu
         params['joy_modes_haiku'] = 'is.null'
     if last_id is not None:
         params['id'] = f'gt.{last_id}'
-    r = requests.get(url, headers=h, params=params, timeout=60)
+    r = _http_with_retry('GET', url, headers=h, params=params, timeout=60)
     r.raise_for_status()
     rows = r.json()
     raw_max_id = max((r['id'] for r in rows), default=None)
@@ -155,7 +188,7 @@ def update_batch(results: list[dict]) -> int:
     if not payload:
         return 0
     url = f'{base}/rest/v1/rpc/bjl_update_haiku_tags'
-    rsp = requests.post(url, headers=h, json={'rows': payload}, timeout=120)
+    rsp = _http_with_retry('POST', url, headers=h, json={'rows': payload}, timeout=120)
     if rsp.status_code != 200:
         # Surface the server-side error body so we can diagnose mid-backfill.
         ids = [p['id'] for p in payload]
