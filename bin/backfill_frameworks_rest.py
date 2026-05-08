@@ -72,7 +72,7 @@ def fetch_frameworks() -> dict:
     for fwk, (table, key_col, def_col) in spec.items():
         url = f'{base}/rest/v1/{table}'
         params = {'select': f'{key_col},display_name,{def_col}', 'order': key_col}
-        r = requests.get(url, headers=h, params=params, timeout=30)
+        r = _http_with_retry('GET', url, headers=h, params=params, timeout=30)
         r.raise_for_status()
         rows = r.json()
         out[fwk] = [
@@ -94,7 +94,7 @@ def count_remaining(resume: bool) -> int:
     # length filter via PostgREST: "char_length(response_text)>=5" isn't directly
     # exposed; we apply the >= 5 filter in Python. The total count from REST
     # excludes that, but practically all verbatims in bjl_verbatims have content.
-    r = requests.get(url, headers=h, params=params, timeout=30)
+    r = _http_with_retry('GET', url, headers=h, params=params, timeout=30)
     r.raise_for_status()
     cr = r.headers.get('Content-Range', '')
     # Format: '0-0/12345'
@@ -106,7 +106,7 @@ def count_remaining(resume: bool) -> int:
     return 0
 
 
-def _http_with_retry(method: str, url: str, *, headers: dict, max_retries: int = 5, **kwargs):
+def _http_with_retry(method: str, url: str, *, headers: dict, max_retries: int = 8, **kwargs):
     """Wraps requests.{get,post} with exponential backoff on transient
     network/timeout errors and 5xx responses. Returns the requests.Response.
 
@@ -255,7 +255,21 @@ async def main_async(args):
         )
 
         if not args.dry_run:
-            n_written = update_batch(results)
+            try:
+                n_written = update_batch(results)
+            except Exception as e:
+                # Persistent write failure (after _http_with_retry exhausted
+                # its 5 retries). Log and continue rather than crash the
+                # whole multi-hour run. The failed rows stay NULL in
+                # staging and will be picked up on the next --resume.
+                ids = [r.get('id') for r in results if r.get('ok')][:5]
+                sys.stderr.write(
+                    f'    [WRITE FAILED — skipping batch] {type(e).__name__}: {e}\n'
+                    f'    [skipped ids preview] {ids}{"..." if len(results) > 5 else ""}\n'
+                    f'    [these rows stay NULL in staging; will be retried on next --resume]\n'
+                )
+                sys.stderr.flush()
+                n_written = 0
         else:
             n_written = 0
 
