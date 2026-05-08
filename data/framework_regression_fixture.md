@@ -48,7 +48,7 @@ fixtures:
     expected:
       joy_modes:
         must_include: ["hedonic"]  # 'I enjoy music' is direct sensory enjoyment
-        may_include: ["aesthetic", "sentimental", "awe"]  # appreciation across forms / heritage feel / curiosity
+        may_include: ["aesthetic", "sentimental", "awe", "inspirational"]  # appreciation across forms / heritage feel / curiosity / forward-action energy
         must_not_include: []
       tensions:
         must_include: []
@@ -60,7 +60,7 @@ fixtures:
         must_not_include: []
       occasions:
         must_include: []
-        may_include: []
+        may_include: ["anticipation"]  # 'I would like to see' is pre-experience phase
         must_not_include: []
 
   - id: 47599
@@ -94,15 +94,15 @@ fixtures:
         must_not_include: ["freedom"]  # NOT in the words; would be category-context inference
       tensions:
         must_include: []
-        may_include: []
+        may_include: ["present_vs_future"]  # 'do some more things we didn't get time to do' frames a now-vs-future gap
         must_not_include: []
       functional_jobs:
         must_include: []
-        may_include: []
+        may_include: ["create_memory"]  # 'do some more things' = make experiences worth remembering
         must_not_include: []
       occasions:
         must_include: []
-        may_include: ["vacation", "memory"]
+        may_include: ["vacation", "memory", "anticipation"]  # 'I'd like to go back' is pre-experience phase
         must_not_include: []
 
   - id: 61111
@@ -203,7 +203,7 @@ fixtures:
         must_not_include: []
       tensions:
         must_include: ["moderation_vs_indulgence", "luxury_vs_value"]  # 'in moderation' AND 'better value' are both explicit
-        may_include: ["discovery_vs_comfort"]  # wanting newness with the comfort of clarity
+        may_include: ["discovery_vs_comfort", "served_vs_overlooked"]  # wanting newness with comfort of clarity / unmet-want framing toward marketers
         must_not_include: []
       functional_jobs:
         must_include: []
@@ -211,7 +211,7 @@ fixtures:
         must_not_include: []
       occasions:
         must_include: []
-        may_include: []
+        may_include: ["everyday"]  # 'drinking wine more often' frames everyday/habitual cadence
         must_not_include: []
 
   - id: 63600
