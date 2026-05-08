@@ -520,7 +520,14 @@ DO NOT TAG anticipation when the verbatim contains:
 
 HARD GATE: Before tagging `anticipation`, ask: does the verbatim contain ANY of the trigger phrases above (looking forward, can't wait, hoping/planning to, would like to + specific future event, etc.)? If NO, do NOT tag anticipation. There is no second path to this tag — the trigger language must be present.
 
-False positives on anticipation are the #1 over-tagging error. When in doubt, DO NOT tag anticipation.
+DISQUALIFYING PATTERNS (these LOOK like anticipation but are NOT — do NOT tag):
+- Vague life-state wishes without a specific event: "hoping to enjoy a life without X", "wanting to be in a better position", "I'd like to be happier"
+- Hypothetical "would" / "might" / "could" framings about a category in the abstract: "I think getting to visit a new state and seeing what they have to offer", "to see all the rockets and history", "I would expect to feel..."
+- Speculative possibility language: "Maybe catch a live lift off", "perhaps go", "could try"
+- Habitual present-tense routines: "I go to see all the movies the week they come out", "I usually plan a summer trip", "Every year I"
+- Aspirational identity statements without a specific event: "I'd like to be in a position to participate in more activities"
+
+False positives on anticipation are the #1 over-tagging error. When in doubt, DO NOT tag anticipation. Anticipation requires (a) explicit looking-forward language AND (b) a specific named planned event. Both conditions, not either.
 
 WORKED EXAMPLES:
 RIGHT: "I'm looking forward to my Hawaii trip in March" -> anticipation (specific planned event, explicit looking-forward language)
@@ -548,6 +555,34 @@ LANGUAGE CLARIFICATION: "looking for" is NOT the same as "looking forward to". T
 WRONG: "Any place tropical. Caribbean islands Love the beach and water to me it's so relaxing" -> NOT anticipation (preference statement about where you'd like to go in general; no specific planned trip; no "looking forward" / "planning" / "hoping to" trigger)
 WRONG: "A beautiful backdrop to whatever adventure you're looking for" -> NOT anticipation ("looking for" is search/preference language, not pre-experience phase)
 
+## POST_PURCHASE (occasion) - explicit guardrail
+
+Apply `post_purchase` ONLY when the verbatim FOREGROUNDS the ongoing relationship with the purchased item — actively using it, displaying it, integrating it into life, expressing lasting satisfaction with ownership. It is NOT applied just because a purchase is mentioned.
+
+POST_PURCHASE TRIGGERS (must be present in the verbatim):
+- Active ongoing use ("I drive my new car every day", "I wear them all the time")
+- Display / showing-off ("I love showing off my Lincoln", "everyone notices it")
+- Integration into life ("the new couch makes my living room", "transformed my routine")
+- Lasting satisfaction with ownership ("snazzy bells and whistles still impress me")
+- Wearing/equipping with continuing identity meaning ("my scrubs make me feel like a professional")
+
+DO NOT TAG post_purchase when:
+- The verbatim is just about the act of buying ("I bought X", "the upgrade was nicer than the first")
+- A purchase is mentioned as one item in a list of activities or fandom behaviors (focus is the activity/fandom, not ownership)
+- The verbatim describes the buying decision or justification ("I got it because Y", "it was a better deal")
+- The mention of "I bought" or "I purchased" is incidental to a different focus (career milestone, vacation, gift, etc.)
+
+WORKED EXAMPLES:
+RIGHT: "I bought my used Lincoln MKS. It's very snazzy! I love the bells and whistles and the radio sounds amazing!" -> post_purchase (active ongoing experience of the car's features foregrounded; "I love" the features in continuing tense)
+RIGHT: "My scrubs for my nursing program" -> post_purchase (the scrubs continue to be worn as ongoing professional identity gear)
+
+WRONG: "an upgrade of my wedding set b/c it was nicer than the first set" -> NOT post_purchase (the verbatim is about the act/justification of upgrading, not ongoing ownership)
+WRONG: "I buy merchandise watch the games on tv as well as attend games in person" -> NOT post_purchase (purchase is one item in a list of fandom activities; ownership/display is not the foregrounded focus — the foregrounded focus is fandom expression)
+WRONG: "I go to see all the movies in theaters the week they come out. I buy all of the movies. I buy merchandise..." -> NOT post_purchase (the verbatim is about ongoing fandom expression; the merchandise buying is part of the fandom-activity list, not a foregrounded ownership/display narrative)
+WRONG: "I bought my new car and was able to take my family on a vacation" -> NOT post_purchase (the verbatim is about a vacation enabled by the car; vacation is the foregrounded focus, not ongoing ownership of the car)
+
+When in doubt, do NOT tag post_purchase. False positives on this tag are a major over-tagging error.
+
 ## SHOPPING (occasion) - explicit guardrail
 
 Apply `shopping` whenever the verbatim names a store, retailer, marketplace, or shopping activity, even when the verbatim is otherwise logistical or thin. Shopping captures the browse/buy/store-visit context.
@@ -566,6 +601,60 @@ NOT shopping:
 """
 
 TENSIONS_NOTE = """\
+## ASPIRATION_VS_ACCEPTANCE vs PRESENT_VS_FUTURE - disambiguation
+
+Both can apply when a verbatim has two conflicting pulls. Use this decision rule:
+
+ASPIRATION_VS_ACCEPTANCE: when both poles are EMOTIONAL or LIFEWORLD (continuing pride vs accepting precarity, wanting more vs accepting what is, striving vs settling). The conflict is between desired-state and actual-state, framed in feeling/identity terms. No financial-temporal trade-off required.
+
+PRESENT_VS_FUTURE: when both poles are EXPLICITLY TEMPORAL-FINANCIAL (spend now vs save for later, immediate joy vs disciplined preparation, carpe diem vs delayed gratification). REQUIRES either explicit financial framing ("save", "money for retirement", "budget", "rates", "interest") OR an explicit "now vs later" / "today vs tomorrow" temporal trade-off framing. Forward-looking aspiration alone is NOT enough.
+
+WORKED EXAMPLES:
+
+ASPIRATION_VS_ACCEPTANCE (NOT present_vs_future):
+"My boss kept saying he cannot pay us on time. We are all worried the company may close. I am always proud of my job, which brings me joy and satisfaction over last 25 years."
+-> aspiration_vs_acceptance: ongoing pride (aspiration: "always proud", "joy and satisfaction over last 25 years") vs accepting financial/job precarity ("worried the company may close", "cannot pay us on time"). Both poles emotional/lifeworld. NOT present_vs_future because there is no explicit "spend now vs save later" or "today vs tomorrow" trade-off — the temporal language is about a precarious-employment NOW, not a deferred-vs-immediate-financial-choice.
+
+PRESENT_VS_FUTURE (genuine cases):
+"I want to enjoy my paycheck now but I know I should save for retirement"
+-> present_vs_future: explicit temporal-financial trade-off (spend now vs save for later, retirement framing)
+"I would like higher interest rates on my CD but I understand it may not be possible"
+-> aspiration_vs_acceptance (both emotional/financial-aspiration poles named) AND present_vs_future (the rates framing is explicit financial)
+
+PRESENT_VS_FUTURE OVER-FIRES — DO NOT TAG these:
+"I'd like to be in a position to participate in more activities and spend time with people I care about"
+-> NOT present_vs_future. Aspirational forward-looking statement only — no explicit "now vs later" trade-off and no financial framing. Just an aspiration.
+
+"I'm hoping to enjoy a life without roomates that are useless in 2026"
+-> NOT present_vs_future. The "in 2026" tense is not a financial-temporal trade-off; it's just a target date for a life-state wish.
+
+"I have a feeling it's going to be a great year just waiting for winter to end"
+-> NOT present_vs_future. Forward-looking but not a now-vs-later trade-off.
+
+When a verbatim is forward-looking but lacks an explicit "now vs later" trade-off and lacks explicit financial framing, do NOT tag present_vs_future.
+
+## SERVED_VS_OVERLOOKED — positive-framing clarifier
+
+served_vs_overlooked applies even when the verbatim is positively framed (hopes, aspirations) about a structurally underserved group, category, or population. The structural visibility / recognition / inclusion gap is what counts, not whether the framing is a complaint.
+
+POSITIVE-FRAMING TRIGGERS (these all qualify):
+- "I hope X (an underserved group) gets more attention/recognition/parity"
+- "I want brands to make more for [overlooked population]"
+- "It would be great if [overlooked group] had what [served group] has"
+- Naming a parity gap between two groups, regardless of complaint frame
+
+WORKED EXAMPLES:
+RIGHT: "I hope women's sports continue to grow in popularity and can be as profitable as men's sports have become at the pro levels. This will then increase the salaries of women in sports."
+-> served_vs_overlooked. The structural gap is named — women's sports positioned BELOW men's sports, with hope for parity. The positive framing ("hope", "increase") does not disqualify the tag.
+RIGHT: "I want fashion brands to make more clothes for plus-size customers"
+-> served_vs_overlooked (positive framing, structural visibility gap named)
+RIGHT: "Every category should have options for older adults — most just market to younger people"
+-> served_vs_overlooked
+
+NOT served_vs_overlooked even with a positive frame:
+"I hope this brand keeps making good products" (no structural gap named)
+"I hope I get a raise this year" (individual aspiration, not group visibility)
+
 ## DWELLING_VS_ADVANCING (tension) - worked examples
 
 The pull between staying with what's familiar, comfortable, or known vs moving on to something new, different, or forward.
