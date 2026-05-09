@@ -119,8 +119,7 @@ When reporting distributions of `raw_value` for agreement / frequency / importan
 | is_quotable | pre-flagged quotability — ALWAYS filter `is_quotable = true` for output |
 | sentiment | positive / negative / mixed / neutral |
 | themes | text[] — thematic tags |
-| joy_modes | text[] — populated, see Reference vocabularies |
-| tensions, occasions, functional_jobs | text[] — currently NULL/empty (see population status below) |
+| joy_modes, tensions, functional_jobs, occasions | text[] — all four populated for every substantive verbatim (Haiku v6 framework backfill, May 2026). See Reference vocabularies for valid tag values and `bjl_tag_calibration` for per-tag confidence. |
 | search_vector | tsvector — full-text index on response_text |
 | embedding | vector — semantic embedding |
 
@@ -148,25 +147,72 @@ The four BJL frameworks are tagged via reference tables. Each table has at minim
 
 `tranquil` was added as the 14th mode per Law 9.
 
-**Population status:** `bjl_verbatims.joy_modes` is populated on all rows (the Haiku framework backfill completed). Filter with `'relational' = ANY(joy_modes)` or `joy_modes && ARRAY['hedonic','playful']` for overlap.
-
 ### Tensions (15, table `bjl_tensions`)
 
-`aspiration_vs_acceptance, challenger_vs_legacy, control_vs_surrender, digital_vs_physical, discovery_vs_comfort, forgiveness_vs_foresight, individual_vs_communal, introvert_vs_extrovert, luxury_vs_value, moderation_vs_indulgence, performance_vs_pleasure, present_vs_future, savings_vs_spending, self_vs_others, tradition_vs_modern`
+`aspiration_vs_acceptance, challenger_vs_legacy, control_vs_surrender, digital_vs_physical, discovery_vs_comfort, dwelling_vs_advancing, individual_vs_communal, introvert_vs_extrovert, luxury_vs_value, moderation_vs_indulgence, performance_vs_pleasure, present_vs_future, self_vs_others, served_vs_overlooked, tradition_vs_modern`
 
-**Population status:** `bjl_verbatims.tensions` array is currently NULL on all rows (backfill in progress). The 15 framework definitions in `bjl_tensions` itself are queryable today for "what tensions does BJL track?" type questions. Filters against the verbatim array will start returning results once the backfill lands.
+`dwelling_vs_advancing` and `served_vs_overlooked` were added in v6.
 
-### Functional jobs (24, table `bjl_functional_jobs`)
+### Functional jobs (23, table `bjl_functional_jobs`)
 
-`build_belonging, cheer_team, compete, connect_remotely, create_memory, demonstrate_care, display_taste, escape_routine, express_creativity, feel_proud, immerse_in_story, learn_grow, mark_milestone, nourish_others, plan_future, preserve_tradition, provide_security, refuel, relax_recover, relieve_anxiety, reward_self, share_experience, signal_identity, signal_status`
+`build_belonging, cheer_team, compete, connect_remotely, create_memory, demonstrate_care, display_taste, escape_routine, express_creativity, feel_proud, immerse_in_story, learn_grow, mark_milestone, nourish_others, plan_future, preserve_tradition, provide_security, refuel, relax_recover, relieve_anxiety, reward_self, share_experience, signal_identity`
 
-**Population status:** `bjl_verbatims.functional_jobs` array is currently NULL on all rows (backfill in progress). Same situation as tensions.
+### Occasions (26, table `bjl_occasions`)
 
-### Occasions (25, table `bjl_occasions`)
+`alone_time, anticipation, birthday, celebration, evening, everyday, gathering, gift_giving, holiday, hosting, in_moment, live_event, mealtime, memory, morning, post_purchase, purchase_moment, service, shopping, special_occasion, sports_viewing, transition, travel_journey, vacation, weekend, work`
 
-`alone_time, anticipation, birthday, celebration, evening, everyday, gathering, gift_giving, holiday, hosting, in_moment, live_event, mealtime, memory, morning, post_purchase, purchase_moment, shopping, special_occasion, sports_viewing, transition, travel_journey, vacation, weekend, work`
+`service` was added in v6 to capture customer-service / help-seeking interactions distinct from `shopping` and `post_purchase`.
 
-**Population status:** `bjl_verbatims.occasions` array is currently NULL on all rows (backfill in progress).
+### Population status — all four frameworks fully populated
+
+The Haiku v6 framework backfill (May 2026) tagged all 63,271 substantive `bjl_verbatims` rows. Counts roughly:
+- joy_modes: ~32K verbatims tagged across 14 keys (most-used: relational, hedonic, tranquil, inspirational)
+- tensions: ~5K tag instances across 15 keys (most-used: luxury_vs_value, present_vs_future, dwelling_vs_advancing, aspiration_vs_acceptance)
+- functional_jobs: ~21K tag instances across 23 keys (most-used: share_experience, build_belonging, relax_recover, immerse_in_story)
+- occasions: ~24K tag instances across 26 keys (most-used: vacation, anticipation, shopping, everyday)
+
+Filter with `'relational' = ANY(joy_modes)` or `joy_modes && ARRAY['hedonic','playful']` for overlap. Same patterns work for the other three array columns.
+
+The 484 too-short verbatims (response_text < 5 chars) were deliberately not tagged and remain NULL.
+
+## Tag confidence — `bjl_tag_calibration`
+
+Each of the 78 framework tags has a calibration record in `bjl_tag_calibration` derived from the v6 50-sample empirical run. Use it to scale how confidently a finding can be cited.
+
+Schema:
+- `framework` — joy_modes / tensions / functional_jobs / occasions
+- `tag_key` — matches the keys in the four reference tables
+- `precision`, `recall` — empirical from the 50-sample (NULL if no calibration data)
+- `gold_sample_n`, `pred_sample_n` — sizes for the precision/recall denominators
+- `confidence_band` — `'high'` | `'medium'` | `'low'` | `'untested'`
+- `notes` — calibration-specific guidance per tag
+
+Confidence-band rules:
+- **high** (P ≥ 0.80, R ≥ 0.50, gold ≥ 2): rock-solid. Cite confidently. ~30 tags.
+- **medium** (P 0.50–0.79, or high P with low recall): present directionally, hedge mildly.
+- **low** (P < 0.50, or known over-fires): hedge explicitly or move to "worth testing" block.
+- **untested** (no calibration sample): treat as medium-low; flag uncertainty.
+
+Always JOIN `bjl_tag_calibration` when surfacing tag-derived counts to the synthesizer:
+
+```sql
+SELECT
+  mode AS joy_mode,
+  COUNT(*) AS n,
+  c.confidence_band,
+  c.notes AS confidence_note
+FROM bjl_verbatims, unnest(joy_modes) AS mode
+LEFT JOIN bjl_tag_calibration c ON c.framework = 'joy_modes' AND c.tag_key = mode
+WHERE -- ... filters ...
+GROUP BY mode, c.confidence_band, c.notes
+ORDER BY n DESC;
+```
+
+The synthesizer reads `confidence_band` and chooses hedging language. Don't bury the band — it belongs in scratch alongside the count.
+
+### Quantitative findings have NO tag-uncertainty
+
+Joy Index, demographic splits, item rankings, response counts, and percentages from `bjl_responses` and `bjl_scores` have **zero Haiku error**. Margin is statistical sampling error only. Only verbatim-derived framework findings are subject to the confidence-band machinery above.
 
 ## Joy index math
 

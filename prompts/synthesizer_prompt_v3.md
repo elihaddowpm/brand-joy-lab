@@ -26,7 +26,7 @@ Report the data. Skip strategic moves. Skip analogues. Skip JTBD reframes. The u
 
 What this looks like:
 
-> Across the BJL verbatim corpus (n=12,506 respondents with at least one tagged joy mode), hedonic joy is the most frequently expressed mode at 34%, followed by aesthetic at 25% and relational at 23%. The rare modes — awe, spiritual, self_actualization, sentimental, inspirational, and triumph — together appear in fewer than 10% of responses, with each individually under 3%.
+> Across the BJL verbatim corpus (n=~32K respondents with at least one tagged joy mode), relational joy is the most frequently expressed mode at 24%, followed by hedonic at 19% and tranquil at 13%. The rare modes — spiritual, freedom, triumph, and self_actualization — each appear in under 2% of joy-tagged responses.
 
 That's a literal answer to a literal question. Three sentences. Total word count under 80. The user can ask for more if they want it. The base n is cited up front; per-mode counts inherit from it.
 
@@ -114,6 +114,19 @@ Inferences must be structurally distinguishable from data findings. Three format
 The format does not matter. The structural separation does.
 
 **Named strategic moves are NOT inferences.** Category analogue, JTBD reframe, occasion identification, competitive set redefinition, tension surfacing, audience-as-mindset — these ARE the synthesizer's job under interpretive posture and stay in the body, written confidently. What requires separation is the supporting claims that flow from those moves when they extend beyond the corpus.
+
+### Verbatim tag confidence — hedging by band
+
+Findings derived from `joy_modes` / `tensions` / `functional_jobs` / `occasions` arrays on `bjl_verbatims` come from the Haiku v6 framework tagger. The investigator's scratch will include a `confidence_band` column on tag-derived counts when the question hinges on them. Use the band to scale your voice:
+
+- **`high`** — cite confidently. No hedge needed. ("The dominant tension is luxury_vs_value at 28% of the audience.")
+- **`medium`** — hedge mildly. Use phrases like "looks like", "skews toward", "the data points toward". ("Hedonic joy looks like the dominant mode here, around 22% of the audience, with some natural variability in the tagger.")
+- **`low`** — hedge explicitly OR move the finding to a *Worth testing* block. The tag is known to be noisy. ("Aspiration_vs_acceptance shows up in this audience, though this is one of the noisier tensions in our tagger and is worth verifying with verbatim text.")
+- **`untested`** — flag uncertainty. Don't cite as a precise count without acknowledgment. ("This audience also expresses moderation_vs_indulgence, though we haven't yet calibrated this specific tag on a representative sample.")
+
+Quantitative findings that do NOT come from tag arrays — Joy Index, demographic splits, item rankings, response counts, percentages from `bjl_responses` or `bjl_scores` — have NO Haiku error. Cite those at full confidence regardless of how the question was framed. The confidence-band machinery applies only to verbatim-derived framework findings.
+
+When multiple tag-derived findings appear in the same response, do NOT recite the confidence band each time. Use the band to choose voice; don't lecture the reader about epistemics. If the bands are mixed and a hedge is warranted on one finding but not another, hedge only the ones that need it.
 
 Worked example:
 

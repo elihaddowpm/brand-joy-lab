@@ -53,7 +53,31 @@ Read it carefully. It encodes judgment about THIS specific question that wasn't 
 
 Every quantitative claim you put in scratch must come from a query that returned **n ≥ 100** in the cell being described. If a cross-tab cell falls below 100, either combine cells until it doesn't, or drop the specific number and report the directional finding only.
 
-For minimal-depth investigations, you may not need to verify n directly — if the query is a single aggregation across the full corpus (e.g., joy_modes distribution across all 62,755 verbatims), the n is implicit and meets the floor.
+For minimal-depth investigations, you may not need to verify n directly — if the query is a single aggregation across the full corpus (e.g., joy_modes distribution across all ~63K verbatims), the n is implicit and meets the floor.
+
+### Verbatim tag confidence (joy_modes / tensions / functional_jobs / occasions)
+
+The four framework arrays on `bjl_verbatims` are populated by the Haiku v6 framework tagger (May 2026 backfill). Each tag has an empirical precision/recall and a `confidence_band` in `bjl_tag_calibration`.
+
+When the user's question hinges on tag-derived counts (e.g., "what tensions do casino fans express?", "what jobs is this audience hiring this for?"), JOIN `bjl_tag_calibration` so the synthesizer knows how confident to sound:
+
+```sql
+SELECT
+  t AS tag,
+  COUNT(DISTINCT v.respondent_id) AS n,
+  c.confidence_band,
+  c.notes AS confidence_note
+FROM bjl_verbatims v, unnest(v.tensions) AS t
+LEFT JOIN bjl_tag_calibration c
+       ON c.framework = 'tensions' AND c.tag_key = t
+WHERE -- ... category/audience filters ...
+GROUP BY t, c.confidence_band, c.notes
+ORDER BY n DESC
+```
+
+Confidence bands: `high` ≈ rock-solid (cite confidently); `medium` ≈ directional (mild hedge); `low` ≈ known-noisy (hedge explicitly or move to "worth testing"); `untested` ≈ no calibration sample (treat as medium-low).
+
+Quantitative findings (Joy Index, demographic splits, item rankings, response counts) have NO tag uncertainty — only verbatim-derived framework findings need this treatment.
 
 ### Ordinal questions report percentages, not counts
 
@@ -107,18 +131,23 @@ Your scratch handoff to the synthesizer is structured. The format depends on dep
 
 ```
 QUERY:
-SELECT mode, COUNT(DISTINCT respondent_id) AS n,
-       ROUND(100.0 * COUNT(DISTINCT respondent_id) /
-             (SELECT COUNT(DISTINCT respondent_id) FROM bjl_verbatims WHERE joy_modes IS NOT NULL)::numeric, 1) AS pct
-FROM bjl_verbatims, unnest(joy_modes) AS mode
-WHERE joy_modes IS NOT NULL
-GROUP BY mode ORDER BY n DESC
+SELECT mode, COUNT(DISTINCT v.respondent_id) AS n,
+       ROUND(100.0 * COUNT(DISTINCT v.respondent_id) /
+             (SELECT COUNT(DISTINCT respondent_id) FROM bjl_verbatims WHERE joy_modes IS NOT NULL AND array_length(joy_modes, 1) > 0)::numeric, 1) AS pct,
+       c.confidence_band,
+       c.notes AS confidence_note
+FROM bjl_verbatims v, unnest(v.joy_modes) AS mode
+LEFT JOIN bjl_tag_calibration c
+       ON c.framework = 'joy_modes' AND c.tag_key = mode
+WHERE v.joy_modes IS NOT NULL AND array_length(v.joy_modes, 1) > 0
+GROUP BY mode, c.confidence_band, c.notes
+ORDER BY n DESC
 
 RESULT:
-[14 rows of mode, n, pct]
-DENOMINATOR: 62,755 verbatims with at least one tagged joy mode
+[14 rows of mode, n, pct, confidence_band, confidence_note]
+DENOMINATOR: ~32K verbatims with at least one tagged joy mode (post-v6)
 
-NOTE: Question is descriptive. Triage flagged literal posture. No strategic frame written.
+NOTE: Question is descriptive. Triage flagged literal posture. No strategic frame written. Confidence-band column flows through to synthesizer for hedging.
 ```
 
 ### For focused depth
