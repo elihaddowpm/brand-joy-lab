@@ -210,14 +210,33 @@ async def main_async(args):
         if not os.environ.get(var):
             sys.exit(f'missing env var: {var}')
 
+    # Outer-loop resilience for startup calls. _http_with_retry's 8-retry
+    # budget gives ~10 minutes; if Supabase is having a sustained outage
+    # longer than that, we want to keep waiting rather than crash. Wraps
+    # fetch_frameworks() and count_remaining() in their own sleep-retry loop.
+    def _resilient(fn, label):
+        attempt = 0
+        while True:
+            try:
+                return fn()
+            except Exception as e:
+                attempt += 1
+                cooldown = min(60 + attempt * 30, 300)
+                sys.stderr.write(
+                    f'    [STARTUP {label} FAILED — attempt #{attempt}, sleeping {cooldown}s] '
+                    f'{type(e).__name__}: {e}\n'
+                )
+                sys.stderr.flush()
+                time.sleep(cooldown)
+
     print('Fetching frameworks via REST...')
-    frameworks = fetch_frameworks()
+    frameworks = _resilient(fetch_frameworks, 'fetch_frameworks')
     counts = {k: len(v) for k, v in frameworks.items()}
     print(f'Frameworks loaded: {counts}')
     if any(counts[k] == 0 for k in counts):
         sys.exit('Empty framework table. Aborting.')
 
-    total = count_remaining(args.resume)
+    total = _resilient(lambda: count_remaining(args.resume), 'count_remaining')
     if args.limit:
         total = min(total, args.limit)
     print(f'Target: {total} verbatims at concurrency={args.concurrency}, batch_size={args.batch_size}')
@@ -233,10 +252,30 @@ async def main_async(args):
     n_failed_total = 0
     t0 = time.time()
 
+    fetch_attempts_since_success = 0
+
     while processed < total:
         remaining = total - processed
         bs = min(args.batch_size, remaining)
-        batch, raw_max_id = fetch_batch(bs, args.resume, last_id)
+        # Fetch with outer-loop resilience: if the inner _http_with_retry
+        # exhausts its 8 retries (about 10 minutes of cumulative backoff),
+        # we still don't want to kill a multi-hour run. Instead we wait
+        # an additional 60-second cool-down and try again indefinitely.
+        # Sustained outages will still surface in the log; we just don't
+        # crash on them.
+        try:
+            batch, raw_max_id = fetch_batch(bs, args.resume, last_id)
+            fetch_attempts_since_success = 0
+        except Exception as e:
+            fetch_attempts_since_success += 1
+            cooldown = min(60 + fetch_attempts_since_success * 30, 300)
+            sys.stderr.write(
+                f'    [FETCH FAILED — attempt #{fetch_attempts_since_success}, sleeping {cooldown}s] '
+                f'{type(e).__name__}: {e}\n'
+            )
+            sys.stderr.flush()
+            time.sleep(cooldown)
+            continue
         if raw_max_id is None:
             # Server returned zero rows — we're at the end of the dataset.
             print('No more verbatims to fetch — stopping.')
