@@ -187,26 +187,67 @@ Schema:
 - `confidence_band` — `'high'` | `'medium'` | `'low'` | `'untested'`
 - `notes` — calibration-specific guidance per tag
 
-Confidence-band rules:
-- **high** (P ≥ 0.80, R ≥ 0.50, gold ≥ 2): rock-solid. Cite confidently. ~30 tags.
-- **medium** (P 0.50–0.79, or high P with low recall): present directionally, hedge mildly.
-- **low** (P < 0.50, or known over-fires): hedge explicitly or move to "worth testing" block.
-- **untested** (no calibration sample): treat as medium-low; flag uncertainty.
+### Confidence-band semantics
 
-Always JOIN `bjl_tag_calibration` when surfacing tag-derived counts to the synthesizer:
+The `confidence_band` column tells the synthesizer how to scale its voice when surfacing tag-derived findings. Bands are assigned from empirical precision/recall on the calibration sample, with manual override when small samples make the empirical value misleading.
+
+| Band | Criteria | Voice instruction |
+|---|---|---|
+| `high` | P ≥ 0.80 AND R ≥ 0.50 AND gold ≥ 2 | Cite confidently. No hedge. |
+| `medium` | P 0.50–0.79, OR high P with low recall | Present directionally. Mild hedge ("looks like", "skews toward"). |
+| `low` | P < 0.50, OR known over-fires in production | Hedge explicitly OR move to "worth testing" block. |
+| `untested` | No calibration sample for this tag | Treat as medium-low. Flag uncertainty. |
+
+### Default precision rules
+
+Some tags have a band but a NULL precision (manually-assigned band, no empirical data). The `bjl_tag_precision()` helper encapsulates the defaults so callers don't reinvent them:
+
+| State | Precision returned by helper |
+|---|---|
+| Precision non-null in the table | The stored value |
+| Precision NULL, band ∈ {`high`, `medium`, `low`} | **1.0** (trust the band assignment) |
+| Precision NULL, band = `untested` | **0.65** (medium-low penalty by default) |
+| Tag not in `bjl_tag_calibration` at all | **NULL** (caller decides; do not silently weight) |
+
+The NULL return for unregistered tags is intentional: a new tag that hasn't been added to the calibration table should NOT silently get a 1.0 weight. Register the tag first.
+
+### Helper functions
+
+**`bjl_tag_precision(framework text, tag_key text) → numeric`**
+Returns the weight to apply to a tag's count. Use this in any query that needs to weight tag-derived metrics by empirical accuracy.
 
 ```sql
 SELECT
   mode AS joy_mode,
-  COUNT(*) AS n,
+  COUNT(*) AS raw_n,
+  COUNT(*) * bjl_tag_precision('joy_modes', mode) AS weighted_n,
   c.confidence_band,
   c.notes AS confidence_note
 FROM bjl_verbatims, unnest(joy_modes) AS mode
-LEFT JOIN bjl_tag_calibration c ON c.framework = 'joy_modes' AND c.tag_key = mode
+LEFT JOIN bjl_tag_calibration c
+  ON c.framework = 'joy_modes' AND c.tag_key = mode
 WHERE -- ... filters ...
 GROUP BY mode, c.confidence_band, c.notes
-ORDER BY n DESC;
+ORDER BY raw_n DESC;
 ```
+
+**`bjl_tag_calibration_coverage() → TABLE(drift_type, framework, tag_key, details)`**
+Returns one row per drift between `bjl_tag_calibration` and the four framework reference tables. Empty result = aligned. Drift types: `missing_in_calibration` (tag in reference table, not in calibration), `orphan_in_calibration` (tag in calibration, not in reference table), `invalid_precision` (outside [0, 1]), `invalid_band` (not in valid set).
+
+Run before deploying any tagger or framework change:
+
+```sql
+SELECT * FROM bjl_tag_calibration_coverage();
+-- Empty result = clean. Any rows = drift to resolve.
+```
+
+### Maintenance protocol
+
+When adding or removing a framework tag:
+1. Edit the relevant reference table (`bjl_joy_modes`, `bjl_tensions`, `bjl_functional_jobs`, `bjl_occasions`)
+2. Add a row to `bjl_tag_calibration` (band='untested' if no calibration data yet)
+3. Run `SELECT * FROM bjl_tag_calibration_coverage();` and resolve any drift it reports
+4. Run a new calibration pass to populate precision/recall when sample is available
 
 The synthesizer reads `confidence_band` and chooses hedging language. Don't bury the band — it belongs in scratch alongside the count.
 
