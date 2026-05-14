@@ -76,7 +76,22 @@ After the Haiku retag, `primary_topic` and `subtags` are reliable for filtering 
 | primary_topic | inherited up from items, or set explicitly for question-level filtering |
 | subtags | array |
 | intent_tag | joy / trust / familiarity / likelihood / preference / behavior / emotion / frequency / importance / agreement / identity / decision_maker / life_context |
+| concept_tags | text[] — strategic-concept tags for question discovery beyond keyword search (e.g. `furniture_journey`, `financing_journey`, `retail_in_store`). GIN-indexed. Use `concept_tags && ARRAY['...']` for any-overlap, `@>` for must-contain-all. See "Concept-tag taxonomy" section. |
+| short_label | 5-10 word descriptor of what the question measures |
 | n_items | how many items the question has |
+
+**Concept-tag taxonomy** (initial set, extensible):
+- `furniture_journey` — moments in furniture buying, choosing, owning, living-with arc
+- `home_identity` — what home means: pride, family, identity expression
+- `financing_journey` — financing as an emotional/experiential layer
+- `prequalification` — prequalification offers and their effects
+- `retail_in_store` — physical retail experience
+- `retail_online` — online or app-based retail experience
+- `significant_purchase` — major/significant purchase moment specifically
+- `new_purchase_meaning` — what a new purchase means emotionally
+- `home_transformation` — post-purchase realization phase
+
+**Population status:** populated by an initial Haiku tagging pass on 2026-05-13 (37 of 446 questions tagged with at least one concept). Default for un-tagged questions is `ARRAY[]::text[]`. Tags expand over time as new strategic territories are surfaced.
 
 ### `bjl_respondent_usage` — category usage screener results (~44,816 rows)
 
@@ -255,14 +270,54 @@ The synthesizer reads `confidence_band` and chooses hedging language. Don't bury
 
 Joy Index, demographic splits, item rankings, response counts, and percentages from `bjl_responses` and `bjl_scores` have **zero Haiku error**. Margin is statistical sampling error only. Only verbatim-derived framework findings are subject to the confidence-band machinery above.
 
-## Joy index math
+## Joy index math (scale-aware)
 
-For joy-scale questions:
-- 5-point joy scale (`-3..+5` numeric in raw_value): `numeric_value` = parsed integer, `joy_index` = `numeric_value × 20`. Range -60 to +100.
-- 3-point joy scale (Very much so / Somewhat / Not really or Not at all): `numeric_value` ∈ {3, 2, 1}, `joy_index` ∈ {60, 40, 20}.
-- 4-point joy variant (with "One of my favorites!" label): "One of my favorites!" is excluded from the joy mean per BJL convention. Both `numeric_value` and `joy_index` are NULL for that label.
+The Joy Index is methodologically defined as a transformation of the **9-point joy scale only** (anchored "-3 Definitely NOT Joy" through 0 to "5 Maximum Joy!"), normalized to a 0-to-100 range. **Do NOT compute or report JI for items measured on any other scale**, even if the user phrases their question as "joy score" or "joy index".
 
-Public-population JI is `AVG(joy_index)` across all respondents. Consumer-only JI requires JOIN to `bjl_respondent_usage`.
+For 9-point joy_scale items (the only items where JI is methodologically valid):
+- `numeric_value` = parsed integer from raw_value (range -3 to +5)
+- `joy_index` = `(numeric_value + 3) × (100/8)` — normalizes -3 to 0, +5 to 100
+- Filter to these items via `bjl_questions_v2.question_type = 'joy_scale'` joined to items / responses
+
+For 3-point ordinal items (Very much so / Somewhat / Not really or Not at all):
+- Report **top-box percentage**: share who chose "Very much so" / strongest endorsement
+- OR report the full distribution across all options when granularity matters
+- `joy_index` on these rows is methodologically null and should be ignored even if a value exists in the table
+
+For agree/disagree, likelihood, trust, familiarity, importance, frequency scales:
+- Report top-box or top-2-box percentages, OR the full distribution
+- Never compute a JI-equivalent number
+
+For mixed views (journey maps, category surveys):
+- Separate JI items from top-box items in the output. Don't blend them in a combined "score" column.
+
+Public-population JI is `AVG(joy_index)` across all respondents, **filtered to joy_scale items**. Consumer-only JI requires JOIN to `bjl_respondent_usage`.
+
+```sql
+-- Correct: JI averaged only across joy_scale items
+SELECT i.item_name, AVG(r.joy_index) AS ji, COUNT(*) AS n
+FROM bjl_responses r
+JOIN bjl_items i ON i.item_id = r.item_id
+JOIN bjl_questions_v2 q ON q.question_id = i.question_id
+WHERE q.question_type = 'joy_scale'
+  AND r.joy_index IS NOT NULL
+  AND -- ... other filters ...
+GROUP BY i.item_name
+ORDER BY ji DESC;
+
+-- For 3-point ordinal items: top-box percentage instead
+SELECT i.item_name,
+       100.0 * COUNT(*) FILTER (WHERE r.raw_value = 'Very much so')
+         / NULLIF(COUNT(*), 0) AS top_pct,
+       COUNT(*) AS n
+FROM bjl_responses r
+JOIN bjl_items i ON i.item_id = r.item_id
+JOIN bjl_questions_v2 q ON q.question_id = i.question_id
+WHERE q.question_type = 'description_scale_0_to_5'  -- or whichever 3-point variant
+  AND -- ... other filters ...
+GROUP BY i.item_name
+ORDER BY top_pct DESC;
+```
 
 ## Consumer filter rule
 

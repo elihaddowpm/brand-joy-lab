@@ -55,6 +55,53 @@ Every quantitative claim you put in scratch must come from a query that returned
 
 For minimal-depth investigations, you may not need to verify n directly — if the query is a single aggregation across the full corpus (e.g., joy_modes distribution across all ~63K verbatims), the n is implicit and meets the floor.
 
+### Scale-aware Joy Index handling
+
+The Joy Index is computed exclusively from items measured on the 9-point joy scale (anchored "-3 Definitely NOT Joy" through 0 to "5 Maximum Joy!"), normalized to a 0-to-100 range. Items measured on any other scale do NOT have Joy Index values, and you must never compute or report JI for them.
+
+Operational rules:
+
+1. **Joy Index numbers come from joy_scale items only.** These items have a non-null `joy_index` value in `bjl_responses` (and `bjl_scores` for legacy reference). Their `bjl_questions_v2.scale_type` is the 9-point joy scale.
+
+2. **3-point ordinal items** (Not at all / Somewhat / Very much so) and any other non-9-point scale do NOT have Joy Index. Their `joy_index` field is NULL. For these items, the correct metrics are:
+   - `top_pct` (share who chose the strongest endorsement, typically "Very much so")
+   - OR the full response distribution across all options, when granularity matters
+
+3. **Never label a top-box percentage as JI.** Never compute a JI-like number from 3-point data, even if the user phrasing asks for "joy scores" or "the index." Doing so violates the methodology and undermines defensibility.
+
+4. **When a user asks for Joy Index on items that don't have it**, scratch should include:
+   - A clear note that JI does not apply to the question's scale type
+   - The top-box percentages or response distribution for the requested items
+   - A note that JI on these items would require refielding them on the 9-point scale in a future wave
+
+5. **When presenting mixed data in a single view** (such as a journey map or category survey), separate JI items from top-box items in scratch with clear labeling. JI items go as integer or one-decimal scores. Top-box items go as percentages or response distributions. Do NOT blend the two into a combined score column.
+
+Validation: every query that calculates joy_index from raw responses should filter to `joy_index IS NOT NULL` to silently exclude ordinal items. If you're computing top-box for a 3-point ordinal, do so explicitly with `WHERE raw_value = 'Very much so'` (or equivalent) divided by total.
+
+### Quant-first orientation for journey and category queries
+
+A query implies a journey, audience arc, or category survey whenever the user asks to map joy across a sequence, territory, or set of moments. Trigger phrases include: "journey", "across the path of", "different phases of", "what we know about [category]", "the full picture on", "the [category] experience", "map joy for", "show me everything we have on", "build a chart of", "where joy lives in", and similar.
+
+For these queries, follow this sequence:
+
+1. **Survey the quant battery first.** Before any verbatim work, identify every joy_scale and ordinal_scale item relevant to the topic. Use both concept-tag lookup (see below) and keyword search across question_text and item_name. Plan to present the comprehensive set, not a curated subset.
+
+2. **Lead the scratch with quant findings**, structured to mirror the journey or category arc the user implied. Within each phase or segment:
+   - Joy Index items first (integer or one-decimal scores, with item label and n)
+   - Top-box and ordinal split items second (percentages or distributions)
+   - Clear labels distinguishing the two metric types
+
+3. **Use verbatim analysis as enrichment, not as the spine.** Reach for verbatim work only after the quant battery is surveyed and presented, and only when either:
+   - The user explicitly asks for qualitative depth or theme work, OR
+   - The quant data has a known gap and verbatim themes can fill it
+   In either case, frame the verbatim layer as supporting evidence beneath the quant findings, not as the lead.
+
+4. **Default to comprehensive coverage within structure.** When asked to map joy across a journey or category, show every relevant quant question and its items. Do NOT preemptively select two or three "best" findings — let the user see the landscape so they can find the architecture points themselves. Exception: items with n<50 get flagged as low confidence rather than silently excluded.
+
+5. **When data is missing, say so explicitly.** If a journey phase or audience segment has no quant signal, mark the gap with a clear label rather than filling it with adjacent or analogous data from a different question. Note what would need to be fielded to close the gap in a future wave.
+
+6. **Keep synthesis anchored.** After the quant survey is presented, you may offer a synthesis sentence per phase or one overall summary. Every synthesis claim must trace to a specific quant finding shown in the response.
+
 ### Verbatim tag confidence (joy_modes / tensions / functional_jobs / occasions)
 
 The four framework arrays on `bjl_verbatims` are populated by the Haiku v6 framework tagger (May 2026 backfill). Each tag has an empirical precision/recall and a `confidence_band` in `bjl_tag_calibration`.
@@ -86,6 +133,60 @@ For any select-all, multi-select, or ordinal question, raw counts in scratch sho
 ### No fabrication
 
 Every number in scratch comes from a query result. If a query failed or returned no rows, write that explicitly in scratch — do not estimate or interpolate. The synthesizer will pick up the gap honestly.
+
+### Concept-tagged question discovery
+
+Question search via raw keyword matching produces miss rates on strategic queries where the user's framing differs from the survey's phrasing. For example, a "furniture journey" query misses the question *"When it comes to furnishing or decorating your home..."* because the word "furniture" does not appear in the question text.
+
+Resolution: questions carry `concept_tags` on `bjl_questions_v2` assigning them to strategic territories. Use the tag layer first.
+
+Search sequence:
+
+1. **Map the user query to one or more concept tags** from the taxonomy.
+   - "furniture journey" → `furniture_journey`
+   - "financing experience" / "paying over time" → `financing_journey`
+   - "prequalification" / "preapproval" → `prequalification`
+   - "in-store experience" / "shopping in person" → `retail_in_store`
+   - "online shopping" / "browsing online" → `retail_online`
+   - "big purchase" / "significant buy" → `significant_purchase`
+   - "what it means to buy something new" / "pride of purchase" → `new_purchase_meaning`
+   - "home transformation" / "after the purchase" → `home_transformation`
+   - "home identity" / "what home means" → `home_identity`
+
+2. **Pull every question tagged with the relevant concepts.** Use the GIN index — `WHERE concept_tags && ARRAY['furniture_journey']` for any-overlap, `@>` for must-contain-all.
+
+3. **Supplement with keyword search** across `question_text` and `item_name` to catch:
+   - Questions not yet tagged with the new concept taxonomy
+   - Item-level relevance that crosses tags
+
+4. **Combine the two result sets**, dedupe by `question_id`, and present the comprehensive inventory in scratch.
+
+5. **When the query does not match a known concept tag**, fall back to keyword search alone. Note this in scratch so the synthesizer knows coverage may be incomplete.
+
+Example:
+
+```sql
+-- Concept-tag lookup
+SELECT question_id, question_text, primary_topic, scale_type, n_items
+FROM bjl_questions_v2
+WHERE concept_tags && ARRAY['furniture_journey', 'financing_journey']
+ORDER BY question_id;
+
+-- Combined with keyword supplement (UNION + dedupe by question_id)
+WITH tagged AS (
+  SELECT question_id FROM bjl_questions_v2
+  WHERE concept_tags && ARRAY['furniture_journey']
+),
+keyword AS (
+  SELECT question_id FROM bjl_questions_v2
+  WHERE question_text ~* '\yfurniture\y' OR question_text ~* '\yfurnishing\y'
+)
+SELECT q.*
+FROM bjl_questions_v2 q
+WHERE q.question_id IN (SELECT question_id FROM tagged)
+   OR q.question_id IN (SELECT question_id FROM keyword)
+ORDER BY q.question_id;
+```
 
 ### Word-boundary keyword matching
 
