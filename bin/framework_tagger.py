@@ -313,6 +313,96 @@ CONCRETE APPLICATIONS:
 When in doubt, under-tag. The full output `{joy_modes: [], tensions: [], functional_jobs: [], occasions: []}` is better than a wrongly-applied tag.
 
 ANTI-PATTERN: emitting 5+ tags across the four frameworks for a verbatim with three or four words. Thin verbatims should produce thin output.
+
+## Rule 9: Temporal and conditional language is grammar, not signal
+
+Hypothetical, conditional, frequency-based, and post-experience temporal language do NOT trigger their lexically-similar tags by themselves. The verbatim must express the actual phenomenon, not merely gesture at it through grammar.
+
+The principle: temporal language describes WHEN something is being discussed. Tags describe WHAT phenomenon the verbatim expresses. Don't confuse the two.
+
+### Hypothetical / conditional framings ("would," "if," "could")
+
+These describe hypotheses about categories, not actual phenomena.
+
+WRONG: "I would expect a hotel to feel relaxing" -> anticipation (this is hypothetical category framing)
+WRONG: "I would feel relaxed at the spa" -> tranquil (hypothetical, not expressed feeling)
+WRONG: "If I went on vacation, I'd be happy" -> anticipation (counterfactual, not planned event)
+
+RIGHT: "Looking forward to my Hawaii trip in March" -> anticipation (specific planned event + forward emotion)
+RIGHT: "I'm so relaxed when I'm at my cabin" -> tranquil (expressed actual state)
+
+### Future-tense without commitment
+
+Loose future-tense and uncertain framings should not trigger anticipation.
+
+WRONG: "I'll probably do that someday" -> anticipation (loose future, no commitment)
+WRONG: "I might go to a concert" -> anticipation (uncertainty, not planning)
+
+RIGHT: "I'm planning to take my daughter to Disney in June" -> anticipation (specific event + commitment)
+
+### Frequency / habit mentions ("every," "always," "usually")
+
+Frequency mentions describe regularity, not necessarily the everyday joy mode.
+
+WRONG: "I watch movies every weekend" -> everyday (frequency description only)
+WRONG: "I always buy that brand" -> everyday (preference, not joy of ordinary moments)
+
+The everyday occasion requires the verbatim to express the JOY of routine, ordinary, or quotidian moments — not merely mention that something happens frequently.
+
+RIGHT: "There's something special about my morning coffee routine, just being still" -> everyday (expressed joy of ordinary)
+RIGHT: "I love the small daily moments with my dog before work" -> everyday (joy in the routine itself)
+
+### Post-experience reflection ("after," "later," "afterwards")
+
+Sequential mentions of a post-purchase moment do not automatically warrant the post_purchase tag.
+
+WRONG: "After I bought it, I was happy" -> post_purchase (sequential, not focally post-purchase)
+WRONG: "I bought it and then enjoyed it" -> post_purchase (purchase moment is the focus, not after)
+
+The post_purchase occasion requires the verbatim's emotional weight to sit squarely AFTER the purchase, with sustained or recurring satisfaction tied to ownership.
+
+RIGHT: "Every time I see it on the shelf, I'm proud I bought it" -> post_purchase (focal sustained ownership emotion)
+RIGHT: "I keep noticing how much I enjoy using it months later" -> post_purchase (sustained post-purchase joy)
+
+### Mixed feelings / ambivalence ("but," "however")
+
+Generic ambivalence does not trigger aspiration_vs_acceptance.
+
+WRONG: "Horrible but great" -> aspiration_vs_acceptance (mixed feelings, no aspiration framing)
+WRONG: "Stressful but worth it" -> aspiration_vs_acceptance (ambivalence, not aspiration tension)
+
+The aspiration_vs_acceptance tension specifically requires an expressed gap between aspiring/wanting/dreaming and accepting/settling/making-do.
+
+RIGHT: "I want the premium model but I'm settling for what I can afford" -> aspiration_vs_acceptance (explicit aspiration + acceptance)
+RIGHT: "I dream of a bigger house but I've made peace with this one" -> aspiration_vs_acceptance (dream vs. acceptance)
+
+### Present + future mentions without tension
+
+Mentioning both timeframes does not equal present_vs_future tension.
+
+WRONG: "Saving up for my 2026 vacation" -> present_vs_future (no present pull expressed)
+WRONG: "Planning my future career" -> present_vs_future (only future mention)
+WRONG: "Looking forward to next year while enjoying now" -> present_vs_future (sequential, no pull)
+
+The present_vs_future tension requires an explicit dual PULL between a present-state desire/value AND a future-state desire/value, with the respondent expressing the gap or trade-off between them.
+
+RIGHT: "Part of me wants to save for retirement, part wants to enjoy life now" -> present_vs_future (explicit dual pull)
+RIGHT: "I should be planning ahead but I keep living for today" -> present_vs_future (gap between should and is)
+RIGHT: "Caught between investing in tomorrow and not missing out today" -> present_vs_future (named tension)
+
+### Inspirational vs awe boundary tightening
+
+Inspirational was over-firing in v6 and pulled cases that belonged to awe. The discrimination:
+
+- **Inspirational** -> energized toward a specific action or behavior change. The verbatim expresses being moved to DO something.
+- **Awe** -> wonder or amazement at something larger than self. The verbatim expresses being struck by scale, beauty, history, or grandeur.
+
+WRONG: "Visiting historical sites" -> inspirational by default (history alone is not inspirational)
+
+RIGHT: "Visiting historical sites makes me want to learn more about my heritage" -> inspirational (action-oriented)
+RIGHT: "Standing in those ancient ruins, just feeling small in the best way" -> awe (scale + wonder)
+
+If a verbatim expresses both, both tags can apply. If it only expresses one, only that one applies.
 """
 
 WORKED_EXAMPLES = """\
