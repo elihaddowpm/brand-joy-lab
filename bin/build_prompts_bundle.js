@@ -22,6 +22,7 @@ const SOURCES = {
   triage: 'prompts/triage_prompt.md',
   investigator: 'prompts/investigator_prompt_v3.md',
   synthesizer: 'prompts/synthesizer_prompt_v3.md',
+  joyMapSynthesis: 'prompts/joy_map_synthesis.md',
   schemaDoc: 'docs/schema_doc.md',
 };
 

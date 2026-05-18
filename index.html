@@ -1162,6 +1162,7 @@ const Rail = ({ mode, setMode }) => {
   const items = [
     { k: "intelligence", label: "Intelligence", num: "01" },
     { k: "outreach",     label: "Outreach",     num: "02" },
+    { k: "joy_map",      label: "Joy Map",      num: "03" },
   ];
   return (
     <aside className="rail">
@@ -2531,6 +2532,270 @@ const BatchEmailRow = ({ result }) => {
 };
 
 /* =========================================================================
+ * 12b. JoyMapMode — Joy Map workbench tool (Phase 1).
+ *      Two sub-views: Audience Joy Profile + Dance Map.
+ *      See /docs/joy_map_design_spec_v0_2.md for the design spec.
+ * ========================================================================= */
+
+const JOY_MAP_FILTERS = {
+  age_band:        { label: "Age", options: ["18-24","25-34","35-44","45-54","55-64","65+"] },
+  gender:          { label: "Gender", options: ["Female","Male","Non-binary"] },
+  income_bracket:  { label: "Income", options: ["Under $35K","$35K-$50K","$50K-$75K","$75K-$100K","$100K-$150K","$150K+"] },
+  region:          { label: "Region", options: ["Northeast","Midwest","South","West"] },
+  parental_status: { label: "Parental status", options: ["Parent","Not a parent"] },
+  marital_status:  { label: "Marital status", options: ["Married","Single","Divorced","Widowed","Other"] },
+};
+
+// Section accent colors per the design spec
+const JOY_MAP_SECTION_STYLE = {
+  strong_alignment:     { label: "Strong Alignment",    color: "#0d9488", dot: "#14b8a6", description: "Brand and audience already in step." },
+  misalignment:         { label: "Misalignment",        color: "#b45309", dot: "#f59e0b", description: "Brand emphasizes a dimension the audience does not." },
+  untapped_opportunity: { label: "Untapped Opportunity", color: "#7c3aed", dot: "#a855f7", description: "Audience signal the brand is not yet engaging." },
+};
+
+const JoyMapFindingCard = ({ card, accent }) => {
+  const layerLabel = card.layer === '3'
+    ? `Layer 3 · ${card.framework || 'Tag'}`
+    : `Layer ${card.layer} · ${card.metric_label || ''}`;
+  const metricDisplay = card.metric_label === 'JI'
+    ? String(Math.round(Number(card.metric_value) || 0))
+    : `${card.metric_value || 0}${card.metric_label === 'TB%' || card.metric_label === 'Tag rate' ? '%' : ''}`;
+  const lowN = card.low_n_warning;
+  return (
+    <div className="joy-map-card">
+      <div className="joy-map-card-head">
+        <div className="joy-map-card-title">{card.bjl_item_name || card.tag || '—'}</div>
+        <span className="joy-map-card-chip" style={{ color: accent }}>{layerLabel}</span>
+      </div>
+      <div className="joy-map-card-metric" style={{ color: accent }}>{metricDisplay}</div>
+      {typeof card.cohort_n === 'number' && (
+        <div className="joy-map-card-n">n = {card.cohort_n.toLocaleString()}{lowN === 'low_n' ? ' · low n' : lowN === 'directional_only' ? ' · use directionally' : ''}</div>
+      )}
+      {card.layer === '3' && card.calibration_band && (
+        <div className="joy-map-card-conf">Confidence: {card.calibration_band}{typeof card.confidence === 'number' ? ` · ${(card.confidence*100).toFixed(0)}%` : ''}</div>
+      )}
+      {card.brand_snippet && (
+        <div className="joy-map-card-line"><span className="joy-map-card-label">Brand:</span> "{card.brand_snippet}"</div>
+      )}
+      {card.audience_signal && (
+        <div className="joy-map-card-line"><span className="joy-map-card-label">Audience:</span> {card.audience_signal}</div>
+      )}
+      {card.rationale && (
+        <div className="joy-map-card-rationale">{card.rationale}</div>
+      )}
+      {card.stretch_angle && (
+        <div className="joy-map-card-stretch">→ {card.stretch_angle}</div>
+      )}
+    </div>
+  );
+};
+
+const JoyMapSection = ({ sectionKey, cards }) => {
+  const style = JOY_MAP_SECTION_STYLE[sectionKey];
+  const safeCards = Array.isArray(cards) ? cards : [];
+  return (
+    <div className="joy-map-section">
+      <div className="joy-map-section-head">
+        <span className="joy-map-section-dot" style={{ background: style.dot }} />
+        <span className="joy-map-section-title" style={{ color: style.color }}>{style.label}</span>
+        <span className="joy-map-section-count">{safeCards.length}</span>
+        <span className="joy-map-section-desc">{style.description}</span>
+      </div>
+      {safeCards.length === 0 ? (
+        <div className="joy-map-section-empty">No findings in this section.</div>
+      ) : (
+        <div className="joy-map-section-cards">
+          {safeCards.map((c, i) => (
+            <JoyMapFindingCard key={`${sectionKey}-${i}`} card={c} accent={style.color} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const JoyMapDanceMapResults = ({ finding }) => {
+  const dm = finding.dance_map || {};
+  const diag = dm.diagnostic || {};
+  const profile = finding.audience_profile || {};
+  return (
+    <div className="joy-map-results">
+      <div className="joy-map-header">
+        <div className="joy-map-header-title">Joy Map · Dance</div>
+        <div className="joy-map-header-meta">
+          Cohort n = {(profile.cohort_n || 0).toLocaleString()}
+          {diag.fallback_layer_used && <span className="joy-map-fallback-tag"> · Layer 3 fallback in use</span>}
+        </div>
+        {diag.mapping_bridge_summary && (
+          <div className="joy-map-header-summary">{diag.mapping_bridge_summary}</div>
+        )}
+      </div>
+      <JoyMapSection sectionKey="strong_alignment" cards={dm.strong_alignment} />
+      <JoyMapSection sectionKey="misalignment" cards={dm.misalignment} />
+      <JoyMapSection sectionKey="untapped_opportunity" cards={dm.untapped_opportunity} />
+    </div>
+  );
+};
+
+const JoyMapProfileResults = ({ finding }) => {
+  const p = finding.audience_profile || {};
+  const renderItems = (items, metricKey) => (
+    <div className="joy-map-profile-items">
+      {(items || []).slice(0, 10).map((it, i) => (
+        <div className="joy-map-profile-row" key={i}>
+          <span className="joy-map-profile-name">{it.item_name || it.tag}</span>
+          <span className="joy-map-profile-metric">
+            {metricKey === 'JI' ? Math.round(Number(it.metric_value) || 0) : `${it.metric_value || 0}%`}
+          </span>
+          <span className="joy-map-profile-n">n={it.cohort_n}</span>
+        </div>
+      ))}
+    </div>
+  );
+  return (
+    <div className="joy-map-results">
+      <div className="joy-map-header">
+        <div className="joy-map-header-title">Audience Joy Profile</div>
+        <div className="joy-map-header-meta">Cohort n = {(p.cohort_n || 0).toLocaleString()}</div>
+      </div>
+      <div className="joy-map-profile-group">
+        <div className="joy-map-profile-title">Layer 1 — Joy Index items</div>
+        {renderItems(p.layer_1_top_items, 'JI')}
+      </div>
+      <div className="joy-map-profile-group">
+        <div className="joy-map-profile-title">Layer 2 — Top-box items</div>
+        {renderItems(p.layer_2_top_items, 'TB%')}
+      </div>
+      <div className="joy-map-profile-group">
+        <div className="joy-map-profile-title">Layer 3 — Framework tag rates</div>
+        {renderItems(p.layer_3_top_tags, 'TB%')}
+      </div>
+    </div>
+  );
+};
+
+const JoyMapMode = () => {
+  const [subView, setSubView] = useState('dance_map');
+  const [filters, setFilters] = useState({});
+  const [brandMode, setBrandMode] = useState('text');
+  const [brandText, setBrandText] = useState('');
+  const [brandJson, setBrandJson] = useState('');
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState(null);
+  const [finding, setFinding] = useState(null);
+
+  const handleRun = async () => {
+    setError(null);
+    setFinding(null);
+    let parsedJson = null;
+    if (subView === 'dance_map' && brandMode === 'json' && brandJson.trim()) {
+      try { parsedJson = JSON.parse(brandJson); }
+      catch (e) { setError('Brand JSON did not parse: ' + e.message); return; }
+    }
+    if (subView === 'dance_map' && brandMode === 'text' && !brandText.trim()) {
+      setError('Provide brand text or paste Waldo JSON.'); return;
+    }
+    setRunning(true);
+    try {
+      const requestBody = {
+        workflow: subView,
+        brand_text: subView === 'dance_map' && brandMode === 'text' ? brandText.trim() : null,
+        brand_json: parsedJson,
+        audience_filters: filters,
+      };
+      const res = await fetch('/.netlify/functions/bjl-joy-map', authedFetchInit({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+      }));
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(`Sync endpoint failed (${res.status}): ${txt.slice(0,200)}`);
+      }
+      const { job_id } = await res.json();
+      const job = await _bjlPollJob(job_id, undefined, {
+        pollIntervalMs: 2500,
+        hardCapMs: 8 * 60 * 1000,
+      });
+      if (job.status === 'error') throw new Error(job.error || 'Job errored without detail.');
+      if (!job.finding) throw new Error('Job complete but no finding returned.');
+      const parsed = typeof job.finding === 'string' ? JSON.parse(job.finding) : job.finding;
+      setFinding(parsed);
+    } catch (err) {
+      setError(String(err.message || err));
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <div className="joy-map-mode">
+      <div className="joy-map-toolbar">
+        <button className={`btn ${subView === 'audience_profile' ? 'primary' : 'ghost'}`} onClick={() => { setSubView('audience_profile'); setFinding(null); }}>Audience Joy Profile</button>
+        <button className={`btn ${subView === 'dance_map' ? 'primary' : 'ghost'}`} onClick={() => { setSubView('dance_map'); setFinding(null); }}>Dance Map</button>
+      </div>
+
+      <div className="joy-map-inputs">
+        <div className="joy-map-input-group">
+          <div className="joy-map-input-label">Audience filters (optional — empty = full sample)</div>
+          <div className="joy-map-filter-grid">
+            {Object.entries(JOY_MAP_FILTERS).map(([k, def]) => (
+              <label className="joy-map-filter" key={k}>
+                <span className="joy-map-filter-label">{def.label}</span>
+                <select
+                  value={filters[k] || ''}
+                  onChange={(e) => setFilters({ ...filters, [k]: e.target.value || undefined })}>
+                  <option value="">Any</option>
+                  {def.options.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                </select>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        {subView === 'dance_map' && (
+          <div className="joy-map-input-group">
+            <div className="joy-map-input-label">Brand input</div>
+            <div className="joy-map-brand-toggle">
+              <button className={`btn ${brandMode === 'text' ? 'primary' : 'ghost'}`} onClick={() => setBrandMode('text')}>Free text</button>
+              <button className={`btn ${brandMode === 'json' ? 'primary' : 'ghost'}`} onClick={() => setBrandMode('json')}>Waldo JSON</button>
+            </div>
+            {brandMode === 'text' ? (
+              <textarea
+                className="joy-map-brand-textarea"
+                placeholder="Paste brand offering text — positioning statement, brand story, or messaging language."
+                value={brandText}
+                onChange={(e) => setBrandText(e.target.value)}
+                rows={5}
+              />
+            ) : (
+              <textarea
+                className="joy-map-brand-textarea"
+                placeholder='Paste Waldo JSON. Minimal stub shape: {"brand_offering": "..."}'
+                value={brandJson}
+                onChange={(e) => setBrandJson(e.target.value)}
+                rows={6}
+              />
+            )}
+          </div>
+        )}
+
+        <div className="joy-map-actions">
+          <button className="btn primary" disabled={running} onClick={handleRun}>
+            {running ? 'Running…' : 'Run'}
+          </button>
+        </div>
+      </div>
+
+      {error && <div className="joy-map-error">Error: {error}</div>}
+      {running && !finding && <div className="joy-map-loading">Running joy-map pipeline…</div>}
+      {finding && finding.workflow === 'dance_map' && <JoyMapDanceMapResults finding={finding} />}
+      {finding && finding.workflow === 'audience_profile' && <JoyMapProfileResults finding={finding} />}
+    </div>
+  );
+};
+
+/* =========================================================================
  * 13. App root — shell + mode switching + shared state.
  * ========================================================================= */
 const WelcomeModal = ({ onDismiss }) => (
@@ -2585,9 +2850,10 @@ const App = ({ authedUser = null, onSignOut = null } = {}) => {
   const crumbs = {
     intelligence: ["Workbench", "Intelligence engine", "Ask the Lab"],
     outreach:     ["Workbench", "Outreach", "Accounts"],
+    joy_map:      ["Workbench", "Joy Map"],
   }[mode] || ["Workbench"];
 
-  const showDrawer = drawerOpen && mode !== "outreach";
+  const showDrawer = drawerOpen && mode !== "outreach" && mode !== "joy_map";
 
   return (
     <div className="app" data-screen-label={`BJL · ${mode}`}>
@@ -2631,6 +2897,8 @@ const App = ({ authedUser = null, onSignOut = null } = {}) => {
               key={`outreach-${sessionKey}`}
               strategistContext={strategistContext}
               setStrategistContext={setStrategistContext} />}
+            {mode === "joy_map" && <JoyMapMode
+              key={`joymap-${sessionKey}`} />}
           </div>
           {showDrawer && <EvidenceDrawer rows={evidenceRows} filter={drawerFilter} onFilter={setDrawerFilter} />}
         </div>
