@@ -28,7 +28,6 @@ const { verifyAndAuthorize } = require('./bjl-auth-helper');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY;
-const SITE_URL = process.env.URL || process.env.DEPLOY_URL || '';
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
@@ -67,12 +66,39 @@ exports.handler = async (event) => {
     return { statusCode: 400, body: JSON.stringify({ error: v.error }) };
   }
 
-  // Auth + rate-limit using the same helper bjl-query uses.
-  const authResult = await verifyAndAuthorize(event, supabase);
-  if (!authResult.ok) {
-    return authResult.response;
+  // Auth using the same helper bjl-query uses. Helper takes the auth header
+  // string directly, NOT (event, supabase). Returns { ok, user, status, error }.
+  const auth = await verifyAndAuthorize(event.headers.authorization || event.headers.Authorization);
+  if (!auth.ok) {
+    return {
+      statusCode: auth.status,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ error: auth.error, message: auth.message, email: auth.email })
+    };
   }
-  const { authUser } = authResult;
+
+  // Rate-limit check — only when auth is enforced (auth.user is null in bypass).
+  if (auth.user) {
+    const oneHourAgo = new Date(Date.now() - 3600 * 1000).toISOString();
+    const { count, error: rlErr } = await supabase
+      .from('bjl_rate_limit_log')
+      .select('*', { count: 'exact', head: true })
+      .eq('auth_user_email', auth.user.email)
+      .gte('query_at', oneHourAgo);
+    if (rlErr) {
+      console.error('[bjl-joy-map] rate-limit lookup error (failing open):', rlErr);
+    } else if (typeof count === 'number' && count >= auth.user.rate_limit_per_hour) {
+      return {
+        statusCode: 429,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          error: 'rate_limit_exceeded',
+          message: `You've reached your hourly limit of ${auth.user.rate_limit_per_hour} queries. Try again in a bit, or contact Eli if you need a higher cap.`,
+          retry_after_seconds: 3600
+        })
+      };
+    }
+  }
 
   // Insert job. We reuse bjl_query_jobs and use a distinct query_type prefix.
   const queryType = `joy_map_${body.workflow}`;
@@ -88,25 +114,32 @@ exports.handler = async (event) => {
     ? '[joy_map.audience_profile] ' + JSON.stringify(extraContext.audience_filters)
     : '[joy_map.dance_map] ' + (body.brand_text || JSON.stringify(body.brand_json)).slice(0, 200);
 
+  const insertRow = {
+    status: 'pending',
+    query_type: queryType,
+    prompt,
+    extra_context: extraContext,
+  };
+  if (auth.user) {
+    insertRow.auth_user_id = auth.user.id;
+    insertRow.auth_user_email = auth.user.email;
+  }
+
   const { data: job, error: jobErr } = await supabase
     .from('bjl_query_jobs')
-    .insert({
-      status: 'pending',
-      query_type: queryType,
-      prompt,
-      extra_context: extraContext,
-      auth_user_id: authUser.id,
-      auth_user_email: authUser.email,
-    })
+    .insert(insertRow)
     .select('job_id')
     .single();
 
   if (jobErr) {
+    console.error('[bjl-joy-map] insert error:', jobErr);
     return { statusCode: 500, body: JSON.stringify({ error: 'Failed to create job', detail: jobErr.message }) };
   }
 
-  // Fire-and-forget the background worker. Same dispatch pattern as bjl-query.
-  const bgUrl = `${SITE_URL}/.netlify/functions/bjl-joy-map-background`;
+  // Fire-and-forget the background worker. Match the bjl-query.js URL pattern
+  // (process.env.URL || event.headers.host fallback for local dev).
+  const siteUrl = process.env.URL || `https://${event.headers.host}`;
+  const bgUrl = `${siteUrl}/.netlify/functions/bjl-joy-map-background`;
   let dispatchStatus = null;
   let dispatchPreview = null;
   try {
@@ -117,11 +150,16 @@ exports.handler = async (event) => {
     });
     dispatchStatus = resp.status;
     if (!resp.ok) {
-      const txt = await resp.text();
-      dispatchPreview = (txt || '').slice(0, 500);
+      try {
+        const txt = await resp.text();
+        dispatchPreview = (txt || '').slice(0, 500);
+      } catch (_) {
+        dispatchPreview = null;
+      }
     }
   } catch (err) {
-    dispatchPreview = `dispatch err: ${err.message}`.slice(0, 500);
+    console.error('[bjl-joy-map] background dispatch threw:', err);
+    dispatchPreview = `dispatch err: ${err && err.message ? err.message : String(err)}`.slice(0, 500);
   }
 
   // Best-effort write of dispatch diagnostics; failures here don't change the response.
@@ -130,10 +168,12 @@ exports.handler = async (event) => {
     .update({ dispatch_status: dispatchStatus, dispatch_response_preview: dispatchPreview })
     .eq('job_id', job.job_id);
 
-  // Rate-limit log
-  await supabase
-    .from('bjl_rate_limit_log')
-    .insert({ auth_user_email: authUser.email, job_id: job.job_id });
+  // Rate-limit log (only when authenticated)
+  if (auth.user) {
+    await supabase
+      .from('bjl_rate_limit_log')
+      .insert({ auth_user_email: auth.user.email, job_id: job.job_id });
+  }
 
   return {
     statusCode: 202,
