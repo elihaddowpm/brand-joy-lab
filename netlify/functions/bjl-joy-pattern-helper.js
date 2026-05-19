@@ -120,9 +120,14 @@ function buildCriterionClause(kind, criterion) {
       if (c === 'above_median') return 'r.numeric_value > 2';
       return null;
     case 'joy_3pt':
-      if (c === 'very_much_so')         return "r.raw_value ILIKE 'Very much%'";
-      if (c === 'somewhat_or_higher')   return "(r.raw_value ILIKE 'Very much%' OR r.raw_value ILIKE 'Somewhat%')";
-      if (c === 'not_at_all')           return "r.raw_value ILIKE 'Not at all%'";
+      // 3-point joy items have these observed raw_values:
+      //   "Very much so", "Somewhat", "Not at all", "Not really",
+      //   "One of my favorites!"
+      // Treat "One of my favorites!" as top-box equivalent; treat
+      // "Not really" as not_at_all-equivalent (both negative).
+      if (c === 'very_much_so')       return "(r.raw_value ILIKE 'Very much%' OR r.raw_value ILIKE 'One of my favorites%')";
+      if (c === 'somewhat_or_higher') return "(r.raw_value ILIKE 'Very much%' OR r.raw_value ILIKE 'One of my favorites%' OR r.raw_value ILIKE 'Somewhat%')";
+      if (c === 'not_at_all')         return "(r.raw_value ILIKE 'Not at all%' OR r.raw_value ILIKE 'Not really%')";
       return null;
     case 'select_all':
       if (c === 'selected')     return 'r.is_selected = true';
