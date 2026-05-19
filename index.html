@@ -2545,17 +2545,51 @@ const JoyMapFindingCard = ({ card, accent }) => {
   const metricDisplay = card.metric_label === 'JI'
     ? String(Math.round(Number(card.metric_value) || 0))
     : `${card.metric_value || 0}${card.metric_label === 'TB%' || card.metric_label === 'Tag rate' ? '%' : ''}`;
+  const corpusDisplay = (typeof card.corpus_value === 'number' || (card.corpus_value && !isNaN(Number(card.corpus_value))))
+    ? (card.metric_label === 'JI'
+        ? String(Math.round(Number(card.corpus_value)))
+        : `${card.corpus_value}${card.metric_label === 'TB%' || card.metric_label === 'Tag rate' ? '%' : ''}`)
+    : null;
   const lowN = card.low_n_warning;
+  const isCorpusBaseline = card.metric_source === 'corpus_baseline';
+  const evidenceLabel = isCorpusBaseline
+    ? (card.metric_label === 'JI' ? 'JI · corpus baseline' : `${card.metric_label || 'TB%'} · corpus baseline`)
+    : (card.metric_label === 'JI' ? 'JI' : `${card.metric_label || 'TB%'} · cohort`);
+  const evidenceN = isCorpusBaseline
+    ? (typeof card.corpus_n === 'number' ? card.corpus_n : card.cohort_n)
+    : card.cohort_n;
+  const itemQuestion = card.bjl_item_question || null;
+  const headline = card.headline || card.bjl_item_name || card.tag || '—';
   return (
     <div className="joy-map-card">
       <div className="joy-map-card-head">
-        <div className="joy-map-card-title">{card.bjl_item_name || card.tag || '—'}</div>
+        <div className="joy-map-card-headline">{headline}</div>
         <span className="joy-map-card-chip" style={{ color: accent }}>{layerLabel}</span>
       </div>
-      <div className="joy-map-card-metric" style={{ color: accent }}>{metricDisplay}</div>
-      {typeof card.cohort_n === 'number' && (
-        <div className="joy-map-card-n">n = {card.cohort_n.toLocaleString()}{lowN === 'low_n' ? ' · low n' : lowN === 'directional_only' ? ' · use directionally' : ''}</div>
-      )}
+      <div className="joy-map-card-evidence">
+        <div className="joy-map-card-evidence-label">BJL ITEM</div>
+        <div className="joy-map-card-evidence-item">
+          {itemQuestion ? <span className="joy-map-card-evidence-q">"{itemQuestion}" — </span> : null}
+          {card.bjl_item_name || card.tag || '—'}
+        </div>
+        <div className="joy-map-card-evidence-metric-row">
+          <span className="joy-map-card-metric" style={{ color: accent }}>{metricDisplay}</span>
+          <span className="joy-map-card-evidence-meta">
+            {evidenceLabel}
+            {typeof evidenceN === 'number' ? ` · n=${Number(evidenceN).toLocaleString()}` : ''}
+            {lowN === 'low_n' ? ' · low n' : lowN === 'directional_only' ? ' · directional only' : ''}
+          </span>
+          {corpusDisplay && !isCorpusBaseline && (
+            <span className="joy-map-card-evidence-corpus">
+              vs corpus {corpusDisplay}
+              {typeof card.corpus_n === 'number' ? ` (n=${Number(card.corpus_n).toLocaleString()})` : ''}
+            </span>
+          )}
+        </div>
+        {isCorpusBaseline && (
+          <div className="joy-map-card-evidence-note">Cohort cut too thin for slice; corpus baseline shown.</div>
+        )}
+      </div>
       {card.layer === '3' && card.calibration_band && (
         <div className="joy-map-card-conf">Confidence: {card.calibration_band}{typeof card.confidence === 'number' ? ` · ${(card.confidence*100).toFixed(0)}%` : ''}</div>
       )}

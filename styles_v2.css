@@ -2533,13 +2533,64 @@ textarea { font-family: var(--font-text); }
   margin-bottom: .25rem;
 }
 .joy-map-card-title { font-size: 13px; font-weight: 500; }
+.joy-map-card-headline {
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.3;
+  color: var(--ink, #1a1a17);
+  flex: 1;
+}
 .joy-map-card-chip {
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: .04em;
   white-space: nowrap;
 }
-.joy-map-card-metric { font-size: 24px; font-weight: 500; margin: 2px 0 4px; }
+.joy-map-card-evidence {
+  background: var(--paper-2, #f4f3ed);
+  border-radius: 6px;
+  padding: .5rem .75rem;
+  margin: .5rem 0 .5rem;
+}
+.joy-map-card-evidence-label {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--iron-dark, #8a8a82);
+  margin-bottom: 2px;
+}
+.joy-map-card-evidence-item {
+  font-size: 12px;
+  font-style: italic;
+  color: var(--iron-darker, #5a5a55);
+  line-height: 1.4;
+  margin-bottom: .35rem;
+}
+.joy-map-card-evidence-q {
+  font-style: italic;
+  color: var(--iron-dark, #8a8a82);
+}
+.joy-map-card-evidence-metric-row {
+  display: flex;
+  align-items: baseline;
+  gap: .65rem;
+  flex-wrap: wrap;
+}
+.joy-map-card-evidence-meta {
+  font-size: 11px;
+  color: var(--iron-dark, #8a8a82);
+}
+.joy-map-card-evidence-corpus {
+  font-size: 11px;
+  color: var(--iron-dark, #8a8a82);
+}
+.joy-map-card-evidence-note {
+  font-size: 11px;
+  color: var(--iron-dark, #8a8a82);
+  font-style: italic;
+  margin-top: .25rem;
+}
+.joy-map-card-metric { font-size: 20px; font-weight: 500; margin: 0; }
 .joy-map-card-n, .joy-map-card-conf {
   font-size: 11px;
   color: var(--iron-dark, #8a8a82);
