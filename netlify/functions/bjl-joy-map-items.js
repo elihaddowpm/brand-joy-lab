@@ -65,7 +65,7 @@ exports.handler = async (event) => {
   }
 
   const sql = `
-    SELECT item_id, item_name, question_text, question_type, scale_type, short_label, n_responses
+    SELECT item_id, item_name, question_text, question_type, scale_type, short_label, n_responses, fielding_ids
     FROM bjl_items_clean
     WHERE ${whereClauses.join(' AND ')}
     ORDER BY
@@ -92,6 +92,7 @@ exports.handler = async (event) => {
     scale_type: row.scale_type,
     short_label: row.short_label,
     n_responses: row.n_responses,
+    fielding_ids: Array.isArray(row.fielding_ids) ? row.fielding_ids : [],
     scale_kind: classifyScaleKind(row.question_type, row.scale_type),
   })).filter(row => row.scale_kind !== null);
 
