@@ -61,7 +61,10 @@ exports.handler = async (event) => {
   }
 
   const demographicClauses = buildDemographicClauses(body.audience_filters);
-  const joyPatternSubquery = buildJoyPatternCohortSQL(body.joy_pattern_rules);
+  const operator = body.logical_operator
+                   ? String(body.logical_operator).toUpperCase()
+                   : 'AND';
+  const joyPatternSubquery = buildJoyPatternCohortSQL(body.joy_pattern_rules, operator);
 
   let sql;
   if (joyPatternSubquery && demographicClauses.length) {

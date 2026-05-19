@@ -79,6 +79,12 @@ function validate(body) {
       && (!Array.isArray(body.joy_pattern_rules) || body.joy_pattern_rules.length === 0)) {
     return { error: `audience_mode "${mode}" requires at least one joy_pattern_rule` };
   }
+  if (body.logical_operator !== undefined) {
+    const op = String(body.logical_operator).toUpperCase();
+    if (op !== 'AND' && op !== 'OR') {
+      return { error: 'logical_operator must be "AND" or "OR"' };
+    }
+  }
   return { ok: true };
 }
 
@@ -142,6 +148,9 @@ exports.handler = async (event) => {
     audience_mode:      body.audience_mode || 'demographic',
     audience_filters:   body.audience_filters || {},
     joy_pattern_rules:  Array.isArray(body.joy_pattern_rules) ? body.joy_pattern_rules : [],
+    logical_operator:   body.logical_operator
+                          ? String(body.logical_operator).toUpperCase()
+                          : 'AND',
   };
 
   // The `prompt` column is required (NOT NULL); set a human-readable summary.

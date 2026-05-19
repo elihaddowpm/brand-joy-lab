@@ -23,7 +23,9 @@ SELECT
   q.question_type,
   q.scale_type,
   q.short_label,
-  COUNT(DISTINCT r.respondent_id) AS n_responses
+  COUNT(DISTINCT r.respondent_id) AS n_responses,
+  ARRAY_AGG(DISTINCT r.fielding_id ORDER BY r.fielding_id)
+    FILTER (WHERE r.fielding_id IS NOT NULL) AS fielding_ids
 FROM bjl_items i
 LEFT JOIN bjl_questions_v2 q ON q.question_id = i.question_id
 LEFT JOIN bjl_responses r ON r.item_id = i.item_id
@@ -32,4 +34,4 @@ GROUP BY i.item_id, i.item_name, i.question_id,
 HAVING COUNT(DISTINCT r.respondent_id) >= 100;
 
 COMMENT ON VIEW bjl_items_clean IS
-  'Pre-listed survey items (n_responses >= 100). Excludes the ~2,140 write-in entries currently fielded as bjl_items rows.';
+  'Pre-listed survey items (n_responses >= 100). Excludes the ~2,140 write-in entries currently fielded as bjl_items rows. fielding_ids column added in v4 to support fielding-aware cohort construction.';

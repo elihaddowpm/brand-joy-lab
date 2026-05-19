@@ -2940,6 +2940,111 @@ textarea { font-family: var(--font-text); }
   align-self: flex-start;
 }
 
+/* Phase 1.5 v4 — single-panel audience definition */
+.joy-map-audience-sub {
+  margin-top: .75rem;
+  padding-top: .75rem;
+  border-top: 1px solid var(--iron, #e2e2dc);
+}
+.joy-map-audience-sub:first-of-type {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+.joy-map-audience-sub-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--iron-dark, #8a8a82);
+  margin-bottom: .5rem;
+}
+.joy-map-optional {
+  font-style: italic;
+  font-weight: normal;
+  text-transform: none;
+  letter-spacing: normal;
+}
+.joy-map-rule-fielding {
+  font-size: 10px;
+  color: var(--iron-dark, #8a8a82);
+  background: rgba(0, 0, 0, .04);
+  padding: 1px 6px;
+  border-radius: 999px;
+}
+
+/* Operator badge */
+.joy-map-operator-badge {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  margin-top: .25rem;
+  padding: .35rem .5rem;
+  background: rgba(13, 148, 136, .06);
+  border-radius: 6px;
+  flex-wrap: wrap;
+}
+.joy-map-operator-label {
+  font-size: 11px;
+  color: var(--iron-dark, #8a8a82);
+}
+.joy-map-operator-pill {
+  background: #fff;
+  border: 1px solid var(--iron, #e2e2dc);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  color: var(--ink, #1a1a17);
+}
+.joy-map-operator-pill.active {
+  background: #0d9488;
+  color: #fff;
+  border-color: #0d9488;
+}
+.joy-map-operator-hint {
+  font-size: 11px;
+  color: var(--iron-dark, #8a8a82);
+  font-style: italic;
+}
+
+/* Cross-fielding warning */
+.joy-map-crossfielding-warning {
+  margin-top: .75rem;
+  padding: .65rem .85rem;
+  background: rgba(180, 83, 9, .08);
+  border-left: 3px solid #b45309;
+  border-radius: 6px;
+}
+.joy-map-crossfielding-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: #b45309;
+  margin-bottom: .25rem;
+}
+.joy-map-crossfielding-body {
+  font-size: 12px;
+  color: var(--ink, #1a1a17);
+  margin-bottom: .5rem;
+  line-height: 1.4;
+}
+.joy-map-crossfielding-body ul {
+  margin: .35rem 0;
+  padding-left: 1.2rem;
+}
+.joy-map-crossfielding-body li {
+  margin-bottom: .2rem;
+}
+
+/* Card fielding-limited tag */
+.joy-map-card-fielding-limited {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(180, 83, 9, .1);
+  color: #b45309;
+}
+
 .joy-map-profile-group { margin-bottom: 1.25rem; }
 .joy-map-profile-title {
   font-size: 11px;
