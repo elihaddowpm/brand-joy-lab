@@ -161,16 +161,17 @@ function buildCriterionClause(kind, criterion) {
 /**
  * Build a SQL expression that selects the respondent_id set for the given
  * joy-pattern rules. Each rule = {item_id, kind, criterion}. Multiple rules
- * intersect (AND logic) — every respondent must match every rule.
+ * combine via `operator`: "AND" (default) intersects respondent sets,
+ * "OR" unions them.
  *
  * Returns a SQL string of the form `(SELECT respondent_id FROM ...)` that
- * can be embedded in another query as a respondent_id list. Caller controls
- * how it gets used (IN, JOIN, etc.).
+ * can be embedded in another query as a respondent_id list.
  *
  * Returns null if rules is empty or no rules produced valid clauses.
  */
-function buildJoyPatternCohortSQL(rules) {
+function buildJoyPatternCohortSQL(rules, operator) {
   if (!Array.isArray(rules) || rules.length === 0) return null;
+  const op = (operator === 'OR') ? 'UNION' : 'INTERSECT';
   const perRuleSelects = [];
   for (const rule of rules) {
     const itemId = Number(rule.item_id);
@@ -188,8 +189,7 @@ function buildJoyPatternCohortSQL(rules) {
   if (perRuleSelects.length === 1) {
     return `(${perRuleSelects[0]})`;
   }
-  // Multi-rule: intersect respondent sets via INTERSECT
-  return `(${perRuleSelects.join('\nINTERSECT\n')})`;
+  return `(${perRuleSelects.join(`\n${op}\n`)})`;
 }
 
 module.exports = {
