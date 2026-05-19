@@ -2537,13 +2537,46 @@ const BatchEmailRow = ({ result }) => {
  *      See /docs/joy_map_design_spec_v0_2.md for the design spec.
  * ========================================================================= */
 
+// Filter values MUST match the exact strings in bjl_respondents.
+// Sourced 2026-05-19 from a SELECT DISTINCT pass on the respondents table.
 const JOY_MAP_FILTERS = {
-  age_band:        { label: "Age", options: ["18-24","25-34","35-44","45-54","55-64","65+"] },
-  gender:          { label: "Gender", options: ["Female","Male","Non-binary"] },
-  income_bracket:  { label: "Income", options: ["Under $35K","$35K-$50K","$50K-$75K","$75K-$100K","$100K-$150K","$150K+"] },
-  region:          { label: "Region", options: ["Northeast","Midwest","South","West"] },
-  parental_status: { label: "Parental status", options: ["Parent","Not a parent"] },
-  marital_status:  { label: "Marital status", options: ["Married","Single","Divorced","Widowed","Other"] },
+  age_band: {
+    label: "Age",
+    options: [
+      "18 to 24","25 to 29","30 to 34","35 to 39","40 to 44","45 to 49",
+      "50 to 54","55 to 59","60 to 64","65 to 69","70 to 79","80 to 89"
+    ]
+  },
+  gender: {
+    label: "Gender",
+    options: [
+      "Female","Male","Gender Variant / Non-conforming",
+      "Transgender Male","Transgender Female","Prefer not to answer"
+    ]
+  },
+  income_bracket: {
+    label: "Income",
+    options: [
+      "Less than $25,000","$25,000 to $34,999","$35,000 to $49,999",
+      "$50,000 to $74,999","$75,000 to $99,999","$100,000 to $124,999",
+      "$125,000 to $149,999","$150,000 to $199,999","$200,000 or more"
+    ]
+  },
+  region: {
+    label: "Region",
+    options: ["Northeast","Midwest","South","West"]
+  },
+  parental_status: {
+    label: "Parental status",
+    options: ["Parent","Unknown"]
+  },
+  marital_status: {
+    label: "Marital status",
+    options: [
+      "Married, or living with a partner","Single, never married",
+      "Divorced","Widowed","Separated","Prefer not to answer"
+    ]
+  },
 };
 
 // Section accent colors per the design spec
