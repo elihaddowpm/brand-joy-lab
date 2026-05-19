@@ -2771,6 +2771,57 @@ const JoyMapProfileResults = ({ finding }) => {
 
 // ---- Phase 1.5 v3: Joy-pattern audience builder (free-text + LLM parse) ----
 
+// Criterion options per scale_kind. MUST stay in sync with
+// CRITERION_OPTIONS in netlify/functions/bjl-joy-pattern-helper.js. Hardcoded
+// client-side so dropdowns don't depend on a network round-trip during mount;
+// the items endpoint also returns these (the server is the source of truth),
+// but rendering can't block on that fetch — empty dropdowns lead to the
+// swap-to-alt bug where rule.criterion gets set to "".
+const JOY_PATTERN_CRITERION_OPTIONS = {
+  joy_9pt: [
+    { value: 'max_joy',         label: 'Maximum Joy (5)' },
+    { value: 'top_quartile',    label: 'Top quartile (\u2265 3)' },
+    { value: 'above_median',    label: 'Above median (> 0)' },
+    { value: 'below_median',    label: 'Below median (< 0)' },
+    { value: 'negative',        label: 'Negative joy (-3 to -1)' },
+  ],
+  joy_6pt: [
+    { value: 'max_joy',         label: 'Maximum Joy (5)' },
+    { value: 'top_quartile',    label: 'Top quartile (\u2265 4)' },
+    { value: 'above_median',    label: 'Above median (> 2)' },
+  ],
+  joy_3pt: [
+    { value: 'very_much_so',           label: 'Very much so (top-box)' },
+    { value: 'somewhat_or_higher',     label: 'Somewhat or higher' },
+    { value: 'not_at_all',             label: 'Not at all' },
+  ],
+  select_all: [
+    { value: 'selected',     label: 'Selected' },
+    { value: 'not_selected', label: 'Not selected' },
+  ],
+  likelihood: [
+    { value: 'very_likely', label: 'Very likely (top-box)' },
+    { value: 'top_2_box',   label: 'Top-2-box' },
+    { value: 'below_top',   label: 'Below top-box' },
+  ],
+  familiarity: [
+    { value: 'very_familiar', label: 'Very familiar (top-box)' },
+    { value: 'top_2_box',     label: 'Top-2-box' },
+    { value: 'below_top',     label: 'Below top-box' },
+  ],
+  agreement: [
+    { value: 'strongly_agree', label: 'Strongly agree (top-box)' },
+    { value: 'top_2_box',      label: 'Top-2-box' },
+    { value: 'below_top',      label: 'Below top-box' },
+  ],
+  ordinal_0_5: [
+    { value: 'top_box',     label: 'Top box (5)' },
+    { value: 'top_2_box',   label: 'Top-2-box (\u2265 4)' },
+    { value: 'above_median', label: 'Above median (\u2265 3)' },
+  ],
+};
+
+
 // Reusable manual item picker — used inside the confirmation view to add or
 // swap a rule. Search runs against bjl-joy-map-items (which sources from
 // bjl_items_clean since v3).
@@ -2812,6 +2863,7 @@ const JoyPatternManualPicker = ({ criterionOptionsByKind, onPickComplete, onCanc
       item_name:     picked.item_name,
       question_text: picked.question_text,
       scale_kind:    picked.scale_kind,
+      fielding_ids:  picked.fielding_ids,
       n_responses:   picked.n_responses,
       kind:          picked.scale_kind,
       criterion:     criterion,
@@ -2869,24 +2921,12 @@ const JoyPatternFreetextBuilder = ({ rules, onSetRules, operator, onSetOperator 
   const [parsing, setParsing] = useState(false);
   const [parseErr, setParseErr] = useState(null);
   const [unresolved, setUnresolved] = useState([]);
-  const [criterionOptionsByKind, setCriterionOptionsByKind] = useState({});
+  // Hardcoded; no fetch needed. The items endpoint also returns these but
+  // making render depend on a network roundtrip caused empty-dropdown bugs.
+  const criterionOptionsByKind = JOY_PATTERN_CRITERION_OPTIONS;
   const [expanded, setExpanded] = useState({});         // rule index -> true means show alternatives
   const [swapping, setSwapping] = useState(null);        // rule index being swapped (open inline picker)
   const [adding, setAdding] = useState(false);
-
-  // Load criterion options once on mount via the existing items endpoint.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await fetch('/.netlify/functions/bjl-joy-map-items?q=&limit=1', authedFetchInit());
-        if (!r.ok) return;
-        const j = await r.json();
-        if (!cancelled && j.criterion_options) setCriterionOptionsByKind(j.criterion_options);
-      } catch (_) { /* non-fatal */ }
-    })();
-    return () => { cancelled = true; };
-  }, []);
 
   const handleParse = async () => {
     if (!description.trim()) return;
@@ -2968,14 +3008,20 @@ const JoyPatternFreetextBuilder = ({ rules, onSetRules, operator, onSetOperator 
 
   const swapToAlternative = (idx, alt) => {
     const opts = criterionOptionsByKind[alt.scale_kind] || [];
+    if (opts.length === 0) {
+      // Unknown scale_kind — refuse the swap rather than nuke the criterion.
+      console.warn('[joy-map] swap refused: no criterion options for scale_kind', alt.scale_kind);
+      return;
+    }
     const currentCriterion = rules[idx].criterion;
     const validCriteria = opts.map(o => o.value);
-    const nextCriterion = validCriteria.includes(currentCriterion) ? currentCriterion : (opts[0]?.value || '');
+    const nextCriterion = validCriteria.includes(currentCriterion) ? currentCriterion : opts[0].value;
     updateRule(idx, {
       item_id:       alt.item_id,
       item_name:     alt.item_name,
       question_text: alt.question_text,
       scale_kind:    alt.scale_kind,
+      fielding_ids:  alt.fielding_ids,
       n_responses:   alt.n_responses,
       confidence:    alt.confidence,
       kind:          alt.scale_kind,
