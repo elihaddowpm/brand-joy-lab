@@ -104,22 +104,43 @@ async function queryLayer1Cohort(cohortFilter, limit = 25) {
 
 async function queryLayer2aCohort(cohortFilter, limit = 25) {
   // Top-box on 3-point ordinal items. "Top" = "Very much so" / strongest endorsement.
+  // Returns both cohort top-box AND corpus baseline so the synthesis LLM can
+  // pick which to surface per the conditional cohort-slicing protocol
+  // (cohort when cohort_n >= 50; corpus baseline otherwise, with the source labeled).
   const sql = `
-    SELECT i.item_id, i.item_name,
-           ROUND(100.0 * COUNT(*) FILTER (WHERE r.raw_value ILIKE 'Very much%' OR r.raw_value ILIKE 'Strongly%') / NULLIF(COUNT(*),0), 1) AS metric_value,
-           COUNT(*) AS cohort_n
-    FROM bjl_responses r
-    JOIN bjl_items i ON i.item_id = r.item_id
-    JOIN bjl_questions_v2 q ON q.question_id = i.question_id
-    JOIN bjl_respondents resp ON resp.respondent_id = r.respondent_id
-    WHERE (
-        q.question_type IN ('description_scale_0_to_5','agreement_scale','importance_scale_0_to_5')
-        OR (q.question_type = 'joy_scale' AND q.scale_type = 'ordinal_3pt_joy')
-      )
-      AND ${cohortFilter}
-    GROUP BY i.item_id, i.item_name
-    HAVING COUNT(*) >= 30
-    ORDER BY metric_value DESC NULLS LAST
+    WITH cohort AS (
+      SELECT i.item_id, i.item_name,
+             ROUND(100.0 * COUNT(*) FILTER (WHERE r.raw_value ILIKE 'Very much%' OR r.raw_value ILIKE 'Strongly%') / NULLIF(COUNT(*),0), 1) AS metric_value,
+             COUNT(*) AS cohort_n
+      FROM bjl_responses r
+      JOIN bjl_items i ON i.item_id = r.item_id
+      JOIN bjl_questions_v2 q ON q.question_id = i.question_id
+      JOIN bjl_respondents resp ON resp.respondent_id = r.respondent_id
+      WHERE (
+          q.question_type IN ('description_scale_0_to_5','agreement_scale','importance_scale_0_to_5')
+          OR (q.question_type = 'joy_scale' AND q.scale_type = 'ordinal_3pt_joy')
+        )
+        AND ${cohortFilter}
+      GROUP BY i.item_id, i.item_name
+    ),
+    corpus AS (
+      SELECT i.item_id,
+             ROUND(100.0 * COUNT(*) FILTER (WHERE r.raw_value ILIKE 'Very much%' OR r.raw_value ILIKE 'Strongly%') / NULLIF(COUNT(*),0), 1) AS corpus_value,
+             COUNT(*) AS corpus_n
+      FROM bjl_responses r
+      JOIN bjl_items i ON i.item_id = r.item_id
+      JOIN bjl_questions_v2 q ON q.question_id = i.question_id
+      WHERE (
+          q.question_type IN ('description_scale_0_to_5','agreement_scale','importance_scale_0_to_5')
+          OR (q.question_type = 'joy_scale' AND q.scale_type = 'ordinal_3pt_joy')
+        )
+      GROUP BY i.item_id
+    )
+    SELECT c.item_id, c.item_name, c.metric_value, c.cohort_n,
+           x.corpus_value, x.corpus_n
+    FROM cohort c
+    LEFT JOIN corpus x ON x.item_id = c.item_id
+    ORDER BY c.metric_value DESC NULLS LAST
     LIMIT ${limit}
   `;
   const { data, error } = await supabase.rpc('execute_read_sql', { query_text: sql });
@@ -130,6 +151,7 @@ async function queryLayer2aCohort(cohortFilter, limit = 25) {
 async function queryLayer2bCohort(cohortFilter, limit = 25) {
   // select_all / multi_select — share of respondents selecting each item.
   // Denominator = respondents who saw the question (any non-null response for that question_id).
+  // Also returns corpus baseline so synthesis can apply conditional cohort-slicing.
   const sql = `
     WITH question_base AS (
       SELECT i.question_id, COUNT(DISTINCT r.respondent_id) AS base_n
@@ -140,18 +162,36 @@ async function queryLayer2bCohort(cohortFilter, limit = 25) {
       WHERE q.question_type IN ('select_all','multi_select')
         AND ${cohortFilter}
       GROUP BY i.question_id
+    ),
+    corpus_base AS (
+      SELECT i.question_id, COUNT(DISTINCT r.respondent_id) AS base_n
+      FROM bjl_responses r
+      JOIN bjl_items i ON i.item_id = r.item_id
+      JOIN bjl_questions_v2 q ON q.question_id = i.question_id
+      WHERE q.question_type IN ('select_all','multi_select')
+      GROUP BY i.question_id
+    ),
+    corpus_item AS (
+      SELECT i.item_id, COUNT(DISTINCT r.respondent_id) AS sel_n
+      FROM bjl_responses r
+      JOIN bjl_items i ON i.item_id = r.item_id
+      WHERE r.is_selected = true
+      GROUP BY i.item_id
     )
     SELECT i.item_id, i.item_name,
            ROUND(100.0 * COUNT(DISTINCT r.respondent_id) / NULLIF(qb.base_n,0), 1) AS metric_value,
-           qb.base_n AS cohort_n
+           qb.base_n AS cohort_n,
+           ROUND(100.0 * ci.sel_n / NULLIF(cb.base_n,0), 1) AS corpus_value,
+           cb.base_n AS corpus_n
     FROM bjl_responses r
     JOIN bjl_items i ON i.item_id = r.item_id
     JOIN question_base qb ON qb.question_id = i.question_id
+    JOIN corpus_base cb ON cb.question_id = i.question_id
+    LEFT JOIN corpus_item ci ON ci.item_id = i.item_id
     JOIN bjl_respondents resp ON resp.respondent_id = r.respondent_id
     WHERE r.is_selected = true
       AND ${cohortFilter}
-    GROUP BY i.item_id, i.item_name, qb.base_n
-    HAVING qb.base_n >= 30
+    GROUP BY i.item_id, i.item_name, qb.base_n, ci.sel_n, cb.base_n
     ORDER BY metric_value DESC NULLS LAST
     LIMIT ${limit}
   `;

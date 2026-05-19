@@ -35,13 +35,18 @@ Every card has this shape (some fields are section-specific):
 
 ```json
 {
+  "headline": "<strategic synthesis — see headline rules below>",
   "layer": "1" | "2a" | "2b" | "2c" | "2d" | "2e" | "3",
   "framework": "joy_modes" | "tensions" | "functional_jobs" | "occasions" | null,
   "bjl_item_id": <integer if Layer 1 or 2; null if Layer 3>,
-  "bjl_item_name": "<item name or tag key>",
+  "bjl_item_name": "<item name or tag key — this is the evidence anchor under the headline>",
+  "bjl_item_question": "<the question_text the item was surveyed under, if available in the catalog; null otherwise>",
   "metric_label": "JI" | "TB%" | "Tag rate",
   "metric_value": "<number, integer for JI, percentage for TB%, percentage for Tag rate>",
+  "metric_source": "cohort" | "corpus_baseline",
   "cohort_n": <integer, the n the metric_value is based on>,
+  "corpus_value": <number or null — when metric_source is "cohort" AND the corpus baseline is meaningfully different, set this so the frontend can show a cohort-vs-corpus delta>,
+  "corpus_n": <integer or null — paired with corpus_value>,
   "brand_snippet": "<VERBATIM string from brand_text — do NOT paraphrase>",
   "audience_signal": "<one-line phrasing of how this audience indexes on this item>",
   "rationale": "<one short sentence explaining the brand→BJL match>",
@@ -50,6 +55,31 @@ Every card has this shape (some fields are section-specific):
   "low_n_warning": null | "low_n" | "directional_only"
 }
 ```
+
+## Headline (required on every card)
+
+The `headline` is the strategic synthesis displayed as the card title; the BJL item name appears beneath it as evidence, not as the headline. The headline tells the strategist what the finding *means* before they read the data.
+
+Rules:
+- One sentence or noun phrase, **≤ 12 words**.
+- States the **strategic implication** of the finding, not the data point.
+- Section-specific framing:
+  - **Strong alignment** — name what's working. Examples: "Affordability promise is on-brand." / "Unhurried service matches consumer expectation." / "Family belonging is the deepest connection point."
+  - **Misalignment** — name what's missing or off. Examples: "Digital emphasis misses the value driver." / "Experiential retail trend doesn't fit this audience." / "Credit-instrument framing carries no joy signal."
+  - **Untapped opportunity** — name the territory to claim. Examples: "Family stewardship as the missing brand promise." / "Gift-of-home as untapped frame." / "Dignified financing as territory to own."
+- **Banned words and patterns**: "leverage", "unlock", "synergies", "actionable", "in today's landscape". No em dashes. No "is/isn't" rhetorical pivots. No hedging ("could potentially", "may possibly").
+- One declarative thought per headline. If you need two, you've written two headlines — pick one.
+- The headline is editorial. It must still be grounded in the matched BJL item and the audience signal, but it does NOT need to literally quote either.
+
+## Layer 2 metric_source labeling (conditional cohort-slicing)
+
+The audience_profile contains Layer 2 items sliced for this cohort (cohort_n ≥ 30 by upstream filter). When you surface a Layer 2 item:
+
+- If the item appears in `audience_profile.layer_2_top_items` with `cohort_n ≥ 50`: set `metric_source: "cohort"` and use the cohort metric_value and cohort_n.
+- If the item appears in `audience_profile.layer_2_top_items` but `cohort_n < 50`: set `metric_source: "corpus_baseline"`, pull the corpus metric and n from `bjl_item_catalog.layer_2`, and write the audience_signal line so the strategist knows the cohort cut is too thin to trust. (E.g., "Cohort cut too thin (n=42); shown as corpus baseline.")
+- If the item appears only in `bjl_item_catalog.layer_2` (used in a misalignment card where the cohort doesn't index high): set `metric_source: "corpus_baseline"` and pull from the catalog.
+- For Layer 1 (JI) and Layer 3 (tag rate) cards, always set `metric_source: "cohort"`.
+- `corpus_value` / `corpus_n` are optional and only used when you want the frontend to display a cohort-vs-corpus delta (i.e., on strong alignment cards where the cohort indexes meaningfully above corpus).
 
 ## Section Definitions
 
