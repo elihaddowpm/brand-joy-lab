@@ -16,6 +16,7 @@
 
 const { createClient } = require('@supabase/supabase-js');
 const Anthropic = require('@anthropic-ai/sdk').default;
+const { buildJoyPatternCohortSQL } = require('./bjl-joy-pattern-helper');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
@@ -48,16 +49,39 @@ function quote(s) {
   return `'${String(s).replace(/'/g, "''")}'`;
 }
 
-function buildCohortFilter(filters) {
+/**
+ * Build the cohort filter clause used by every cohort query. All queries
+ * follow the pattern "JOIN bjl_respondents resp ... WHERE ${cohortFilter}",
+ * so this returns a SQL string that goes in that slot.
+ *
+ * Phase 1.5 supports three audience modes:
+ *   - demographic: just demographic equality clauses on resp.*
+ *   - joy_pattern: resp.respondent_id IN (intersection-of-rules subquery)
+ *   - combined:    both, AND'd together
+ *
+ * Returns '1=1' when nothing is specified (full corpus).
+ */
+function buildCohortFilter(mode, filters, joyPatternRules) {
   const f = filters || {};
-  const clauses = [];
-  if (f.age_band)        clauses.push(`resp.age_band = ${quote(f.age_band)}`);
-  if (f.gender)          clauses.push(`resp.gender = ${quote(f.gender)}`);
-  if (f.income_bracket)  clauses.push(`resp.income_bracket = ${quote(f.income_bracket)}`);
-  if (f.region)          clauses.push(`resp.region = ${quote(f.region)}`);
-  if (f.parental_status) clauses.push(`resp.parental_status = ${quote(f.parental_status)}`);
-  if (f.marital_status)  clauses.push(`resp.marital_status = ${quote(f.marital_status)}`);
-  return clauses.length ? clauses.join(' AND ') : '1=1';
+  const demographicClauses = [];
+  if (mode === 'demographic' || mode === 'combined') {
+    if (f.age_band)        demographicClauses.push(`resp.age_band = ${quote(f.age_band)}`);
+    if (f.gender)          demographicClauses.push(`resp.gender = ${quote(f.gender)}`);
+    if (f.income_bracket)  demographicClauses.push(`resp.income_bracket = ${quote(f.income_bracket)}`);
+    if (f.region)          demographicClauses.push(`resp.region = ${quote(f.region)}`);
+    if (f.parental_status) demographicClauses.push(`resp.parental_status = ${quote(f.parental_status)}`);
+    if (f.marital_status)  demographicClauses.push(`resp.marital_status = ${quote(f.marital_status)}`);
+  }
+
+  let joyPatternClause = null;
+  if (mode === 'joy_pattern' || mode === 'combined') {
+    const sub = buildJoyPatternCohortSQL(joyPatternRules || []);
+    if (sub) joyPatternClause = `resp.respondent_id IN ${sub}`;
+  }
+
+  const all = [...demographicClauses];
+  if (joyPatternClause) all.push(joyPatternClause);
+  return all.length ? all.join(' AND ') : '1=1';
 }
 
 // ---------------------------------------------------------------------------
@@ -76,21 +100,41 @@ async function queryCohortN(cohortFilter) {
 }
 
 async function queryLayer1Cohort(cohortFilter, limit = 25) {
+  // Layer 1 JI for the cohort, paired with the corpus baseline JI on the
+  // same item so the synthesis LLM can populate the cohort-vs-corpus delta.
   const sql = `
-    SELECT i.item_id, i.item_name,
-           ROUND(AVG(r.joy_index)::numeric, 1) AS metric_value,
-           COUNT(*) AS cohort_n
-    FROM bjl_responses r
-    JOIN bjl_items i ON i.item_id = r.item_id
-    JOIN bjl_questions_v2 q ON q.question_id = i.question_id
-    JOIN bjl_respondents resp ON resp.respondent_id = r.respondent_id
-    WHERE q.question_type IN ('joy_scale', 'joy_scale_0_to_5')
-      AND r.joy_index IS NOT NULL
-      AND (q.scale_type = 'ordinal_-3_to_5' OR q.scale_type IS NULL OR q.question_type = 'joy_scale_0_to_5')
-      AND ${cohortFilter}
-    GROUP BY i.item_id, i.item_name
-    HAVING COUNT(*) >= 30
-    ORDER BY metric_value DESC
+    WITH cohort AS (
+      SELECT i.item_id, i.item_name,
+             ROUND(AVG(r.joy_index)::numeric, 1) AS metric_value,
+             COUNT(*) AS cohort_n
+      FROM bjl_responses r
+      JOIN bjl_items i ON i.item_id = r.item_id
+      JOIN bjl_questions_v2 q ON q.question_id = i.question_id
+      JOIN bjl_respondents resp ON resp.respondent_id = r.respondent_id
+      WHERE q.question_type IN ('joy_scale', 'joy_scale_0_to_5')
+        AND r.joy_index IS NOT NULL
+        AND (q.scale_type = 'ordinal_-3_to_5' OR q.scale_type IS NULL OR q.question_type = 'joy_scale_0_to_5')
+        AND ${cohortFilter}
+      GROUP BY i.item_id, i.item_name
+      HAVING COUNT(*) >= 30
+    ),
+    corpus AS (
+      SELECT i.item_id,
+             ROUND(AVG(r.joy_index)::numeric, 1) AS corpus_value,
+             COUNT(*) AS corpus_n
+      FROM bjl_responses r
+      JOIN bjl_items i ON i.item_id = r.item_id
+      JOIN bjl_questions_v2 q ON q.question_id = i.question_id
+      WHERE q.question_type IN ('joy_scale', 'joy_scale_0_to_5')
+        AND r.joy_index IS NOT NULL
+        AND (q.scale_type = 'ordinal_-3_to_5' OR q.scale_type IS NULL OR q.question_type = 'joy_scale_0_to_5')
+      GROUP BY i.item_id
+    )
+    SELECT c.item_id, c.item_name, c.metric_value, c.cohort_n,
+           x.corpus_value, x.corpus_n
+    FROM cohort c
+    LEFT JOIN corpus x ON x.item_id = c.item_id
+    ORDER BY c.metric_value DESC
     LIMIT ${limit}
   `;
   const { data, error } = await supabase.rpc('execute_read_sql', { query_text: sql });
@@ -201,7 +245,8 @@ async function queryLayer2bCohort(cohortFilter, limit = 25) {
 }
 
 async function queryLayer3Cohort(cohortFilter, limit = 60) {
-  // Tag frequencies in verbatims for this cohort. Includes all 4 frameworks.
+  // Tag frequencies in verbatims for this cohort, paired with corpus tag
+  // rate so the synthesis LLM can populate the cohort-vs-corpus delta.
   const sql = `
     WITH cohort_verbatims AS (
       SELECT v.id, v.joy_modes, v.tensions, v.functional_jobs, v.occasions
@@ -209,8 +254,8 @@ async function queryLayer3Cohort(cohortFilter, limit = 60) {
       JOIN bjl_respondents resp ON resp.respondent_id = v.respondent_id
       WHERE ${cohortFilter}
     ),
-    total AS (SELECT COUNT(*)::numeric AS n FROM cohort_verbatims),
-    counts AS (
+    cohort_total AS (SELECT COUNT(*)::numeric AS n FROM cohort_verbatims),
+    cohort_counts AS (
       SELECT 'joy_modes'::text AS framework, t AS tag, COUNT(*) AS n
       FROM cohort_verbatims, unnest(joy_modes) t WHERE joy_modes IS NOT NULL GROUP BY t
       UNION ALL
@@ -219,10 +264,25 @@ async function queryLayer3Cohort(cohortFilter, limit = 60) {
       SELECT 'functional_jobs', t, COUNT(*) FROM cohort_verbatims, unnest(functional_jobs) t WHERE functional_jobs IS NOT NULL GROUP BY t
       UNION ALL
       SELECT 'occasions', t, COUNT(*) FROM cohort_verbatims, unnest(occasions) t WHERE occasions IS NOT NULL GROUP BY t
+    ),
+    corpus_total AS (SELECT COUNT(*)::numeric AS n FROM bjl_verbatims),
+    corpus_counts AS (
+      SELECT 'joy_modes'::text AS framework, t AS tag, COUNT(*) AS n
+      FROM bjl_verbatims, unnest(joy_modes) t WHERE joy_modes IS NOT NULL GROUP BY t
+      UNION ALL
+      SELECT 'tensions', t, COUNT(*) FROM bjl_verbatims, unnest(tensions) t WHERE tensions IS NOT NULL GROUP BY t
+      UNION ALL
+      SELECT 'functional_jobs', t, COUNT(*) FROM bjl_verbatims, unnest(functional_jobs) t WHERE functional_jobs IS NOT NULL GROUP BY t
+      UNION ALL
+      SELECT 'occasions', t, COUNT(*) FROM bjl_verbatims, unnest(occasions) t WHERE occasions IS NOT NULL GROUP BY t
     )
-    SELECT c.framework, c.tag, c.n AS cohort_n,
-           ROUND(100.0 * c.n / NULLIF((SELECT n FROM total),0), 1) AS metric_value
-    FROM counts c
+    SELECT c.framework, c.tag,
+           c.n AS cohort_n,
+           ROUND(100.0 * c.n / NULLIF((SELECT n FROM cohort_total),0), 1) AS metric_value,
+           x.n AS corpus_n,
+           ROUND(100.0 * x.n / NULLIF((SELECT n FROM corpus_total),0), 1) AS corpus_value
+    FROM cohort_counts c
+    LEFT JOIN corpus_counts x ON x.framework = c.framework AND x.tag = c.tag
     WHERE c.n >= 100
     ORDER BY c.n DESC
     LIMIT ${limit}
@@ -407,8 +467,10 @@ exports.handler = async (event) => {
 
     const ctx = job.extra_context || {};
     const workflow = ctx.workflow;
+    const audienceMode = ctx.audience_mode || 'demographic';
     const audienceFilters = ctx.audience_filters || {};
-    const cohortFilter = buildCohortFilter(audienceFilters);
+    const joyPatternRules = Array.isArray(ctx.joy_pattern_rules) ? ctx.joy_pattern_rules : [];
+    const cohortFilter = buildCohortFilter(audienceMode, audienceFilters, joyPatternRules);
 
     const cohortN = await queryCohortN(cohortFilter);
 
@@ -421,7 +483,9 @@ exports.handler = async (event) => {
 
     const audienceProfile = {
       cohort_n: cohortN,
+      audience_mode: audienceMode,
       filters_applied: audienceFilters,
+      joy_pattern_rules: joyPatternRules,
       layer_1_top_items: l1,
       layer_2_top_items: [...l2a, ...l2b],
       layer_3_top_tags:  l3,
