@@ -2894,6 +2894,9 @@ const JoyPatternFreetextBuilder = ({ rules, onSetRules, operator, onSetOperator 
     setParseErr(null);
     setUnresolved([]);
     try {
+      // Async pattern: POST enqueues a job, returns {job_id}. Poll via the
+      // standard job poller. The parse work is too long-running for the
+      // sync gateway timeout (240KB catalog + Haiku call).
       const r = await fetch('/.netlify/functions/bjl-joy-map-audience-parse', authedFetchInit({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2901,13 +2904,22 @@ const JoyPatternFreetextBuilder = ({ rules, onSetRules, operator, onSetOperator 
       }));
       if (!r.ok) {
         const txt = await r.text();
-        throw new Error(`parse failed (${r.status}): ${txt.slice(0, 200)}`);
+        throw new Error(`parse enqueue failed (${r.status}): ${txt.slice(0, 200)}`);
       }
-      const j = await r.json();
+      const { job_id } = await r.json();
+      const job = await _bjlPollJob(job_id, undefined, {
+        pollIntervalMs: 2000,
+        hardCapMs: 3 * 60 * 1000,
+      });
+      if (job.status === 'error') throw new Error(job.error || 'Parse job errored without detail.');
+      if (!job.finding) throw new Error('Parse job complete but no finding returned.');
+      const j = typeof job.finding === 'string' ? JSON.parse(job.finding) : job.finding;
+
       // Hydrate rules from the parse result into the shape the rest of the
       // joy-map pipeline expects. Each rule keeps its UI-only fields
       // (concept, matched_items, rationale) alongside the wire fields
-      // (item_id, kind, criterion).
+      // (item_id, kind, criterion, fielding_ids — fielding_ids drives the
+      // cross-fielding check in JoyMapMode).
       const hydrated = (j.rules || []).map(rule => {
         const primary = (rule.matched_items || []).find(m => m.item_id === rule.primary_match_item_id) || rule.matched_items[0];
         if (!primary) return null;
@@ -2917,6 +2929,7 @@ const JoyPatternFreetextBuilder = ({ rules, onSetRules, operator, onSetOperator 
           question_text: primary.question_text,
           scale_kind:    primary.scale_kind,
           n_responses:   primary.n_responses,
+          fielding_ids:  primary.fielding_ids,
           confidence:    primary.confidence,
           kind:          primary.scale_kind,
           criterion:     rule.detected_criterion,
