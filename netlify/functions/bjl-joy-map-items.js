@@ -1,12 +1,15 @@
 /**
  * bjl-joy-map-items.js — searchable item picker for the Joy Map's
- * joy-pattern audience definition mode (Phase 1.5).
+ * joy-pattern audience definition mode.
  *
  * GET /.netlify/functions/bjl-joy-map-items?q=<query>&limit=<n>
  *
  * Returns: { items: [{item_id, item_name, question_text, question_type,
- *                     scale_type, scale_kind, short_label}, ...],
+ *                     scale_type, scale_kind, short_label, n_responses}, ...],
  *            criterion_options: { <scale_kind>: [{value,label},...], ... } }
+ *
+ * Sourced from bjl_items_clean (n_responses >= 100) since Phase 1.5 v3 —
+ * this excludes the ~2,140 write-in rows that pollute bjl_items raw.
  *
  * Items are restricted to question types we can build criterion clauses
  * for (see PICKER_QUESTION_TYPES in bjl-joy-pattern-helper). Free-text
@@ -55,21 +58,20 @@ exports.handler = async (event) => {
   // first <limit> items alphabetically (useful for first-open browsing).
   const typesList = PICKER_QUESTION_TYPES.map(t => `'${t.replace(/'/g, "''")}'`).join(',');
 
-  let whereClauses = [`q.question_type IN (${typesList})`];
+  let whereClauses = [`question_type IN (${typesList})`];
   if (q) {
     const safe = q.replace(/'/g, "''");
-    whereClauses.push(`(i.item_name ILIKE '%${safe}%' OR q.question_text ILIKE '%${safe}%' OR q.short_label ILIKE '%${safe}%')`);
+    whereClauses.push(`(item_name ILIKE '%${safe}%' OR question_text ILIKE '%${safe}%' OR short_label ILIKE '%${safe}%')`);
   }
 
   const sql = `
-    SELECT i.item_id, i.item_name,
-           q.question_text, q.question_type, q.scale_type, q.short_label
-    FROM bjl_items i
-    JOIN bjl_questions_v2 q ON q.question_id = i.question_id
+    SELECT item_id, item_name, question_text, question_type, scale_type, short_label, n_responses
+    FROM bjl_items_clean
     WHERE ${whereClauses.join(' AND ')}
     ORDER BY
-      CASE WHEN q.question_type = 'joy_scale' AND (q.scale_type = 'ordinal_-3_to_5' OR q.scale_type IS NULL) THEN 0 ELSE 1 END,
-      i.item_name
+      CASE WHEN question_type = 'joy_scale' AND (scale_type = 'ordinal_-3_to_5' OR scale_type IS NULL) THEN 0 ELSE 1 END,
+      n_responses DESC,
+      item_name
     LIMIT ${limit}
   `;
 
@@ -89,6 +91,7 @@ exports.handler = async (event) => {
     question_type: row.question_type,
     scale_type: row.scale_type,
     short_label: row.short_label,
+    n_responses: row.n_responses,
     scale_kind: classifyScaleKind(row.question_type, row.scale_type),
   })).filter(row => row.scale_kind !== null);
 
