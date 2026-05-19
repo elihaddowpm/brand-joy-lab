@@ -2764,32 +2764,29 @@ const JoyMapProfileResults = ({ finding }) => {
   );
 };
 
-// ---- Phase 1.5: Joy-pattern audience builder ----
-const JoyPatternRuleBuilder = ({ rules, onAddRule, onRemoveRule }) => {
+// ---- Phase 1.5 v3: Joy-pattern audience builder (free-text + LLM parse) ----
+
+// Reusable manual item picker — used inside the confirmation view to add or
+// swap a rule. Search runs against bjl-joy-map-items (which sources from
+// bjl_items_clean since v3).
+const JoyPatternManualPicker = ({ criterionOptionsByKind, onPickComplete, onCancel }) => {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState([]);
-  const [criterionOptionsByKind, setCriterionOptionsByKind] = useState({});
-  const [pickedItem, setPickedItem] = useState(null);
+  const [picked, setPicked] = useState(null);
   const [criterion, setCriterion] = useState('');
   const [loading, setLoading] = useState(false);
-  const [searchErr, setSearchErr] = useState(null);
 
-  // Debounced search
   useEffect(() => {
     let cancelled = false;
     const t = setTimeout(async () => {
       setLoading(true);
-      setSearchErr(null);
       try {
-        const url = `/.netlify/functions/bjl-joy-map-items?q=${encodeURIComponent(query)}&limit=25`;
-        const r = await fetch(url, authedFetchInit());
+        const r = await fetch(`/.netlify/functions/bjl-joy-map-items?q=${encodeURIComponent(query)}&limit=25`, authedFetchInit());
         if (!r.ok) throw new Error(`items lookup failed (${r.status})`);
         const j = await r.json();
-        if (cancelled) return;
-        setResults(j.items || []);
-        if (j.criterion_options) setCriterionOptionsByKind(j.criterion_options);
-      } catch (e) {
-        if (!cancelled) setSearchErr(e.message || String(e));
+        if (!cancelled) setResults(j.items || []);
+      } catch (_) {
+        if (!cancelled) setResults([]);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -2797,79 +2794,299 @@ const JoyPatternRuleBuilder = ({ rules, onAddRule, onRemoveRule }) => {
     return () => { cancelled = true; clearTimeout(t); };
   }, [query]);
 
-  const handlePickItem = (it) => {
-    setPickedItem(it);
+  const handlePick = (it) => {
+    setPicked(it);
     const opts = criterionOptionsByKind[it.scale_kind] || [];
     setCriterion(opts[0]?.value || '');
   };
 
-  const handleAddRule = () => {
-    if (!pickedItem || !criterion) return;
-    onAddRule({
-      item_id:     pickedItem.item_id,
-      item_name:   pickedItem.item_name,
-      kind:        pickedItem.scale_kind,
-      criterion:   criterion,
-      question_text: pickedItem.question_text,
+  const handleConfirm = () => {
+    if (!picked || !criterion) return;
+    onPickComplete({
+      item_id:       picked.item_id,
+      item_name:     picked.item_name,
+      question_text: picked.question_text,
+      scale_kind:    picked.scale_kind,
+      n_responses:   picked.n_responses,
+      kind:          picked.scale_kind,
+      criterion:     criterion,
+      concept:       picked.item_name,
+      manual:        true,
     });
-    setPickedItem(null);
-    setCriterion('');
-    setQuery('');
   };
 
   return (
-    <div className="joy-map-rules-builder">
-      {rules.length > 0 && (
-        <div className="joy-map-rules-list">
-          {rules.map((rule, i) => (
-            <div key={i} className="joy-map-rule">
-              <div className="joy-map-rule-text">
-                <span className="joy-map-rule-item">"{rule.item_name}"</span>
-                {rule.question_text && <span className="joy-map-rule-q"> ({rule.question_text})</span>}
-                <span className="joy-map-rule-criterion"> → {rule.criterion}</span>
-              </div>
-              <button className="joy-map-rule-remove" onClick={() => onRemoveRule(i)} title="Remove">×</button>
+    <div className="joy-map-rule-add">
+      <input
+        type="text"
+        className="joy-map-rule-search"
+        placeholder="Search BJL items by name or question text…"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        autoFocus
+      />
+      {loading && <div className="joy-map-rule-hint">Searching…</div>}
+      {!picked && results.length > 0 && (
+        <div className="joy-map-rule-results">
+          {results.map((it) => (
+            <div key={it.item_id} className="joy-map-rule-result" onClick={() => handlePick(it)}>
+              <div className="joy-map-rule-result-name">{it.item_name}</div>
+              <div className="joy-map-rule-result-q">{it.question_text}</div>
+              <div className="joy-map-rule-result-kind">{it.scale_kind} · n={it.n_responses ?? '—'}</div>
             </div>
           ))}
         </div>
       )}
-      <div className="joy-map-rule-add">
-        <input
-          type="text"
-          className="joy-map-rule-search"
-          placeholder="Search BJL items by name or question text…"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-        {loading && <div className="joy-map-rule-hint">Searching…</div>}
-        {searchErr && <div className="joy-map-rule-err">{searchErr}</div>}
-        {!pickedItem && results.length > 0 && (
-          <div className="joy-map-rule-results">
-            {results.map((it) => (
-              <div key={it.item_id} className="joy-map-rule-result" onClick={() => handlePickItem(it)}>
-                <div className="joy-map-rule-result-name">{it.item_name}</div>
-                <div className="joy-map-rule-result-q">{it.question_text}</div>
-                <div className="joy-map-rule-result-kind">{it.scale_kind}</div>
-              </div>
+      {picked && (
+        <div className="joy-map-rule-criterion-row">
+          <div className="joy-map-rule-picked">
+            <div className="joy-map-rule-picked-name">"{picked.item_name}"</div>
+            <div className="joy-map-rule-picked-q">{picked.question_text}</div>
+          </div>
+          <select className="joy-map-rule-criterion-select" value={criterion} onChange={(e) => setCriterion(e.target.value)}>
+            {(criterionOptionsByKind[picked.scale_kind] || []).map(opt => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
             ))}
-          </div>
-        )}
-        {pickedItem && (
-          <div className="joy-map-rule-criterion-row">
-            <div className="joy-map-rule-picked">
-              <div className="joy-map-rule-picked-name">"{pickedItem.item_name}"</div>
-              <div className="joy-map-rule-picked-q">{pickedItem.question_text}</div>
-            </div>
-            <select className="joy-map-rule-criterion-select" value={criterion} onChange={(e) => setCriterion(e.target.value)}>
-              {(criterionOptionsByKind[pickedItem.scale_kind] || []).map(opt => (
-                <option key={opt.value} value={opt.value}>{opt.label}</option>
-              ))}
-            </select>
-            <button className="btn primary" onClick={handleAddRule}>Add rule</button>
-            <button className="btn ghost" onClick={() => { setPickedItem(null); setCriterion(''); }}>Cancel</button>
-          </div>
+          </select>
+          <button className="btn primary" onClick={handleConfirm}>Confirm</button>
+          <button className="btn ghost" onClick={onCancel}>Cancel</button>
+        </div>
+      )}
+      {!picked && (
+        <button className="btn ghost joy-map-rule-cancel-row" onClick={onCancel}>Cancel</button>
+      )}
+    </div>
+  );
+};
+
+const JoyPatternFreetextBuilder = ({ rules, onSetRules }) => {
+  const [description, setDescription] = useState('');
+  const [parsing, setParsing] = useState(false);
+  const [parseErr, setParseErr] = useState(null);
+  const [unresolved, setUnresolved] = useState([]);
+  const [criterionOptionsByKind, setCriterionOptionsByKind] = useState({});
+  const [expanded, setExpanded] = useState({});         // rule index -> true means show alternatives
+  const [swapping, setSwapping] = useState(null);        // rule index being swapped (open inline picker)
+  const [adding, setAdding] = useState(false);
+
+  // Load criterion options once on mount via the existing items endpoint.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch('/.netlify/functions/bjl-joy-map-items?q=&limit=1', authedFetchInit());
+        if (!r.ok) return;
+        const j = await r.json();
+        if (!cancelled && j.criterion_options) setCriterionOptionsByKind(j.criterion_options);
+      } catch (_) { /* non-fatal */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleParse = async () => {
+    if (!description.trim()) return;
+    setParsing(true);
+    setParseErr(null);
+    setUnresolved([]);
+    try {
+      const r = await fetch('/.netlify/functions/bjl-joy-map-audience-parse', authedFetchInit({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description: description.trim() }),
+      }));
+      if (!r.ok) {
+        const txt = await r.text();
+        throw new Error(`parse failed (${r.status}): ${txt.slice(0, 200)}`);
+      }
+      const j = await r.json();
+      // Hydrate rules from the parse result into the shape the rest of the
+      // joy-map pipeline expects. Each rule keeps its UI-only fields
+      // (concept, matched_items, rationale) alongside the wire fields
+      // (item_id, kind, criterion).
+      const hydrated = (j.rules || []).map(rule => {
+        const primary = (rule.matched_items || []).find(m => m.item_id === rule.primary_match_item_id) || rule.matched_items[0];
+        if (!primary) return null;
+        return {
+          item_id:       primary.item_id,
+          item_name:     primary.item_name,
+          question_text: primary.question_text,
+          scale_kind:    primary.scale_kind,
+          n_responses:   primary.n_responses,
+          confidence:    primary.confidence,
+          kind:          primary.scale_kind,
+          criterion:     rule.detected_criterion,
+          concept:       rule.concept,
+          rationale:     rule.rationale,
+          matched_items: rule.matched_items,
+        };
+      }).filter(Boolean);
+      onSetRules(hydrated);
+      setUnresolved(j.unresolved_concepts || []);
+      setExpanded({});
+    } catch (e) {
+      setParseErr(String(e.message || e));
+    } finally {
+      setParsing(false);
+    }
+  };
+
+  const handleClear = () => {
+    setDescription('');
+    onSetRules([]);
+    setUnresolved([]);
+    setExpanded({});
+    setParseErr(null);
+  };
+
+  const updateRule = (idx, patch) => {
+    const next = rules.slice();
+    next[idx] = { ...next[idx], ...patch };
+    onSetRules(next);
+  };
+
+  const removeRule = (idx) => onSetRules(rules.filter((_, i) => i !== idx));
+  const addRule = (rule) => onSetRules([...rules, rule]);
+
+  const swapToAlternative = (idx, alt) => {
+    const opts = criterionOptionsByKind[alt.scale_kind] || [];
+    const currentCriterion = rules[idx].criterion;
+    const validCriteria = opts.map(o => o.value);
+    const nextCriterion = validCriteria.includes(currentCriterion) ? currentCriterion : (opts[0]?.value || '');
+    updateRule(idx, {
+      item_id:       alt.item_id,
+      item_name:     alt.item_name,
+      question_text: alt.question_text,
+      scale_kind:    alt.scale_kind,
+      n_responses:   alt.n_responses,
+      confidence:    alt.confidence,
+      kind:          alt.scale_kind,
+      criterion:     nextCriterion,
+    });
+    setExpanded({ ...expanded, [idx]: false });
+  };
+
+  return (
+    <div className="joy-map-freetext-builder">
+      <textarea
+        className="joy-map-freetext-input"
+        placeholder="Describe the audience by joy pattern. Example: people who feel high joy from eating candy bars and who also love spending time with family."
+        rows={3}
+        value={description}
+        onChange={(e) => setDescription(e.target.value)}
+      />
+      <div className="joy-map-freetext-actions">
+        <button className="btn primary" disabled={parsing || !description.trim()} onClick={handleParse}>
+          {parsing ? 'Parsing…' : (rules.length > 0 ? 'Re-parse' : 'Parse')}
+        </button>
+        {rules.length > 0 && (
+          <button className="btn ghost" onClick={handleClear}>Clear all</button>
         )}
       </div>
+      {parseErr && <div className="joy-map-rule-err">{parseErr}</div>}
+
+      {rules.length > 0 && (
+        <div className="joy-map-rules-list">
+          <div className="joy-map-rules-list-title">Interpreted rules — confirm or edit:</div>
+          {rules.map((rule, i) => {
+            const opts = criterionOptionsByKind[rule.scale_kind] || [];
+            const isExpanded = !!expanded[i];
+            const isSwapping = swapping === i;
+            const alts = (rule.matched_items || []).filter(m => m.item_id !== rule.item_id);
+            return (
+              <div key={i} className="joy-map-rule-confirm">
+                <div className="joy-map-rule-confirm-head">
+                  {rule.concept && <span className="joy-map-rule-concept">"{rule.concept}"</span>}
+                  <button className="joy-map-rule-remove" onClick={() => removeRule(i)} title="Remove rule">×</button>
+                </div>
+                <div className="joy-map-rule-confirm-body">
+                  <div className="joy-map-rule-item-line">
+                    <span className="joy-map-rule-item">{rule.item_name}</span>
+                    {rule.question_text && (
+                      <span className="joy-map-rule-q"> · {rule.question_text.length > 60 ? rule.question_text.slice(0, 60) + '…' : rule.question_text}</span>
+                    )}
+                  </div>
+                  <div className="joy-map-rule-meta-line">
+                    <select
+                      className="joy-map-rule-criterion-select"
+                      value={rule.criterion}
+                      onChange={(e) => updateRule(i, { criterion: e.target.value })}>
+                      {opts.map(opt => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
+                    </select>
+                    {typeof rule.confidence === 'number' && (
+                      <span className="joy-map-rule-confidence">confidence {(rule.confidence * 100).toFixed(0)}%</span>
+                    )}
+                    {typeof rule.n_responses === 'number' && (
+                      <span className="joy-map-rule-nresp">n={rule.n_responses.toLocaleString()}</span>
+                    )}
+                    {alts.length > 0 && (
+                      <button className="joy-map-rule-alts-toggle" onClick={() => setExpanded({ ...expanded, [i]: !isExpanded })}>
+                        {isExpanded ? 'Hide alternatives' : `See ${alts.length} alternative match${alts.length === 1 ? '' : 'es'}`}
+                      </button>
+                    )}
+                    <button className="joy-map-rule-swap" onClick={() => setSwapping(isSwapping ? null : i)}>
+                      {isSwapping ? 'Cancel swap' : 'Swap item'}
+                    </button>
+                  </div>
+                  {isExpanded && alts.length > 0 && (
+                    <div className="joy-map-rule-alts">
+                      {alts.map(alt => (
+                        <div key={alt.item_id} className="joy-map-rule-alt" onClick={() => swapToAlternative(i, alt)}>
+                          <div className="joy-map-rule-alt-name">{alt.item_name}</div>
+                          <div className="joy-map-rule-alt-q">{alt.question_text}</div>
+                          <div className="joy-map-rule-alt-meta">
+                            {alt.scale_kind} · n={alt.n_responses?.toLocaleString() ?? '—'}
+                            {typeof alt.confidence === 'number' && ` · confidence ${(alt.confidence * 100).toFixed(0)}%`}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {isSwapping && (
+                    <JoyPatternManualPicker
+                      criterionOptionsByKind={criterionOptionsByKind}
+                      onPickComplete={(picked) => {
+                        updateRule(i, {
+                          item_id:       picked.item_id,
+                          item_name:     picked.item_name,
+                          question_text: picked.question_text,
+                          scale_kind:    picked.scale_kind,
+                          n_responses:   picked.n_responses,
+                          confidence:    null,
+                          kind:          picked.scale_kind,
+                          criterion:     picked.criterion,
+                        });
+                        setSwapping(null);
+                      }}
+                      onCancel={() => setSwapping(null)}
+                    />
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {unresolved.length > 0 && (
+        <div className="joy-map-unresolved">
+          <div className="joy-map-unresolved-title">Unresolved concepts (no match found):</div>
+          <ul className="joy-map-unresolved-list">
+            {unresolved.map((c, i) => <li key={i}>"{c}"</li>)}
+          </ul>
+        </div>
+      )}
+
+      {adding ? (
+        <JoyPatternManualPicker
+          criterionOptionsByKind={criterionOptionsByKind}
+          onPickComplete={(picked) => { addRule(picked); setAdding(false); }}
+          onCancel={() => setAdding(false)}
+        />
+      ) : (
+        <button className="btn ghost joy-map-add-manual" onClick={() => setAdding(true)}>+ Add rule manually</button>
+      )}
     </div>
   );
 };
@@ -3012,7 +3229,7 @@ const JoyMapMode = () => {
           )}
 
           {showJoyPattern && (
-            <JoyPatternRuleBuilder rules={joyPatternRules} onAddRule={addRule} onRemoveRule={removeRule} />
+            <JoyPatternFreetextBuilder rules={joyPatternRules} onSetRules={setJoyPatternRules} />
           )}
         </div>
 

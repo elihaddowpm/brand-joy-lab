@@ -23,6 +23,7 @@ const SOURCES = {
   investigator: 'prompts/investigator_prompt_v3.md',
   synthesizer: 'prompts/synthesizer_prompt_v3.md',
   joyMapSynthesis: 'prompts/joy_map_synthesis.md',
+  joyMapAudienceParse: 'prompts/joy_map_audience_parse.md',
   schemaDoc: 'docs/schema_doc.md',
 };
 
