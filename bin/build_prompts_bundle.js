@@ -24,6 +24,8 @@ const SOURCES = {
   synthesizer: 'prompts/synthesizer_prompt_v3.md',
   joyMapSynthesis: 'prompts/joy_map_synthesis.md',
   joyMapAudienceParse: 'prompts/joy_map_audience_parse.md',
+  audienceMapRouting: 'prompts/audience_map_routing.md',
+  audienceMapSynthesis: 'prompts/audience_map_synthesis.md',
   schemaDoc: 'docs/schema_doc.md',
 };
 

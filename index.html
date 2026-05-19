@@ -2497,63 +2497,13 @@ const BatchEmailRow = ({ result }) => {
 };
 
 /* =========================================================================
- * 12b. JoyMapMode — Joy Map workbench tool (Phase 1).
- *      Two sub-views: Audience Joy Profile + Dance Map.
- *      See /docs/joy_map_design_spec_v0_2.md for the design spec.
+ * 12b. JoyMapMode — Joy Map workbench (Phase 2).
+ *      Two sub-views: Audience Map + Dance Map (Audience-Map-driven).
  * ========================================================================= */
 
-// Filter values MUST match the exact strings in bjl_respondents.
-// Sourced 2026-05-19 from a SELECT DISTINCT pass on the respondents table.
-const JOY_MAP_FILTERS = {
-  age_band: {
-    label: "Age",
-    options: [
-      "18 to 24","25 to 29","30 to 34","35 to 39","40 to 44","45 to 49",
-      "50 to 54","55 to 59","60 to 64","65 to 69","70 to 79","80 to 89"
-    ]
-  },
-  gender: {
-    label: "Gender",
-    options: [
-      "Female","Male","Gender Variant / Non-conforming",
-      "Transgender Male","Transgender Female","Prefer not to answer"
-    ]
-  },
-  income_bracket: {
-    label: "Income",
-    options: [
-      "Less than $25,000","$25,000 to $34,999","$35,000 to $49,999",
-      "$50,000 to $74,999","$75,000 to $99,999","$100,000 to $124,999",
-      "$125,000 to $149,999","$150,000 to $199,999","$200,000 or more"
-    ]
-  },
-  region: {
-    label: "Region",
-    options: ["Northeast","Midwest","South","West"]
-  },
-  parental_status: {
-    label: "Parental status",
-    options: ["Parent","Unknown"]
-  },
-  marital_status: {
-    label: "Marital status",
-    options: [
-      "Married, or living with a partner","Single, never married",
-      "Divorced","Widowed","Separated","Prefer not to answer"
-    ]
-  },
-};
+// ---- Card-level utilities (shared between Dance Map and Audience Map) ----
 
-// Section accent colors per the design spec
-const JOY_MAP_SECTION_STYLE = {
-  strong_alignment:     { label: "Strong Alignment",    color: "#0d9488", dot: "#14b8a6", description: "Brand and audience already in step." },
-  misalignment:         { label: "Misalignment",        color: "#b45309", dot: "#f59e0b", description: "Brand emphasizes a dimension the audience does not." },
-  untapped_opportunity: { label: "Untapped Opportunity", color: "#7c3aed", dot: "#a855f7", description: "Audience signal the brand is not yet engaging." },
-};
-
-// ---- Phase 1.5 vis A: cohort-vs-corpus delta badge ----
-const JoyMapDeltaBadge = ({ cohortValue, corpusValue, metricLabel, hasCohortFilter }) => {
-  if (!hasCohortFilter) return null;
+const JoyMapDeltaBadge = ({ cohortValue, corpusValue, metricLabel }) => {
   const c = Number(cohortValue);
   const x = Number(corpusValue);
   if (!Number.isFinite(c) || !Number.isFinite(x)) return null;
@@ -2562,19 +2512,17 @@ const JoyMapDeltaBadge = ({ cohortValue, corpusValue, metricLabel, hasCohortFilt
   const sign = delta > 0 ? '+' : '';
   const unit = metricLabel === 'JI' ? '' : 'pp';
   const rounded = metricLabel === 'JI' ? Math.round(delta) : Math.round(delta * 10) / 10;
-  const text = `${sign}${rounded}${unit}`;
   const tone = delta > 0 ? 'positive' : 'negative';
-  return <span className={`joy-map-delta-badge joy-map-delta-${tone}`}>{text}</span>;
+  return <span className={`joy-map-delta-badge joy-map-delta-${tone}`}>{sign}{rounded}{unit}</span>;
 };
 
-// ---- Phase 1.5 vis B: mini gauge per card ----
 const JoyMapMiniGauge = ({ value, metricLabel, accent }) => {
   const v = Number(value);
   if (!Number.isFinite(v)) return null;
   let max, ref1, ref2;
   if (metricLabel === 'JI') { max = 100; ref1 = 60; ref2 = 70; }
   else if (metricLabel === 'Tag rate') { max = 25; ref1 = 5; ref2 = 15; }
-  else { max = 100; ref1 = 50; ref2 = 65; }   // TB% and unknowns
+  else { max = 100; ref1 = 50; ref2 = 65; }
   const clamped = Math.max(0, Math.min(v, max));
   const pct = (clamped / max) * 100;
   const ref1Pct = (ref1 / max) * 100;
@@ -2596,27 +2544,22 @@ const JoyMapMiniGauge = ({ value, metricLabel, accent }) => {
   );
 };
 
-const JoyMapFindingCard = ({ card, accent, hasCohortFilter }) => {
+// ---- Section accent colors per the design spec ----
+const JOY_MAP_SECTION_STYLE = {
+  strong_alignment:     { label: "Strong Alignment",    color: "#0d9488", dot: "#14b8a6", description: "Brand and audience already in step." },
+  misalignment:         { label: "Misalignment",        color: "#b45309", dot: "#f59e0b", description: "Brand emphasizes a dimension the audience does not." },
+  untapped_opportunity: { label: "Untapped Opportunity", color: "#7c3aed", dot: "#a855f7", description: "Audience signal the brand is not yet engaging." },
+};
+
+const JoyMapFindingCard = ({ card, accent }) => {
   const layerLabel = card.layer === '3'
     ? `Layer 3 · ${card.framework || 'Tag'}`
     : `Layer ${card.layer} · ${card.metric_label || ''}`;
   const metricDisplay = card.metric_label === 'JI'
-    ? String(Math.round(Number(card.metric_value) || 0))
-    : `${card.metric_value || 0}${card.metric_label === 'TB%' || card.metric_label === 'Tag rate' ? '%' : ''}`;
-  const corpusDisplay = (typeof card.corpus_value === 'number' || (card.corpus_value && !isNaN(Number(card.corpus_value))))
-    ? (card.metric_label === 'JI'
-        ? String(Math.round(Number(card.corpus_value)))
-        : `${card.corpus_value}${card.metric_label === 'TB%' || card.metric_label === 'Tag rate' ? '%' : ''}`)
-    : null;
-  const lowN = card.low_n_warning;
-  const isCorpusBaseline = card.metric_source === 'corpus_baseline';
-  const evidenceLabel = isCorpusBaseline
-    ? (card.metric_label === 'JI' ? 'JI · corpus baseline' : `${card.metric_label || 'TB%'} · corpus baseline`)
-    : (card.metric_label === 'JI' ? 'JI' : `${card.metric_label || 'TB%'} · cohort`);
-  const evidenceN = isCorpusBaseline
-    ? (typeof card.corpus_n === 'number' ? card.corpus_n : card.cohort_n)
-    : card.cohort_n;
-  const itemQuestion = card.bjl_item_question || null;
+    ? (Number.isFinite(Number(card.metric_value)) ? String(Math.round(Number(card.metric_value))) : '—')
+    : (Number.isFinite(Number(card.metric_value))
+        ? `${card.metric_value}${card.metric_label === 'TB%' || card.metric_label === 'Tag rate' ? '%' : ''}`
+        : '—');
   const headline = card.headline || card.bjl_item_name || card.tag || '—';
   return (
     <div className="joy-map-card">
@@ -2624,47 +2567,32 @@ const JoyMapFindingCard = ({ card, accent, hasCohortFilter }) => {
         <div className="joy-map-card-headline">{headline}</div>
         <span className="joy-map-card-chip" style={{ color: accent }}>{layerLabel}</span>
       </div>
-      <div className="joy-map-card-evidence">
-        <div className="joy-map-card-evidence-label">BJL ITEM</div>
-        <div className="joy-map-card-evidence-item">
-          {itemQuestion ? <span className="joy-map-card-evidence-q">"{itemQuestion}" — </span> : null}
-          {card.bjl_item_name || card.tag || '—'}
-        </div>
-        <div className="joy-map-card-evidence-metric-row">
-          <span className="joy-map-card-metric" style={{ color: accent }}>{metricDisplay}</span>
-          <JoyMapDeltaBadge
-            cohortValue={card.metric_value}
-            corpusValue={card.corpus_value}
-            metricLabel={card.metric_label}
-            hasCohortFilter={hasCohortFilter && !isCorpusBaseline}
-          />
-          <span className="joy-map-card-evidence-meta">
-            {evidenceLabel}
-            {typeof evidenceN === 'number' ? ` · n=${Number(evidenceN).toLocaleString()}` : ''}
-            {lowN === 'low_n' ? ' · low n' : lowN === 'directional_only' ? ' · directional only' : ''}
-          </span>
-          {card.fielding_limited && (
-            <span className="joy-map-card-fielding-limited" title="Item not asked in all fieldings comprising this cohort. Metric reflects only the subset of cohort respondents who saw this question.">
-              fielding-limited
-            </span>
+      {(card.bjl_item_name || card.tag) && (
+        <div className="joy-map-card-evidence">
+          <div className="joy-map-card-evidence-label">AUDIENCE MAP DIMENSION</div>
+          <div className="joy-map-card-evidence-item">{card.bjl_item_name || card.tag}</div>
+          {Number.isFinite(Number(card.metric_value)) && (
+            <div className="joy-map-card-evidence-metric-row">
+              <span className="joy-map-card-metric" style={{ color: accent }}>{metricDisplay}</span>
+              <JoyMapDeltaBadge cohortValue={card.metric_value} corpusValue={card.corpus_value} metricLabel={card.metric_label} />
+              <span className="joy-map-card-evidence-meta">
+                {card.metric_label || ''}
+                {typeof card.cohort_n === 'number' ? ` · n=${card.cohort_n.toLocaleString()}` : ''}
+              </span>
+            </div>
           )}
-          {corpusDisplay && !isCorpusBaseline && (
-            <span className="joy-map-card-evidence-corpus">
-              vs corpus {corpusDisplay}
-              {typeof card.corpus_n === 'number' ? ` (n=${Number(card.corpus_n).toLocaleString()})` : ''}
-            </span>
+          {Number.isFinite(Number(card.metric_value)) && (
+            <JoyMapMiniGauge value={card.metric_value} metricLabel={card.metric_label} accent={accent} />
           )}
         </div>
-        <JoyMapMiniGauge value={card.metric_value} metricLabel={card.metric_label} accent={accent} />
-        {isCorpusBaseline && (
-          <div className="joy-map-card-evidence-note">Cohort cut too thin for slice; corpus baseline shown.</div>
-        )}
-      </div>
+      )}
       {card.layer === '3' && card.calibration_band && (
         <div className="joy-map-card-conf">Confidence: {card.calibration_band}{typeof card.confidence === 'number' ? ` · ${(card.confidence*100).toFixed(0)}%` : ''}</div>
       )}
       {card.brand_snippet && (
-        <div className="joy-map-card-line"><span className="joy-map-card-label">Brand:</span> "{card.brand_snippet}"</div>
+        <div className="joy-map-card-line">
+          <span className="joy-map-card-label">Brand{card.brand_source ? ` (${card.brand_source})` : ''}:</span> "{card.brand_snippet}"
+        </div>
       )}
       {card.audience_signal && (
         <div className="joy-map-card-line"><span className="joy-map-card-label">Audience:</span> {card.audience_signal}</div>
@@ -2679,7 +2607,7 @@ const JoyMapFindingCard = ({ card, accent, hasCohortFilter }) => {
   );
 };
 
-const JoyMapSection = ({ sectionKey, cards, hasCohortFilter }) => {
+const JoyMapSection = ({ sectionKey, cards }) => {
   const style = JOY_MAP_SECTION_STYLE[sectionKey];
   const safeCards = Array.isArray(cards) ? cards : [];
   return (
@@ -2695,7 +2623,7 @@ const JoyMapSection = ({ sectionKey, cards, hasCohortFilter }) => {
       ) : (
         <div className="joy-map-section-cards">
           {safeCards.map((c, i) => (
-            <JoyMapFindingCard key={`${sectionKey}-${i}`} card={c} accent={style.color} hasCohortFilter={hasCohortFilter} />
+            <JoyMapFindingCard key={`${sectionKey}-${i}`} card={c} accent={style.color} />
           ))}
         </div>
       )}
@@ -2706,575 +2634,332 @@ const JoyMapSection = ({ sectionKey, cards, hasCohortFilter }) => {
 const JoyMapDanceMapResults = ({ finding }) => {
   const dm = finding.dance_map || {};
   const diag = dm.diagnostic || {};
-  const profile = finding.audience_profile || {};
-  const hasCohortFilter = (profile.audience_mode && profile.audience_mode !== 'demographic')
-    || (Array.isArray(profile.joy_pattern_rules) && profile.joy_pattern_rules.length > 0)
-    || (profile.filters_applied && Object.values(profile.filters_applied).some(v => v));
+  const ams = finding.audience_map_summary || {};
   return (
     <div className="joy-map-results">
       <div className="joy-map-header">
-        <div className="joy-map-header-title">Joy Map · Dance</div>
+        <div className="joy-map-header-title">Dance Map</div>
         <div className="joy-map-header-meta">
-          Cohort n = {(profile.cohort_n || 0).toLocaleString()}
-          {profile.audience_mode && profile.audience_mode !== 'demographic' && (
-            <span className="joy-map-mode-tag"> · {profile.audience_mode === 'joy_pattern' ? 'Joy-pattern cohort' : 'Combined cohort'}</span>
+          {ams.routing_notice && <span>vs Audience Map: {ams.routing_notice}</span>}
+          {typeof ams.reverse_engineered_cohort_n === 'number' && (
+            <span> · cohort n = {ams.reverse_engineered_cohort_n.toLocaleString()}</span>
           )}
-          {diag.fallback_layer_used && <span className="joy-map-fallback-tag"> · Layer 3 fallback in use</span>}
         </div>
+        {ams.synthesis_paragraph && (
+          <div className="joy-map-header-summary"><em>{ams.synthesis_paragraph}</em></div>
+        )}
         {diag.mapping_bridge_summary && (
           <div className="joy-map-header-summary">{diag.mapping_bridge_summary}</div>
         )}
       </div>
-      <JoyMapSection sectionKey="strong_alignment" cards={dm.strong_alignment} hasCohortFilter={hasCohortFilter} />
-      <JoyMapSection sectionKey="misalignment" cards={dm.misalignment} hasCohortFilter={hasCohortFilter} />
-      <JoyMapSection sectionKey="untapped_opportunity" cards={dm.untapped_opportunity} hasCohortFilter={hasCohortFilter} />
+      <JoyMapSection sectionKey="strong_alignment" cards={dm.strong_alignment} />
+      <JoyMapSection sectionKey="misalignment" cards={dm.misalignment} />
+      <JoyMapSection sectionKey="untapped_opportunity" cards={dm.untapped_opportunity} />
     </div>
   );
 };
 
-const JoyMapProfileResults = ({ finding }) => {
-  const p = finding.audience_profile || {};
-  const renderItems = (items, metricKey) => (
-    <div className="joy-map-profile-items">
-      {(items || []).slice(0, 10).map((it, i) => (
-        <div className="joy-map-profile-row" key={i}>
-          <span className="joy-map-profile-name">{it.item_name || it.tag}</span>
-          <span className="joy-map-profile-metric">
-            {metricKey === 'JI' ? Math.round(Number(it.metric_value) || 0) : `${it.metric_value || 0}%`}
-          </span>
-          <span className="joy-map-profile-n">n={it.cohort_n}</span>
+// ======================================================================
+// Audience Map — 6-section output rendering (Phase 2)
+// ======================================================================
+
+const FRAMEWORK_LABEL = {
+  joy_modes: "Joy modes",
+  tensions: "Tensions",
+  functional_jobs: "Functional jobs",
+  occasions: "Occasions",
+};
+
+const AudienceMapSynthesis = ({ paragraph }) => paragraph ? (
+  <div className="audience-map-synthesis">
+    <div className="audience-map-section-title">Synthesis</div>
+    <p className="audience-map-synthesis-text">{paragraph}</p>
+  </div>
+) : null;
+
+const AudienceMapJoyPeaks = ({ peaks }) => {
+  const themes = (peaks && peaks.themes) || [];
+  if (themes.length === 0) return null;
+  return (
+    <div className="audience-map-block">
+      <div className="audience-map-section-title">Joy Peaks</div>
+      {themes.map((theme, i) => (
+        <div key={i} className="audience-map-theme">
+          <div className="audience-map-theme-name">{theme.theme_name}</div>
+          <div className="audience-map-item-list">
+            {(theme.items || []).map((it, j) => (
+              <div key={j} className="audience-map-item-row">
+                <span className="audience-map-item-name">{it.item_name}</span>
+                <span className="audience-map-item-metric">
+                  <strong>{Math.round(Number(it.cohort_ji))}</strong>
+                  <span className="audience-map-item-corpus"> vs {Math.round(Number(it.corpus_ji))} corpus</span>
+                </span>
+                <JoyMapDeltaBadge cohortValue={it.cohort_ji} corpusValue={it.corpus_ji} metricLabel="JI" />
+                <span className="audience-map-item-n">n={Number(it.cohort_n).toLocaleString()}</span>
+              </div>
+            ))}
+          </div>
         </div>
       ))}
     </div>
   );
-  return (
-    <div className="joy-map-results">
-      <div className="joy-map-header">
-        <div className="joy-map-header-title">Audience Joy Profile</div>
-        <div className="joy-map-header-meta">Cohort n = {(p.cohort_n || 0).toLocaleString()}</div>
-      </div>
-      <div className="joy-map-profile-group">
-        <div className="joy-map-profile-title">Layer 1 — Joy Index items</div>
-        {renderItems(p.layer_1_top_items, 'JI')}
-      </div>
-      <div className="joy-map-profile-group">
-        <div className="joy-map-profile-title">Layer 2 — Top-box items</div>
-        {renderItems(p.layer_2_top_items, 'TB%')}
-      </div>
-      <div className="joy-map-profile-group">
-        <div className="joy-map-profile-title">Layer 3 — Framework tag rates</div>
-        {renderItems(p.layer_3_top_tags, 'TB%')}
-      </div>
-    </div>
-  );
 };
 
-// ---- Phase 1.5 v3: Joy-pattern audience builder (free-text + LLM parse) ----
-
-// Criterion options per scale_kind. MUST stay in sync with
-// CRITERION_OPTIONS in netlify/functions/bjl-joy-pattern-helper.js. Hardcoded
-// client-side so dropdowns don't depend on a network round-trip during mount;
-// the items endpoint also returns these (the server is the source of truth),
-// but rendering can't block on that fetch — empty dropdowns lead to the
-// swap-to-alt bug where rule.criterion gets set to "".
-const JOY_PATTERN_CRITERION_OPTIONS = {
-  joy_9pt: [
-    { value: 'max_joy',         label: 'Maximum Joy (5)' },
-    { value: 'top_quartile',    label: 'Top quartile (\u2265 3)' },
-    { value: 'above_median',    label: 'Above median (> 0)' },
-    { value: 'below_median',    label: 'Below median (< 0)' },
-    { value: 'negative',        label: 'Negative joy (-3 to -1)' },
-  ],
-  joy_6pt: [
-    { value: 'max_joy',         label: 'Maximum Joy (5)' },
-    { value: 'top_quartile',    label: 'Top quartile (\u2265 4)' },
-    { value: 'above_median',    label: 'Above median (> 2)' },
-  ],
-  joy_3pt: [
-    { value: 'very_much_so',           label: 'Very much so (top-box)' },
-    { value: 'somewhat_or_higher',     label: 'Somewhat or higher' },
-    { value: 'not_at_all',             label: 'Not at all' },
-  ],
-  select_all: [
-    { value: 'selected',     label: 'Selected' },
-    { value: 'not_selected', label: 'Not selected' },
-  ],
-  likelihood: [
-    { value: 'very_likely', label: 'Very likely (top-box)' },
-    { value: 'top_2_box',   label: 'Top-2-box' },
-    { value: 'below_top',   label: 'Below top-box' },
-  ],
-  familiarity: [
-    { value: 'very_familiar', label: 'Very familiar (top-box)' },
-    { value: 'top_2_box',     label: 'Top-2-box' },
-    { value: 'below_top',     label: 'Below top-box' },
-  ],
-  agreement: [
-    { value: 'strongly_agree', label: 'Strongly agree (top-box)' },
-    { value: 'top_2_box',      label: 'Top-2-box' },
-    { value: 'below_top',      label: 'Below top-box' },
-  ],
-  ordinal_0_5: [
-    { value: 'top_box',     label: 'Top box (5)' },
-    { value: 'top_2_box',   label: 'Top-2-box (\u2265 4)' },
-    { value: 'above_median', label: 'Above median (\u2265 3)' },
-  ],
-};
-
-
-// Reusable manual item picker — used inside the confirmation view to add or
-// swap a rule. Search runs against bjl-joy-map-items (which sources from
-// bjl_items_clean since v3).
-const JoyPatternManualPicker = ({ criterionOptionsByKind, onPickComplete, onCancel }) => {
-  const [query, setQuery] = useState('');
-  const [results, setResults] = useState([]);
-  const [picked, setPicked] = useState(null);
-  const [criterion, setCriterion] = useState('');
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    const t = setTimeout(async () => {
-      setLoading(true);
-      try {
-        const r = await fetch(`/.netlify/functions/bjl-joy-map-items?q=${encodeURIComponent(query)}&limit=25`, authedFetchInit());
-        if (!r.ok) throw new Error(`items lookup failed (${r.status})`);
-        const j = await r.json();
-        if (!cancelled) setResults(j.items || []);
-      } catch (_) {
-        if (!cancelled) setResults([]);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }, 250);
-    return () => { cancelled = true; clearTimeout(t); };
-  }, [query]);
-
-  const handlePick = (it) => {
-    setPicked(it);
-    const opts = criterionOptionsByKind[it.scale_kind] || [];
-    setCriterion(opts[0]?.value || '');
-  };
-
-  const handleConfirm = () => {
-    if (!picked || !criterion) return;
-    onPickComplete({
-      item_id:       picked.item_id,
-      item_name:     picked.item_name,
-      question_text: picked.question_text,
-      scale_kind:    picked.scale_kind,
-      fielding_ids:  picked.fielding_ids,
-      n_responses:   picked.n_responses,
-      kind:          picked.scale_kind,
-      criterion:     criterion,
-      concept:       picked.item_name,
-      manual:        true,
-    });
-  };
-
+const AudienceMapJoyValleys = ({ valleys }) => {
+  if (!valleys || valleys.length === 0) return null;
   return (
-    <div className="joy-map-rule-add">
-      <input
-        type="text"
-        className="joy-map-rule-search"
-        placeholder="Search BJL items by name or question text…"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        autoFocus
-      />
-      {loading && <div className="joy-map-rule-hint">Searching…</div>}
-      {!picked && results.length > 0 && (
-        <div className="joy-map-rule-results">
-          {results.map((it) => (
-            <div key={it.item_id} className="joy-map-rule-result" onClick={() => handlePick(it)}>
-              <div className="joy-map-rule-result-name">{it.item_name}</div>
-              <div className="joy-map-rule-result-q">{it.question_text}</div>
-              <div className="joy-map-rule-result-kind">{it.scale_kind} · n={it.n_responses ?? '—'}</div>
-            </div>
-          ))}
-        </div>
-      )}
-      {picked && (
-        <div className="joy-map-rule-criterion-row">
-          <div className="joy-map-rule-picked">
-            <div className="joy-map-rule-picked-name">"{picked.item_name}"</div>
-            <div className="joy-map-rule-picked-q">{picked.question_text}</div>
+    <div className="audience-map-block">
+      <div className="audience-map-section-title">Joy Valleys</div>
+      <div className="audience-map-item-list">
+        {valleys.map((it, i) => (
+          <div key={i} className="audience-map-item-row">
+            <span className="audience-map-item-name">{it.item_name}</span>
+            <span className="audience-map-item-metric">
+              <strong>{Math.round(Number(it.cohort_ji))}</strong>
+              <span className="audience-map-item-corpus"> vs {Math.round(Number(it.corpus_ji))} corpus</span>
+            </span>
+            <JoyMapDeltaBadge cohortValue={it.cohort_ji} corpusValue={it.corpus_ji} metricLabel="JI" />
+            <span className="audience-map-item-n">n={Number(it.cohort_n).toLocaleString()}</span>
           </div>
-          <select className="joy-map-rule-criterion-select" value={criterion} onChange={(e) => setCriterion(e.target.value)}>
-            {(criterionOptionsByKind[picked.scale_kind] || []).map(opt => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
-            ))}
-          </select>
-          <button className="btn primary" onClick={handleConfirm}>Confirm</button>
-          <button className="btn ghost" onClick={onCancel}>Cancel</button>
-        </div>
-      )}
-      {!picked && (
-        <button className="btn ghost joy-map-rule-cancel-row" onClick={onCancel}>Cancel</button>
-      )}
+        ))}
+      </div>
     </div>
   );
 };
 
-const JoyPatternFreetextBuilder = ({ rules, onSetRules, operator, onSetOperator }) => {
-  const [description, setDescription] = useState('');
-  const [parsing, setParsing] = useState(false);
-  const [parseErr, setParseErr] = useState(null);
-  const [unresolved, setUnresolved] = useState([]);
-  // Hardcoded; no fetch needed. The items endpoint also returns these but
-  // making render depend on a network roundtrip caused empty-dropdown bugs.
-  const criterionOptionsByKind = JOY_PATTERN_CRITERION_OPTIONS;
-  const [expanded, setExpanded] = useState({});         // rule index -> true means show alternatives
-  const [swapping, setSwapping] = useState(null);        // rule index being swapped (open inline picker)
-  const [adding, setAdding] = useState(false);
-
-  const handleParse = async () => {
-    if (!description.trim()) return;
-    setParsing(true);
-    setParseErr(null);
-    setUnresolved([]);
-    try {
-      // Async pattern: POST enqueues a job, returns {job_id}. Poll via the
-      // standard job poller. The parse work is too long-running for the
-      // sync gateway timeout (240KB catalog + Haiku call).
-      const r = await fetch('/.netlify/functions/bjl-joy-map-audience-parse', authedFetchInit({
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ description: description.trim() }),
-      }));
-      if (!r.ok) {
-        const txt = await r.text();
-        throw new Error(`parse enqueue failed (${r.status}): ${txt.slice(0, 200)}`);
-      }
-      const { job_id } = await r.json();
-      const job = await _bjlPollJob(job_id, undefined, {
-        pollIntervalMs: 2000,
-        hardCapMs: 3 * 60 * 1000,
-      });
-      if (job.status === 'error') throw new Error(job.error || 'Parse job errored without detail.');
-      if (!job.finding) throw new Error('Parse job complete but no finding returned.');
-      const j = typeof job.finding === 'string' ? JSON.parse(job.finding) : job.finding;
-
-      // Hydrate rules from the parse result into the shape the rest of the
-      // joy-map pipeline expects. Each rule keeps its UI-only fields
-      // (concept, matched_items, rationale) alongside the wire fields
-      // (item_id, kind, criterion, fielding_ids — fielding_ids drives the
-      // cross-fielding check in JoyMapMode).
-      const hydrated = (j.rules || []).map(rule => {
-        const primary = (rule.matched_items || []).find(m => m.item_id === rule.primary_match_item_id) || rule.matched_items[0];
-        if (!primary) return null;
-        return {
-          item_id:       primary.item_id,
-          item_name:     primary.item_name,
-          question_text: primary.question_text,
-          scale_kind:    primary.scale_kind,
-          n_responses:   primary.n_responses,
-          fielding_ids:  primary.fielding_ids,
-          confidence:    primary.confidence,
-          kind:          primary.scale_kind,
-          criterion:     rule.detected_criterion,
-          concept:       rule.concept,
-          rationale:     rule.rationale,
-          matched_items: rule.matched_items,
-        };
-      }).filter(Boolean);
-      onSetRules(hydrated);
-      if (j.logical_operator && onSetOperator) onSetOperator(j.logical_operator);
-      setUnresolved(j.unresolved_concepts || []);
-      setExpanded({});
-    } catch (e) {
-      setParseErr(String(e.message || e));
-    } finally {
-      setParsing(false);
-    }
-  };
-
-  const handleClear = () => {
-    setDescription('');
-    onSetRules([]);
-    setUnresolved([]);
-    setExpanded({});
-    setParseErr(null);
-  };
-
-  const updateRule = (idx, patch) => {
-    const next = rules.slice();
-    next[idx] = { ...next[idx], ...patch };
-    onSetRules(next);
-  };
-
-  const removeRule = (idx) => onSetRules(rules.filter((_, i) => i !== idx));
-  const addRule = (rule) => onSetRules([...rules, rule]);
-
-  const swapToAlternative = (idx, alt) => {
-    const opts = criterionOptionsByKind[alt.scale_kind] || [];
-    if (opts.length === 0) {
-      // Unknown scale_kind — refuse the swap rather than nuke the criterion.
-      console.warn('[joy-map] swap refused: no criterion options for scale_kind', alt.scale_kind);
-      return;
-    }
-    const currentCriterion = rules[idx].criterion;
-    const validCriteria = opts.map(o => o.value);
-    const nextCriterion = validCriteria.includes(currentCriterion) ? currentCriterion : opts[0].value;
-    updateRule(idx, {
-      item_id:       alt.item_id,
-      item_name:     alt.item_name,
-      question_text: alt.question_text,
-      scale_kind:    alt.scale_kind,
-      fielding_ids:  alt.fielding_ids,
-      n_responses:   alt.n_responses,
-      confidence:    alt.confidence,
-      kind:          alt.scale_kind,
-      criterion:     nextCriterion,
-    });
-    setExpanded({ ...expanded, [idx]: false });
-  };
-
+const AudienceMapEmotionalSignature = ({ signature }) => {
+  if (!signature) return null;
+  const frameworks = ['joy_modes','tensions','functional_jobs','occasions'];
   return (
-    <div className="joy-map-freetext-builder">
-      <textarea
-        className="joy-map-freetext-input"
-        placeholder="Describe the audience by joy pattern. Example: people who feel high joy from eating candy bars and who also love spending time with family."
-        rows={3}
-        value={description}
-        onChange={(e) => setDescription(e.target.value)}
-      />
-      <div className="joy-map-freetext-actions">
-        <button className="btn primary" disabled={parsing || !description.trim()} onClick={handleParse}>
-          {parsing ? 'Parsing…' : (rules.length > 0 ? 'Re-parse' : 'Parse')}
-        </button>
-        {rules.length > 0 && (
-          <button className="btn ghost" onClick={handleClear}>Clear all</button>
+    <div className="audience-map-block">
+      <div className="audience-map-section-title">Emotional Signature</div>
+      {frameworks.map(fw => {
+        const block = signature[fw];
+        if (!block || !block.tags || block.tags.length === 0) return null;
+        return (
+          <div key={fw} className="audience-map-framework-block">
+            <div className="audience-map-framework-name">{FRAMEWORK_LABEL[fw]}</div>
+            <div className="audience-map-tag-list">
+              {block.tags.map((t, i) => (
+                <div key={i} className="audience-map-tag-row">
+                  <span className="audience-map-tag-name">{t.tag}</span>
+                  <span className="audience-map-tag-metric">
+                    <strong>{Number(t.cohort_rate).toFixed(1)}%</strong>
+                    <span className="audience-map-item-corpus"> vs {Number(t.corpus_rate).toFixed(1)}% corpus</span>
+                  </span>
+                  <JoyMapDeltaBadge cohortValue={t.cohort_rate} corpusValue={t.corpus_rate} metricLabel="Tag rate" />
+                </div>
+              ))}
+            </div>
+            {block.note && <div className="audience-map-framework-note">{block.note}</div>}
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
+const AudienceMapDecisionContext = ({ context }) => {
+  if (!context || context.length === 0) return null;
+  return (
+    <div className="audience-map-block">
+      <div className="audience-map-section-title">Decision Context</div>
+      {context.map((battery, i) => (
+        <div key={i} className="audience-map-battery">
+          <div className="audience-map-battery-q">{battery.question_text}</div>
+          {battery.relevance_rationale && (
+            <div className="audience-map-battery-rationale">{battery.relevance_rationale}</div>
+          )}
+          <div className="audience-map-item-list">
+            {(battery.items || []).map((it, j) => (
+              <div key={j} className="audience-map-item-row">
+                <span className="audience-map-item-name">{it.item_name}</span>
+                <span className="audience-map-item-metric">
+                  <strong>{Number(it.cohort_pct).toFixed(1)}%</strong>
+                  <span className="audience-map-item-corpus"> vs {Number(it.corpus_pct).toFixed(1)}% corpus</span>
+                </span>
+                <JoyMapDeltaBadge cohortValue={it.cohort_pct} corpusValue={it.corpus_pct} metricLabel="TB%" />
+                <span className="audience-map-item-n">n={Number(it.cohort_n).toLocaleString()}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+const DEMO_FIELD_LABEL = {
+  generation: "Generation",
+  age_band: "Age",
+  gender: "Gender",
+  income_bracket: "Income",
+  region: "Region",
+  marital_status: "Marital status",
+  parental_status: "Parental status",
+  race_ethnicity: "Race / ethnicity",
+};
+
+const AudienceMapDemographicShape = ({ shape }) => {
+  const rows = (shape && shape.rows) || [];
+  if (rows.length === 0) return null;
+  return (
+    <div className="audience-map-block">
+      <div className="audience-map-section-title">Demographic Shape</div>
+      <table className="audience-map-demo-table">
+        <thead>
+          <tr><th>Field</th><th>Top value</th><th>Cohort</th><th>Corpus</th><th>Δ</th></tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={i}>
+              <td>{DEMO_FIELD_LABEL[r.field] || r.field}</td>
+              <td>
+                {r.top_value}
+                {r.denominator_note && <span className="audience-map-demo-note"> ({r.denominator_note})</span>}
+              </td>
+              <td>{Number(r.cohort_pct).toFixed(1)}%</td>
+              <td>{Number(r.corpus_pct).toFixed(1)}%</td>
+              <td>
+                <JoyMapDeltaBadge cohortValue={r.cohort_pct} corpusValue={r.corpus_pct} metricLabel="TB%" />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
+const AudienceMapResults = ({ finding }) => {
+  const r = finding.routing || {};
+  const s = finding.sections || {};
+  const lowN = finding.low_n_warning;
+  return (
+    <div className="audience-map-results">
+      <div className="audience-map-header">
+        <div className="audience-map-header-title">Audience Map</div>
+        {r.routing_notice && <div className="audience-map-routing-notice">{r.routing_notice}</div>}
+        <div className="audience-map-cohort-line">
+          Reverse-engineered cohort: <strong>n = {Number(finding.reverse_engineered_cohort_n || 0).toLocaleString()}</strong>
+          {typeof finding.seed_cohort_n === 'number' && (
+            <span className="audience-map-seed-n"> · seed cohort n = {Number(finding.seed_cohort_n).toLocaleString()}</span>
+          )}
+        </div>
+        {lowN && (
+          <div className="audience-map-low-n-warning">
+            Cohort below n=100. Treat the numbers as directional, not authoritative.
+          </div>
         )}
       </div>
-      {parseErr && <div className="joy-map-rule-err">{parseErr}</div>}
-
-      {rules.length > 1 && (
-        <div className="joy-map-operator-badge">
-          <span className="joy-map-operator-label">Rules combined with:</span>
-          <button
-            className={`joy-map-operator-pill ${operator === 'AND' ? 'active' : ''}`}
-            onClick={() => onSetOperator && onSetOperator('AND')}
-          >AND</button>
-          <button
-            className={`joy-map-operator-pill ${operator === 'OR' ? 'active' : ''}`}
-            onClick={() => onSetOperator && onSetOperator('OR')}
-          >OR</button>
-          <span className="joy-map-operator-hint">
-            {operator === 'AND'
-              ? 'Cohort = respondents matching every rule'
-              : 'Cohort = respondents matching any rule (union)'}
-          </span>
-        </div>
-      )}
-
-      {rules.length > 0 && (
-        <div className="joy-map-rules-list">
-          <div className="joy-map-rules-list-title">Interpreted rules — confirm or edit:</div>
-          {rules.map((rule, i) => {
-            const opts = criterionOptionsByKind[rule.scale_kind] || [];
-            const isExpanded = !!expanded[i];
-            const isSwapping = swapping === i;
-            const alts = (rule.matched_items || []).filter(m => m.item_id !== rule.item_id);
-            return (
-              <div key={i} className="joy-map-rule-confirm">
-                <div className="joy-map-rule-confirm-head">
-                  {rule.concept && <span className="joy-map-rule-concept">"{rule.concept}"</span>}
-                  <button className="joy-map-rule-remove" onClick={() => removeRule(i)} title="Remove rule">×</button>
-                </div>
-                <div className="joy-map-rule-confirm-body">
-                  <div className="joy-map-rule-item-line">
-                    <span className="joy-map-rule-item">{rule.item_name}</span>
-                    {rule.question_text && (
-                      <span className="joy-map-rule-q"> · {rule.question_text.length > 60 ? rule.question_text.slice(0, 60) + '…' : rule.question_text}</span>
-                    )}
-                  </div>
-                  <div className="joy-map-rule-meta-line">
-                    <select
-                      className="joy-map-rule-criterion-select"
-                      value={rule.criterion}
-                      onChange={(e) => updateRule(i, { criterion: e.target.value })}>
-                      {opts.map(opt => (
-                        <option key={opt.value} value={opt.value}>{opt.label}</option>
-                      ))}
-                    </select>
-                    {typeof rule.confidence === 'number' && (
-                      <span className="joy-map-rule-confidence">confidence {(rule.confidence * 100).toFixed(0)}%</span>
-                    )}
-                    {typeof rule.n_responses === 'number' && (
-                      <span className="joy-map-rule-nresp">n={rule.n_responses.toLocaleString()}</span>
-                    )}
-                    {Array.isArray(rule.fielding_ids) && rule.fielding_ids.length > 0 && (
-                      <span className="joy-map-rule-fielding" title={rule.fielding_ids.join(', ')}>
-                        fielded {rule.fielding_ids.length === 1
-                          ? rule.fielding_ids[0]
-                          : `${rule.fielding_ids[0]}–${rule.fielding_ids[rule.fielding_ids.length - 1]}`}
-                      </span>
-                    )}
-                    {alts.length > 0 && (
-                      <button className="joy-map-rule-alts-toggle" onClick={() => setExpanded({ ...expanded, [i]: !isExpanded })}>
-                        {isExpanded ? 'Hide alternatives' : `See ${alts.length} alternative match${alts.length === 1 ? '' : 'es'}`}
-                      </button>
-                    )}
-                    <button className="joy-map-rule-swap" onClick={() => setSwapping(isSwapping ? null : i)}>
-                      {isSwapping ? 'Cancel swap' : 'Swap item'}
-                    </button>
-                  </div>
-                  {isExpanded && alts.length > 0 && (
-                    <div className="joy-map-rule-alts">
-                      {alts.map(alt => (
-                        <div key={alt.item_id} className="joy-map-rule-alt" onClick={() => swapToAlternative(i, alt)}>
-                          <div className="joy-map-rule-alt-name">{alt.item_name}</div>
-                          <div className="joy-map-rule-alt-q">{alt.question_text}</div>
-                          <div className="joy-map-rule-alt-meta">
-                            {alt.scale_kind} · n={alt.n_responses?.toLocaleString() ?? '—'}
-                            {typeof alt.confidence === 'number' && ` · confidence ${(alt.confidence * 100).toFixed(0)}%`}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {isSwapping && (
-                    <JoyPatternManualPicker
-                      criterionOptionsByKind={criterionOptionsByKind}
-                      onPickComplete={(picked) => {
-                        updateRule(i, {
-                          item_id:       picked.item_id,
-                          item_name:     picked.item_name,
-                          question_text: picked.question_text,
-                          scale_kind:    picked.scale_kind,
-                          n_responses:   picked.n_responses,
-                          confidence:    null,
-                          kind:          picked.scale_kind,
-                          criterion:     picked.criterion,
-                        });
-                        setSwapping(null);
-                      }}
-                      onCancel={() => setSwapping(null)}
-                    />
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {unresolved.length > 0 && (
-        <div className="joy-map-unresolved">
-          <div className="joy-map-unresolved-title">Unresolved concepts (no match found):</div>
-          <ul className="joy-map-unresolved-list">
-            {unresolved.map((c, i) => <li key={i}>"{c}"</li>)}
-          </ul>
-        </div>
-      )}
-
-      {adding ? (
-        <JoyPatternManualPicker
-          criterionOptionsByKind={criterionOptionsByKind}
-          onPickComplete={(picked) => { addRule(picked); setAdding(false); }}
-          onCancel={() => setAdding(false)}
-        />
-      ) : (
-        <button className="btn ghost joy-map-add-manual" onClick={() => setAdding(true)}>+ Add rule manually</button>
-      )}
+      <AudienceMapSynthesis paragraph={s.synthesis_paragraph} />
+      <AudienceMapJoyPeaks peaks={s.joy_peaks} />
+      <AudienceMapJoyValleys valleys={s.joy_valleys} />
+      <AudienceMapEmotionalSignature signature={s.emotional_signature} />
+      <AudienceMapDecisionContext context={s.decision_context} />
+      <AudienceMapDemographicShape shape={s.demographic_shape} />
     </div>
   );
 };
 
-// Compute the intersection of fielding_ids across rules. Returns [] when
-// any rule lacks fielding_ids; returns the non-empty intersection when all
-// rules share at least one fielding; returns [] when no overlap exists.
-const intersectFieldings = (rules) => {
-  const lists = rules
-    .map(r => Array.isArray(r.fielding_ids) ? r.fielding_ids : null)
-    .filter(Boolean);
-  if (lists.length === 0 || lists.length !== rules.length) return null;  // null = unknown
-  if (lists.length === 1) return lists[0].slice();
-  return lists.reduce((acc, arr) => acc.filter(f => arr.includes(f)), lists[0].slice());
-};
+// ======================================================================
+// JoyMapMode — Phase 2 orchestrator
+// Two subviews: Audience Map (single text input) + Dance Map (picker + brand)
+// Recent Audience Maps held in session state.
+// ======================================================================
 
 const JoyMapMode = () => {
-  const [subView, setSubView] = useState('dance_map');
-  const [filters, setFilters] = useState({});
-  const [joyPatternRules, setJoyPatternRules] = useState([]);
-  const [logicalOperator, setLogicalOperator] = useState('AND');
-  const [cohortN, setCohortN] = useState(null);
-  const [cohortNLoading, setCohortNLoading] = useState(false);
-  const [brandMode, setBrandMode] = useState('text');
-  const [brandText, setBrandText] = useState('');
-  const [brandJson, setBrandJson] = useState('');
-  const [running, setRunning] = useState(false);
-  const [error, setError] = useState(null);
-  const [finding, setFinding] = useState(null);
+  const [subView, setSubView] = useState('audience_map');
+  // Audience Map state
+  const [amDescription, setAmDescription] = useState('');
+  const [amRunning, setAmRunning] = useState(false);
+  const [amError, setAmError] = useState(null);
+  const [amFinding, setAmFinding] = useState(null);
+  const [recentMaps, setRecentMaps] = useState([]);
+  // Dance Map state
+  const [dmSelectedMapId, setDmSelectedMapId] = useState(null);
+  const [dmBrandMode, setDmBrandMode] = useState('text');
+  const [dmBrandText, setDmBrandText] = useState('');
+  const [dmBrandJson, setDmBrandJson] = useState('');
+  const [dmRunning, setDmRunning] = useState(false);
+  const [dmError, setDmError] = useState(null);
+  const [dmFinding, setDmFinding] = useState(null);
 
-  // Audience mode is derived from what's populated.
-  const hasDemographic = Object.values(filters).some(v => v);
-  const hasJoyPattern  = joyPatternRules.length > 0;
-  const audienceMode = (hasDemographic && hasJoyPattern) ? 'combined'
-                     : hasJoyPattern                      ? 'joy_pattern'
-                     : 'demographic';
-
-  // Cross-fielding detection: empty intersection across rules' fieldings.
-  const fieldingIntersection = hasJoyPattern && joyPatternRules.length > 1
-    ? intersectFieldings(joyPatternRules)
-    : null;
-  const crossFielding = fieldingIntersection !== null && fieldingIntersection.length === 0;
-  const blockedOnCrossFieldingAnd = crossFielding && logicalOperator === 'AND';
-
-  // Live cohort n — refresh when filters / rules / operator change.
-  useEffect(() => {
-    let cancelled = false;
-    const t = setTimeout(async () => {
-      setCohortNLoading(true);
-      try {
-        const body = {
-          audience_filters: filters,
-          joy_pattern_rules: joyPatternRules.map(r => ({ item_id: r.item_id, kind: r.kind, criterion: r.criterion })),
-          logical_operator: logicalOperator,
-        };
-        const r = await fetch('/.netlify/functions/bjl-joy-map-cohort-n', authedFetchInit({
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        }));
-        if (!r.ok) throw new Error(`cohort-n failed (${r.status})`);
-        const j = await r.json();
-        if (!cancelled) setCohortN(j.cohort_n);
-      } catch (e) {
-        if (!cancelled) setCohortN(null);
-      } finally {
-        if (!cancelled) setCohortNLoading(false);
+  const handleAudienceMapRun = async () => {
+    setAmError(null);
+    setAmFinding(null);
+    if (!amDescription.trim()) { setAmError('Audience description is required.'); return; }
+    setAmRunning(true);
+    try {
+      const res = await fetch('/.netlify/functions/bjl-audience-map', authedFetchInit({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description: amDescription.trim() }),
+      }));
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(`audience-map enqueue failed (${res.status}): ${txt.slice(0, 200)}`);
       }
-    }, 350);
-    return () => { cancelled = true; clearTimeout(t); };
-  }, [filters, joyPatternRules, logicalOperator]);
+      const { job_id } = await res.json();
+      const job = await _bjlPollJob(job_id, undefined, {
+        pollIntervalMs: 2500,
+        hardCapMs: 8 * 60 * 1000,
+      });
+      if (job.status === 'error') throw new Error(job.error || 'Audience Map job errored without detail.');
+      if (!job.finding) throw new Error('Audience Map job complete but no finding returned.');
+      const parsed = typeof job.finding === 'string' ? JSON.parse(job.finding) : job.finding;
+      if (parsed.unresolved) {
+        setAmError(parsed.unresolved_reason || 'Audience description could not be routed.');
+        setAmFinding(parsed);
+        return;
+      }
+      if (parsed.low_n_refused) {
+        setAmError(parsed.message || `Reverse-engineered audience too small (n=${parsed.reverse_engineered_cohort_n}).`);
+        setAmFinding(parsed);
+        return;
+      }
+      setAmFinding(parsed);
+      // Add to recent maps (most recent first, dedupe by job_id)
+      setRecentMaps(prev => [
+        {
+          job_id,
+          description: amDescription.trim(),
+          routing_notice: parsed.routing && parsed.routing.routing_notice,
+          reverse_engineered_cohort_n: parsed.reverse_engineered_cohort_n,
+          completed_at: new Date().toISOString(),
+        },
+        ...prev.filter(m => m.job_id !== job_id),
+      ].slice(0, 10));
+      setDmSelectedMapId(job_id);
+    } catch (err) {
+      setAmError(String(err.message || err));
+    } finally {
+      setAmRunning(false);
+    }
+  };
 
-  const handleRun = async (operatorOverride) => {
-    setError(null);
-    setFinding(null);
-    const effectiveOperator = operatorOverride || logicalOperator;
+  const handleDanceMapRun = async () => {
+    setDmError(null);
+    setDmFinding(null);
+    if (!dmSelectedMapId) {
+      setDmError('Select an Audience Map first (create one in the Audience Map tab).');
+      return;
+    }
     let parsedJson = null;
-    if (subView === 'dance_map' && brandMode === 'json' && brandJson.trim()) {
-      try { parsedJson = JSON.parse(brandJson); }
-      catch (e) { setError('Brand JSON did not parse: ' + e.message); return; }
+    if (dmBrandMode === 'json' && dmBrandJson.trim()) {
+      try { parsedJson = JSON.parse(dmBrandJson); }
+      catch (e) { setDmError('Brand JSON did not parse: ' + e.message); return; }
     }
-    if (subView === 'dance_map' && brandMode === 'text' && !brandText.trim()) {
-      setError('Provide brand text or paste Waldo JSON.'); return;
+    if (dmBrandMode === 'text' && !dmBrandText.trim()) {
+      setDmError('Provide brand text or paste Waldo JSON.'); return;
     }
-    setRunning(true);
+    setDmRunning(true);
     try {
       const requestBody = {
-        workflow: subView,
-        brand_text: subView === 'dance_map' && brandMode === 'text' ? brandText.trim() : null,
+        workflow: 'dance_map',
+        brand_text: dmBrandMode === 'text' ? dmBrandText.trim() : null,
         brand_json: parsedJson,
-        audience_mode: audienceMode,
-        audience_filters: filters,
-        joy_pattern_rules: joyPatternRules.map(r => ({
-          item_id: r.item_id, kind: r.kind, criterion: r.criterion,
-          fielding_ids: r.fielding_ids,
-        })),
-        logical_operator: effectiveOperator,
+        audience_map_job_id: dmSelectedMapId,
       };
       const res = await fetch('/.netlify/functions/bjl-joy-map', authedFetchInit({
         method: 'POST',
@@ -3283,130 +2968,126 @@ const JoyMapMode = () => {
       }));
       if (!res.ok) {
         const txt = await res.text();
-        throw new Error(`Sync endpoint failed (${res.status}): ${txt.slice(0,200)}`);
+        throw new Error(`Dance Map enqueue failed (${res.status}): ${txt.slice(0,200)}`);
       }
       const { job_id } = await res.json();
       const job = await _bjlPollJob(job_id, undefined, {
         pollIntervalMs: 2500,
         hardCapMs: 8 * 60 * 1000,
       });
-      if (job.status === 'error') throw new Error(job.error || 'Job errored without detail.');
-      if (!job.finding) throw new Error('Job complete but no finding returned.');
+      if (job.status === 'error') throw new Error(job.error || 'Dance Map job errored without detail.');
+      if (!job.finding) throw new Error('Dance Map job complete but no finding returned.');
       const parsed = typeof job.finding === 'string' ? JSON.parse(job.finding) : job.finding;
-      setFinding(parsed);
+      setDmFinding(parsed);
     } catch (err) {
-      setError(String(err.message || err));
+      setDmError(String(err.message || err));
     } finally {
-      setRunning(false);
+      setDmRunning(false);
     }
-  };
-
-  const handleSwitchToOrAndRun = () => {
-    setLogicalOperator('OR');
-    handleRun('OR');
   };
 
   return (
     <div className="joy-map-mode">
       <div className="joy-map-toolbar">
-        <button className={`btn ${subView === 'audience_profile' ? 'primary' : 'ghost'}`} onClick={() => { setSubView('audience_profile'); setFinding(null); }}>Audience Joy Profile</button>
-        <button className={`btn ${subView === 'dance_map' ? 'primary' : 'ghost'}`} onClick={() => { setSubView('dance_map'); setFinding(null); }}>Dance Map</button>
+        <button className={`btn ${subView === 'audience_map' ? 'primary' : 'ghost'}`} onClick={() => setSubView('audience_map')}>Audience Map</button>
+        <button className={`btn ${subView === 'dance_map' ? 'primary' : 'ghost'}`} onClick={() => setSubView('dance_map')}>Dance Map</button>
       </div>
 
-      <div className="joy-map-inputs">
-        <div className="joy-map-input-group">
-          <div className="joy-map-input-label-row">
-            <span className="joy-map-input-label">Audience definition</span>
-            <span className="joy-map-cohort-n-live">
-              Cohort n: {cohortNLoading ? '…' : (cohortN !== null ? cohortN.toLocaleString() : '—')}
-            </span>
-          </div>
-
-          <div className="joy-map-audience-sub">
-            <div className="joy-map-audience-sub-title">Demographics <span className="joy-map-optional">(optional)</span></div>
-            <div className="joy-map-filter-grid">
-              {Object.entries(JOY_MAP_FILTERS).map(([k, def]) => (
-                <label className="joy-map-filter" key={k}>
-                  <span className="joy-map-filter-label">{def.label}</span>
-                  <select
-                    value={filters[k] || ''}
-                    onChange={(e) => setFilters({ ...filters, [k]: e.target.value || undefined })}>
-                    <option value="">Any</option>
-                    {def.options.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                  </select>
-                </label>
-              ))}
-            </div>
-          </div>
-
-          <div className="joy-map-audience-sub">
-            <div className="joy-map-audience-sub-title">Joy pattern <span className="joy-map-optional">(optional)</span></div>
-            <JoyPatternFreetextBuilder
-              rules={joyPatternRules}
-              onSetRules={setJoyPatternRules}
-              operator={logicalOperator}
-              onSetOperator={setLogicalOperator}
+      {subView === 'audience_map' && (
+        <div className="joy-map-inputs">
+          <div className="joy-map-input-group">
+            <div className="joy-map-input-label">Audience description</div>
+            <textarea
+              className="joy-map-brand-textarea"
+              placeholder="Describe the audience you want to map. Examples: 'Rock and Roll Hall of Fame fans', 'people who love music and museums', 'millennial parents in the Southeast', 'QSR customers who care about value'."
+              value={amDescription}
+              onChange={(e) => setAmDescription(e.target.value)}
+              rows={4}
             />
           </div>
-
-          {blockedOnCrossFieldingAnd && (
-            <div className="joy-map-crossfielding-warning">
-              <div className="joy-map-crossfielding-title">Cross-fielding rules detected</div>
-              <div className="joy-map-crossfielding-body">
-                These rules were fielded in different survey waves and have no overlapping respondents. No individual answered both items. To proceed, either:
-                <ul>
-                  <li>Switch the logical operator to OR (combines the two populations into a union)</li>
-                  <li>Pick alternative items from the same fielding wave (use "See alternative matches" on each rule)</li>
-                </ul>
-              </div>
-              <button className="btn primary" onClick={handleSwitchToOrAndRun} disabled={running}>
-                Switch to OR and run
-              </button>
-            </div>
-          )}
+          <div className="joy-map-actions">
+            <button className="btn primary" disabled={amRunning || !amDescription.trim()} onClick={handleAudienceMapRun}>
+              {amRunning ? 'Running…' : 'Run'}
+            </button>
+          </div>
+          {amError && <div className="joy-map-error">Error: {amError}</div>}
+          {amRunning && !amFinding && <div className="joy-map-loading">Building Audience Map (4 passes — routing, profile, synthesis, reverse-engineer)…</div>}
+          {amFinding && !amFinding.unresolved && !amFinding.low_n_refused && <AudienceMapResults finding={amFinding} />}
         </div>
+      )}
 
-        {subView === 'dance_map' && (
+      {subView === 'dance_map' && (
+        <div className="joy-map-inputs">
+          <div className="joy-map-input-group">
+            <div className="joy-map-input-label">Audience Map</div>
+            {recentMaps.length === 0 ? (
+              <div className="joy-map-empty-state">
+                <div>No Audience Maps in this session yet.</div>
+                <button className="btn primary" onClick={() => setSubView('audience_map')}>Create an Audience Map first</button>
+              </div>
+            ) : (
+              <div className="joy-map-am-picker">
+                {recentMaps.map(m => (
+                  <label key={m.job_id} className={`joy-map-am-option ${dmSelectedMapId === m.job_id ? 'selected' : ''}`}>
+                    <input
+                      type="radio"
+                      name="dm-audience-map"
+                      value={m.job_id}
+                      checked={dmSelectedMapId === m.job_id}
+                      onChange={() => setDmSelectedMapId(m.job_id)}
+                    />
+                    <div className="joy-map-am-option-body">
+                      <div className="joy-map-am-option-desc">"{m.description}"</div>
+                      <div className="joy-map-am-option-meta">
+                        {m.routing_notice}{typeof m.reverse_engineered_cohort_n === 'number' ? ` · n=${m.reverse_engineered_cohort_n.toLocaleString()}` : ''}
+                      </div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+
           <div className="joy-map-input-group">
             <div className="joy-map-input-label">Brand input</div>
             <div className="joy-map-brand-toggle">
-              <button className={`btn ${brandMode === 'text' ? 'primary' : 'ghost'}`} onClick={() => setBrandMode('text')}>Free text</button>
-              <button className={`btn ${brandMode === 'json' ? 'primary' : 'ghost'}`} onClick={() => setBrandMode('json')}>Waldo JSON</button>
+              <button className={`btn ${dmBrandMode === 'text' ? 'primary' : 'ghost'}`} onClick={() => setDmBrandMode('text')}>Free text</button>
+              <button className={`btn ${dmBrandMode === 'json' ? 'primary' : 'ghost'}`} onClick={() => setDmBrandMode('json')}>Waldo JSON</button>
             </div>
-            {brandMode === 'text' ? (
+            {dmBrandMode === 'text' ? (
               <textarea
                 className="joy-map-brand-textarea"
                 placeholder="Paste brand offering text — positioning statement, brand story, or messaging language."
-                value={brandText}
-                onChange={(e) => setBrandText(e.target.value)}
+                value={dmBrandText}
+                onChange={(e) => setDmBrandText(e.target.value)}
                 rows={5}
               />
             ) : (
               <textarea
                 className="joy-map-brand-textarea"
-                placeholder='Paste Waldo JSON. Minimal stub shape: {"brand_offering": "..."}'
-                value={brandJson}
-                onChange={(e) => setBrandJson(e.target.value)}
+                placeholder='Paste Waldo JSON. The source-aware parser will extract brand emphasis, tactical signals, and friction points.'
+                value={dmBrandJson}
+                onChange={(e) => setDmBrandJson(e.target.value)}
                 rows={6}
               />
             )}
           </div>
-        )}
 
-        <div className="joy-map-actions">
-          <button className="btn primary" disabled={running || blockedOnCrossFieldingAnd} onClick={() => handleRun()}>
-            {running ? 'Running…' : 'Run'}
-          </button>
+          <div className="joy-map-actions">
+            <button className="btn primary" disabled={dmRunning || !dmSelectedMapId} onClick={handleDanceMapRun}>
+              {dmRunning ? 'Running…' : 'Run'}
+            </button>
+          </div>
+
+          {dmError && <div className="joy-map-error">Error: {dmError}</div>}
+          {dmRunning && !dmFinding && <div className="joy-map-loading">Running Dance Map synthesis…</div>}
+          {dmFinding && <JoyMapDanceMapResults finding={dmFinding} />}
         </div>
-      </div>
-
-      {error && <div className="joy-map-error">Error: {error}</div>}
-      {running && !finding && <div className="joy-map-loading">Running joy-map pipeline…</div>}
-      {finding && finding.workflow === 'dance_map' && <JoyMapDanceMapResults finding={finding} />}
-      {finding && finding.workflow === 'audience_profile' && <JoyMapProfileResults finding={finding} />}
+      )}
     </div>
   );
 };
+
 
 /* =========================================================================
  * 13. App root — shell + mode switching + shared state.
