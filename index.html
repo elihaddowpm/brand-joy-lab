@@ -2643,6 +2643,11 @@ const JoyMapFindingCard = ({ card, accent, hasCohortFilter }) => {
             {typeof evidenceN === 'number' ? ` · n=${Number(evidenceN).toLocaleString()}` : ''}
             {lowN === 'low_n' ? ' · low n' : lowN === 'directional_only' ? ' · directional only' : ''}
           </span>
+          {card.fielding_limited && (
+            <span className="joy-map-card-fielding-limited" title="Item not asked in all fieldings comprising this cohort. Metric reflects only the subset of cohort respondents who saw this question.">
+              fielding-limited
+            </span>
+          )}
           {corpusDisplay && !isCorpusBaseline && (
             <span className="joy-map-card-evidence-corpus">
               vs corpus {corpusDisplay}
@@ -2859,7 +2864,7 @@ const JoyPatternManualPicker = ({ criterionOptionsByKind, onPickComplete, onCanc
   );
 };
 
-const JoyPatternFreetextBuilder = ({ rules, onSetRules }) => {
+const JoyPatternFreetextBuilder = ({ rules, onSetRules, operator, onSetOperator }) => {
   const [description, setDescription] = useState('');
   const [parsing, setParsing] = useState(false);
   const [parseErr, setParseErr] = useState(null);
@@ -2921,6 +2926,7 @@ const JoyPatternFreetextBuilder = ({ rules, onSetRules }) => {
         };
       }).filter(Boolean);
       onSetRules(hydrated);
+      if (j.logical_operator && onSetOperator) onSetOperator(j.logical_operator);
       setUnresolved(j.unresolved_concepts || []);
       setExpanded({});
     } catch (e) {
@@ -2984,6 +2990,25 @@ const JoyPatternFreetextBuilder = ({ rules, onSetRules }) => {
       </div>
       {parseErr && <div className="joy-map-rule-err">{parseErr}</div>}
 
+      {rules.length > 1 && (
+        <div className="joy-map-operator-badge">
+          <span className="joy-map-operator-label">Rules combined with:</span>
+          <button
+            className={`joy-map-operator-pill ${operator === 'AND' ? 'active' : ''}`}
+            onClick={() => onSetOperator && onSetOperator('AND')}
+          >AND</button>
+          <button
+            className={`joy-map-operator-pill ${operator === 'OR' ? 'active' : ''}`}
+            onClick={() => onSetOperator && onSetOperator('OR')}
+          >OR</button>
+          <span className="joy-map-operator-hint">
+            {operator === 'AND'
+              ? 'Cohort = respondents matching every rule'
+              : 'Cohort = respondents matching any rule (union)'}
+          </span>
+        </div>
+      )}
+
       {rules.length > 0 && (
         <div className="joy-map-rules-list">
           <div className="joy-map-rules-list-title">Interpreted rules — confirm or edit:</div>
@@ -3019,6 +3044,13 @@ const JoyPatternFreetextBuilder = ({ rules, onSetRules }) => {
                     )}
                     {typeof rule.n_responses === 'number' && (
                       <span className="joy-map-rule-nresp">n={rule.n_responses.toLocaleString()}</span>
+                    )}
+                    {Array.isArray(rule.fielding_ids) && rule.fielding_ids.length > 0 && (
+                      <span className="joy-map-rule-fielding" title={rule.fielding_ids.join(', ')}>
+                        fielded {rule.fielding_ids.length === 1
+                          ? rule.fielding_ids[0]
+                          : `${rule.fielding_ids[0]}–${rule.fielding_ids[rule.fielding_ids.length - 1]}`}
+                      </span>
                     )}
                     {alts.length > 0 && (
                       <button className="joy-map-rule-alts-toggle" onClick={() => setExpanded({ ...expanded, [i]: !isExpanded })}>
@@ -3091,11 +3123,23 @@ const JoyPatternFreetextBuilder = ({ rules, onSetRules }) => {
   );
 };
 
+// Compute the intersection of fielding_ids across rules. Returns [] when
+// any rule lacks fielding_ids; returns the non-empty intersection when all
+// rules share at least one fielding; returns [] when no overlap exists.
+const intersectFieldings = (rules) => {
+  const lists = rules
+    .map(r => Array.isArray(r.fielding_ids) ? r.fielding_ids : null)
+    .filter(Boolean);
+  if (lists.length === 0 || lists.length !== rules.length) return null;  // null = unknown
+  if (lists.length === 1) return lists[0].slice();
+  return lists.reduce((acc, arr) => acc.filter(f => arr.includes(f)), lists[0].slice());
+};
+
 const JoyMapMode = () => {
   const [subView, setSubView] = useState('dance_map');
-  const [audienceMode, setAudienceMode] = useState('demographic');
   const [filters, setFilters] = useState({});
   const [joyPatternRules, setJoyPatternRules] = useState([]);
+  const [logicalOperator, setLogicalOperator] = useState('AND');
   const [cohortN, setCohortN] = useState(null);
   const [cohortNLoading, setCohortNLoading] = useState(false);
   const [brandMode, setBrandMode] = useState('text');
@@ -3105,17 +3149,30 @@ const JoyMapMode = () => {
   const [error, setError] = useState(null);
   const [finding, setFinding] = useState(null);
 
-  // Live cohort n — refresh when filters / rules / mode change.
+  // Audience mode is derived from what's populated.
+  const hasDemographic = Object.values(filters).some(v => v);
+  const hasJoyPattern  = joyPatternRules.length > 0;
+  const audienceMode = (hasDemographic && hasJoyPattern) ? 'combined'
+                     : hasJoyPattern                      ? 'joy_pattern'
+                     : 'demographic';
+
+  // Cross-fielding detection: empty intersection across rules' fieldings.
+  const fieldingIntersection = hasJoyPattern && joyPatternRules.length > 1
+    ? intersectFieldings(joyPatternRules)
+    : null;
+  const crossFielding = fieldingIntersection !== null && fieldingIntersection.length === 0;
+  const blockedOnCrossFieldingAnd = crossFielding && logicalOperator === 'AND';
+
+  // Live cohort n — refresh when filters / rules / operator change.
   useEffect(() => {
     let cancelled = false;
     const t = setTimeout(async () => {
       setCohortNLoading(true);
       try {
         const body = {
-          audience_filters: (audienceMode === 'demographic' || audienceMode === 'combined') ? filters : {},
-          joy_pattern_rules: (audienceMode === 'joy_pattern' || audienceMode === 'combined')
-            ? joyPatternRules.map(r => ({ item_id: r.item_id, kind: r.kind, criterion: r.criterion }))
-            : [],
+          audience_filters: filters,
+          joy_pattern_rules: joyPatternRules.map(r => ({ item_id: r.item_id, kind: r.kind, criterion: r.criterion })),
+          logical_operator: logicalOperator,
         };
         const r = await fetch('/.netlify/functions/bjl-joy-map-cohort-n', authedFetchInit({
           method: 'POST',
@@ -3132,11 +3189,12 @@ const JoyMapMode = () => {
       }
     }, 350);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [audienceMode, filters, joyPatternRules]);
+  }, [filters, joyPatternRules, logicalOperator]);
 
-  const handleRun = async () => {
+  const handleRun = async (operatorOverride) => {
     setError(null);
     setFinding(null);
+    const effectiveOperator = operatorOverride || logicalOperator;
     let parsedJson = null;
     if (subView === 'dance_map' && brandMode === 'json' && brandJson.trim()) {
       try { parsedJson = JSON.parse(brandJson); }
@@ -3145,9 +3203,6 @@ const JoyMapMode = () => {
     if (subView === 'dance_map' && brandMode === 'text' && !brandText.trim()) {
       setError('Provide brand text or paste Waldo JSON.'); return;
     }
-    if ((audienceMode === 'joy_pattern' || audienceMode === 'combined') && joyPatternRules.length === 0) {
-      setError('Audience mode "' + audienceMode + '" requires at least one joy-pattern rule.'); return;
-    }
     setRunning(true);
     try {
       const requestBody = {
@@ -3155,10 +3210,12 @@ const JoyMapMode = () => {
         brand_text: subView === 'dance_map' && brandMode === 'text' ? brandText.trim() : null,
         brand_json: parsedJson,
         audience_mode: audienceMode,
-        audience_filters: (audienceMode === 'demographic' || audienceMode === 'combined') ? filters : {},
-        joy_pattern_rules: (audienceMode === 'joy_pattern' || audienceMode === 'combined')
-          ? joyPatternRules.map(r => ({ item_id: r.item_id, kind: r.kind, criterion: r.criterion }))
-          : [],
+        audience_filters: filters,
+        joy_pattern_rules: joyPatternRules.map(r => ({
+          item_id: r.item_id, kind: r.kind, criterion: r.criterion,
+          fielding_ids: r.fielding_ids,
+        })),
+        logical_operator: effectiveOperator,
       };
       const res = await fetch('/.netlify/functions/bjl-joy-map', authedFetchInit({
         method: 'POST',
@@ -3185,11 +3242,10 @@ const JoyMapMode = () => {
     }
   };
 
-  const removeRule = (idx) => setJoyPatternRules(joyPatternRules.filter((_, i) => i !== idx));
-  const addRule = (rule) => setJoyPatternRules([...joyPatternRules, rule]);
-
-  const showDemographic = audienceMode === 'demographic' || audienceMode === 'combined';
-  const showJoyPattern  = audienceMode === 'joy_pattern' || audienceMode === 'combined';
+  const handleSwitchToOrAndRun = () => {
+    setLogicalOperator('OR');
+    handleRun('OR');
+  };
 
   return (
     <div className="joy-map-mode">
@@ -3206,13 +3262,9 @@ const JoyMapMode = () => {
               Cohort n: {cohortNLoading ? '…' : (cohortN !== null ? cohortN.toLocaleString() : '—')}
             </span>
           </div>
-          <div className="joy-map-audience-mode-toggle">
-            <button className={`btn ${audienceMode === 'demographic' ? 'primary' : 'ghost'}`} onClick={() => setAudienceMode('demographic')}>Demographics</button>
-            <button className={`btn ${audienceMode === 'joy_pattern' ? 'primary' : 'ghost'}`} onClick={() => setAudienceMode('joy_pattern')}>Joy pattern</button>
-            <button className={`btn ${audienceMode === 'combined' ? 'primary' : 'ghost'}`} onClick={() => setAudienceMode('combined')}>Combined</button>
-          </div>
 
-          {showDemographic && (
+          <div className="joy-map-audience-sub">
+            <div className="joy-map-audience-sub-title">Demographics <span className="joy-map-optional">(optional)</span></div>
             <div className="joy-map-filter-grid">
               {Object.entries(JOY_MAP_FILTERS).map(([k, def]) => (
                 <label className="joy-map-filter" key={k}>
@@ -3226,10 +3278,32 @@ const JoyMapMode = () => {
                 </label>
               ))}
             </div>
-          )}
+          </div>
 
-          {showJoyPattern && (
-            <JoyPatternFreetextBuilder rules={joyPatternRules} onSetRules={setJoyPatternRules} />
+          <div className="joy-map-audience-sub">
+            <div className="joy-map-audience-sub-title">Joy pattern <span className="joy-map-optional">(optional)</span></div>
+            <JoyPatternFreetextBuilder
+              rules={joyPatternRules}
+              onSetRules={setJoyPatternRules}
+              operator={logicalOperator}
+              onSetOperator={setLogicalOperator}
+            />
+          </div>
+
+          {blockedOnCrossFieldingAnd && (
+            <div className="joy-map-crossfielding-warning">
+              <div className="joy-map-crossfielding-title">Cross-fielding rules detected</div>
+              <div className="joy-map-crossfielding-body">
+                These rules were fielded in different survey waves and have no overlapping respondents. No individual answered both items. To proceed, either:
+                <ul>
+                  <li>Switch the logical operator to OR (combines the two populations into a union)</li>
+                  <li>Pick alternative items from the same fielding wave (use "See alternative matches" on each rule)</li>
+                </ul>
+              </div>
+              <button className="btn primary" onClick={handleSwitchToOrAndRun} disabled={running}>
+                Switch to OR and run
+              </button>
+            </div>
           )}
         </div>
 
@@ -3261,7 +3335,7 @@ const JoyMapMode = () => {
         )}
 
         <div className="joy-map-actions">
-          <button className="btn primary" disabled={running} onClick={handleRun}>
+          <button className="btn primary" disabled={running || blockedOnCrossFieldingAnd} onClick={() => handleRun()}>
             {running ? 'Running…' : 'Run'}
           </button>
         </div>

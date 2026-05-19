@@ -50,10 +50,11 @@ const MAX_TOKENS = 4000;
 async function loadCleanCatalog() {
   // Load every clean item whose question_type is picker-eligible. Attach
   // scale_kind on the way out so the LLM (and our validator) can key off it.
+  // fielding_ids[] travels through for cross-fielding cohort detection.
   const typesList = PICKER_QUESTION_TYPES.map(t => `'${t.replace(/'/g, "''")}'`).join(',');
   const sql = `
     SELECT item_id, item_name, question_id, question_text,
-           question_type, scale_type, n_responses
+           question_type, scale_type, n_responses, fielding_ids
     FROM bjl_items_clean
     WHERE question_type IN (${typesList})
     ORDER BY n_responses DESC
@@ -68,6 +69,7 @@ async function loadCleanCatalog() {
       question_text: row.question_text,
       scale_kind:    classifyScaleKind(row.question_type, row.scale_type),
       n_responses:   row.n_responses,
+      fielding_ids:  Array.isArray(row.fielding_ids) ? row.fielding_ids : [],
     }))
     .filter(row => row.scale_kind !== null);
 }
@@ -83,6 +85,7 @@ async function callParseLLM({ description, catalog }) {
     question_text: c.question_text,
     scale_kind:    c.scale_kind,
     n_responses:   c.n_responses,
+    fielding_ids:  c.fielding_ids,
   }));
 
   const userMessage = [
@@ -128,6 +131,7 @@ function validateAndHydrate(parsed, catalog) {
         question_text: cat.question_text,
         scale_kind:    cat.scale_kind,
         n_responses:   cat.n_responses,
+        fielding_ids:  cat.fielding_ids,
         confidence:    typeof m.confidence === 'number'
                          ? Math.round(m.confidence * 100) / 100
                          : null,
@@ -158,8 +162,13 @@ function validateAndHydrate(parsed, catalog) {
     });
   }
 
+  // Normalize logical_operator. Default AND when unspecified.
+  let logicalOperator = (parsed.logical_operator || '').toString().toUpperCase();
+  if (logicalOperator !== 'AND' && logicalOperator !== 'OR') logicalOperator = 'AND';
+
   return {
     rules: validRules,
+    logical_operator: logicalOperator,
     unresolved_concepts: Array.isArray(parsed.unresolved_concepts) ? parsed.unresolved_concepts : [],
     diagnostics: {
       invalid_items_dropped: invalidItems,

@@ -62,7 +62,7 @@ function quote(s) {
  *
  * Returns '1=1' when nothing is specified (full corpus).
  */
-function buildCohortFilter(mode, filters, joyPatternRules) {
+function buildCohortFilter(mode, filters, joyPatternRules, operator) {
   const f = filters || {};
   const demographicClauses = [];
   if (mode === 'demographic' || mode === 'combined') {
@@ -76,7 +76,7 @@ function buildCohortFilter(mode, filters, joyPatternRules) {
 
   let joyPatternClause = null;
   if (mode === 'joy_pattern' || mode === 'combined') {
-    const sub = buildJoyPatternCohortSQL(joyPatternRules || []);
+    const sub = buildJoyPatternCohortSQL(joyPatternRules || [], operator);
     if (sub) joyPatternClause = `resp.respondent_id IN ${sub}`;
   }
 
@@ -501,7 +501,8 @@ exports.handler = async (event) => {
     const audienceMode = ctx.audience_mode || 'demographic';
     const audienceFilters = ctx.audience_filters || {};
     const joyPatternRules = Array.isArray(ctx.joy_pattern_rules) ? ctx.joy_pattern_rules : [];
-    const cohortFilter = buildCohortFilter(audienceMode, audienceFilters, joyPatternRules);
+    const logicalOperator = (ctx.logical_operator === 'OR') ? 'OR' : 'AND';
+    const cohortFilter = buildCohortFilter(audienceMode, audienceFilters, joyPatternRules, logicalOperator);
 
     const cohortN = await queryCohortN(cohortFilter);
 
@@ -512,14 +513,42 @@ exports.handler = async (event) => {
       queryLayer3Cohort(cohortFilter, 60),
     ]);
 
+    // Fielding-aware mode: when the operator is OR AND the joy-pattern
+    // rules' fielding_ids have empty intersection, the cohort is a union
+    // across multiple fieldings. Items asked in only some of those
+    // fieldings will have item-level n significantly smaller than the
+    // total cohort n. Tag those items so the synthesis LLM and the
+    // frontend can label them as fielding-limited.
+    const ruleFieldingSets = joyPatternRules
+      .map(r => Array.isArray(r.fielding_ids) ? r.fielding_ids : [])
+      .filter(arr => arr.length > 0);
+    const fieldingIntersection = ruleFieldingSets.length > 0
+      ? ruleFieldingSets.reduce((acc, arr) => acc.filter(f => arr.includes(f)),
+                                ruleFieldingSets[0].slice())
+      : [];
+    const fieldingAwareMode = logicalOperator === 'OR'
+                              && ruleFieldingSets.length > 1
+                              && fieldingIntersection.length === 0;
+
+    const tagFieldingLimited = (items) => {
+      if (!fieldingAwareMode || !cohortN) return items;
+      return items.map(it => {
+        const n = Number(it.cohort_n) || 0;
+        const ratio = n / cohortN;
+        return { ...it, fielding_limited: ratio < 0.8 };
+      });
+    };
+
     const audienceProfile = {
       cohort_n: cohortN,
       audience_mode: audienceMode,
       filters_applied: audienceFilters,
       joy_pattern_rules: joyPatternRules,
-      layer_1_top_items: l1,
-      layer_2_top_items: [...l2a, ...l2b],
-      layer_3_top_tags:  l3,
+      logical_operator: logicalOperator,
+      fielding_aware_mode: fieldingAwareMode,
+      layer_1_top_items: tagFieldingLimited(l1),
+      layer_2_top_items: tagFieldingLimited([...l2a, ...l2b]),
+      layer_3_top_tags:  tagFieldingLimited(l3),
     };
 
     let finding;
@@ -569,6 +598,30 @@ exports.handler = async (event) => {
         ...(llmResult.untapped_opportunity || []),
       ];
       await augmentLayer3Confidence(allCards);
+
+      // Copy fielding_limited from the audience_profile items onto cards
+      // so the frontend can render the fielding-limited tag. Lookup is by
+      // bjl_item_id for Layer 1/2 cards; for Layer 3 cards (tag rows),
+      // look up by framework + tag.
+      if (audienceProfile.fielding_aware_mode) {
+        const itemFlagById = new Map();
+        const tagFlagByKey = new Map();
+        for (const it of [...audienceProfile.layer_1_top_items, ...audienceProfile.layer_2_top_items]) {
+          if (it.item_id !== undefined && it.fielding_limited) itemFlagById.set(it.item_id, true);
+        }
+        for (const it of audienceProfile.layer_3_top_tags) {
+          if (it.framework && it.tag && it.fielding_limited) {
+            tagFlagByKey.set(`${it.framework}|${it.tag}`, true);
+          }
+        }
+        for (const c of allCards) {
+          if (String(c.layer) === '3') {
+            if (tagFlagByKey.get(`${c.framework}|${c.bjl_item_name}`)) c.fielding_limited = true;
+          } else if (c.bjl_item_id !== undefined && itemFlagById.get(c.bjl_item_id)) {
+            c.fielding_limited = true;
+          }
+        }
+      }
 
       finding = {
         workflow,
