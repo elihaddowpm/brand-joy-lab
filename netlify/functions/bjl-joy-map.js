@@ -6,11 +6,17 @@
  *     workflow: "audience_profile" | "dance_map",
  *     brand_text: string | null,        // free-text brand input
  *     brand_json: object | null,        // Waldo JSON paste-in
+ *     audience_mode: "demographic" | "joy_pattern" | "combined",
  *     audience_filters: {
  *       age_band, gender, income_bracket, region,
  *       parental_status, marital_status
- *     }
+ *     },
+ *     joy_pattern_rules: [{ item_id, kind, criterion }, ...]   // Phase 1.5
  *   }
+ *
+ * audience_mode defaults to "demographic" (back-compat with v0.3 callers).
+ * When audience_mode is "joy_pattern", audience_filters is ignored.
+ * When audience_mode is "combined", both apply (intersection).
  *
  * For workflow="audience_profile", brand_text/brand_json are ignored.
  * For workflow="dance_map", at least one of brand_text or brand_json is required.
@@ -32,6 +38,7 @@ const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_AN
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const VALID_WORKFLOWS = ['audience_profile', 'dance_map'];
+const VALID_AUDIENCE_MODES = ['demographic', 'joy_pattern', 'combined'];
 
 function validate(body) {
   if (!body || typeof body !== 'object') return { error: 'Missing body' };
@@ -45,7 +52,33 @@ function validate(body) {
       return { error: 'dance_map requires brand_text or brand_json' };
     }
   }
-  // audience_filters is optional; an empty object means full corpus.
+  // audience_mode is optional; defaults to "demographic" for back-compat.
+  if (body.audience_mode && !VALID_AUDIENCE_MODES.includes(body.audience_mode)) {
+    return { error: `audience_mode must be one of ${VALID_AUDIENCE_MODES.join(', ')}` };
+  }
+  // Validate joy_pattern_rules shape if provided
+  if (body.joy_pattern_rules !== undefined) {
+    if (!Array.isArray(body.joy_pattern_rules)) {
+      return { error: 'joy_pattern_rules must be an array' };
+    }
+    for (const rule of body.joy_pattern_rules) {
+      if (!rule || typeof rule !== 'object') return { error: 'joy_pattern_rule must be an object' };
+      if (typeof rule.item_id !== 'number' && !/^\d+$/.test(String(rule.item_id))) {
+        return { error: 'joy_pattern_rule.item_id must be an integer' };
+      }
+      if (typeof rule.kind !== 'string' || !rule.kind) {
+        return { error: 'joy_pattern_rule.kind must be a non-empty string' };
+      }
+      if (typeof rule.criterion !== 'string' || !rule.criterion) {
+        return { error: 'joy_pattern_rule.criterion must be a non-empty string' };
+      }
+    }
+  }
+  const mode = body.audience_mode || 'demographic';
+  if ((mode === 'joy_pattern' || mode === 'combined')
+      && (!Array.isArray(body.joy_pattern_rules) || body.joy_pattern_rules.length === 0)) {
+    return { error: `audience_mode "${mode}" requires at least one joy_pattern_rule` };
+  }
   return { ok: true };
 }
 
@@ -103,10 +136,12 @@ exports.handler = async (event) => {
   // Insert job. We reuse bjl_query_jobs and use a distinct query_type prefix.
   const queryType = `joy_map_${body.workflow}`;
   const extraContext = {
-    workflow:         body.workflow,
-    brand_text:       body.brand_text || null,
-    brand_json:       body.brand_json || null,
-    audience_filters: body.audience_filters || {},
+    workflow:           body.workflow,
+    brand_text:         body.brand_text || null,
+    brand_json:         body.brand_json || null,
+    audience_mode:      body.audience_mode || 'demographic',
+    audience_filters:   body.audience_filters || {},
+    joy_pattern_rules:  Array.isArray(body.joy_pattern_rules) ? body.joy_pattern_rules : [],
   };
 
   // The `prompt` column is required (NOT NULL); set a human-readable summary.

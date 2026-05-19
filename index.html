@@ -2551,7 +2551,52 @@ const JOY_MAP_SECTION_STYLE = {
   untapped_opportunity: { label: "Untapped Opportunity", color: "#7c3aed", dot: "#a855f7", description: "Audience signal the brand is not yet engaging." },
 };
 
-const JoyMapFindingCard = ({ card, accent }) => {
+// ---- Phase 1.5 vis A: cohort-vs-corpus delta badge ----
+const JoyMapDeltaBadge = ({ cohortValue, corpusValue, metricLabel, hasCohortFilter }) => {
+  if (!hasCohortFilter) return null;
+  const c = Number(cohortValue);
+  const x = Number(corpusValue);
+  if (!Number.isFinite(c) || !Number.isFinite(x)) return null;
+  const delta = c - x;
+  if (Math.abs(delta) < 1) return null;
+  const sign = delta > 0 ? '+' : '';
+  const unit = metricLabel === 'JI' ? '' : 'pp';
+  const rounded = metricLabel === 'JI' ? Math.round(delta) : Math.round(delta * 10) / 10;
+  const text = `${sign}${rounded}${unit}`;
+  const tone = delta > 0 ? 'positive' : 'negative';
+  return <span className={`joy-map-delta-badge joy-map-delta-${tone}`}>{text}</span>;
+};
+
+// ---- Phase 1.5 vis B: mini gauge per card ----
+const JoyMapMiniGauge = ({ value, metricLabel, accent }) => {
+  const v = Number(value);
+  if (!Number.isFinite(v)) return null;
+  let max, ref1, ref2;
+  if (metricLabel === 'JI') { max = 100; ref1 = 60; ref2 = 70; }
+  else if (metricLabel === 'Tag rate') { max = 25; ref1 = 5; ref2 = 15; }
+  else { max = 100; ref1 = 50; ref2 = 65; }   // TB% and unknowns
+  const clamped = Math.max(0, Math.min(v, max));
+  const pct = (clamped / max) * 100;
+  const ref1Pct = (ref1 / max) * 100;
+  const ref2Pct = (ref2 / max) * 100;
+  return (
+    <div className="joy-map-mini-gauge" aria-hidden="true">
+      <div className="joy-map-mini-gauge-bar">
+        <div className="joy-map-mini-gauge-tick" style={{ left: `${ref1Pct}%` }} />
+        <div className="joy-map-mini-gauge-tick" style={{ left: `${ref2Pct}%` }} />
+        <div className="joy-map-mini-gauge-dot" style={{ left: `${pct}%`, background: accent }} />
+      </div>
+      <div className="joy-map-mini-gauge-scale">
+        <span>0</span>
+        <span style={{ left: `${ref1Pct}%` }}>{ref1}{metricLabel === 'JI' ? '' : '%'}</span>
+        <span style={{ left: `${ref2Pct}%` }}>{ref2}{metricLabel === 'JI' ? '' : '%'}</span>
+        <span style={{ right: 0 }}>{max}{metricLabel === 'JI' ? '' : '%'}</span>
+      </div>
+    </div>
+  );
+};
+
+const JoyMapFindingCard = ({ card, accent, hasCohortFilter }) => {
   const layerLabel = card.layer === '3'
     ? `Layer 3 · ${card.framework || 'Tag'}`
     : `Layer ${card.layer} · ${card.metric_label || ''}`;
@@ -2587,6 +2632,12 @@ const JoyMapFindingCard = ({ card, accent }) => {
         </div>
         <div className="joy-map-card-evidence-metric-row">
           <span className="joy-map-card-metric" style={{ color: accent }}>{metricDisplay}</span>
+          <JoyMapDeltaBadge
+            cohortValue={card.metric_value}
+            corpusValue={card.corpus_value}
+            metricLabel={card.metric_label}
+            hasCohortFilter={hasCohortFilter && !isCorpusBaseline}
+          />
           <span className="joy-map-card-evidence-meta">
             {evidenceLabel}
             {typeof evidenceN === 'number' ? ` · n=${Number(evidenceN).toLocaleString()}` : ''}
@@ -2599,6 +2650,7 @@ const JoyMapFindingCard = ({ card, accent }) => {
             </span>
           )}
         </div>
+        <JoyMapMiniGauge value={card.metric_value} metricLabel={card.metric_label} accent={accent} />
         {isCorpusBaseline && (
           <div className="joy-map-card-evidence-note">Cohort cut too thin for slice; corpus baseline shown.</div>
         )}
@@ -2622,7 +2674,7 @@ const JoyMapFindingCard = ({ card, accent }) => {
   );
 };
 
-const JoyMapSection = ({ sectionKey, cards }) => {
+const JoyMapSection = ({ sectionKey, cards, hasCohortFilter }) => {
   const style = JOY_MAP_SECTION_STYLE[sectionKey];
   const safeCards = Array.isArray(cards) ? cards : [];
   return (
@@ -2638,7 +2690,7 @@ const JoyMapSection = ({ sectionKey, cards }) => {
       ) : (
         <div className="joy-map-section-cards">
           {safeCards.map((c, i) => (
-            <JoyMapFindingCard key={`${sectionKey}-${i}`} card={c} accent={style.color} />
+            <JoyMapFindingCard key={`${sectionKey}-${i}`} card={c} accent={style.color} hasCohortFilter={hasCohortFilter} />
           ))}
         </div>
       )}
@@ -2650,21 +2702,27 @@ const JoyMapDanceMapResults = ({ finding }) => {
   const dm = finding.dance_map || {};
   const diag = dm.diagnostic || {};
   const profile = finding.audience_profile || {};
+  const hasCohortFilter = (profile.audience_mode && profile.audience_mode !== 'demographic')
+    || (Array.isArray(profile.joy_pattern_rules) && profile.joy_pattern_rules.length > 0)
+    || (profile.filters_applied && Object.values(profile.filters_applied).some(v => v));
   return (
     <div className="joy-map-results">
       <div className="joy-map-header">
         <div className="joy-map-header-title">Joy Map · Dance</div>
         <div className="joy-map-header-meta">
           Cohort n = {(profile.cohort_n || 0).toLocaleString()}
+          {profile.audience_mode && profile.audience_mode !== 'demographic' && (
+            <span className="joy-map-mode-tag"> · {profile.audience_mode === 'joy_pattern' ? 'Joy-pattern cohort' : 'Combined cohort'}</span>
+          )}
           {diag.fallback_layer_used && <span className="joy-map-fallback-tag"> · Layer 3 fallback in use</span>}
         </div>
         {diag.mapping_bridge_summary && (
           <div className="joy-map-header-summary">{diag.mapping_bridge_summary}</div>
         )}
       </div>
-      <JoyMapSection sectionKey="strong_alignment" cards={dm.strong_alignment} />
-      <JoyMapSection sectionKey="misalignment" cards={dm.misalignment} />
-      <JoyMapSection sectionKey="untapped_opportunity" cards={dm.untapped_opportunity} />
+      <JoyMapSection sectionKey="strong_alignment" cards={dm.strong_alignment} hasCohortFilter={hasCohortFilter} />
+      <JoyMapSection sectionKey="misalignment" cards={dm.misalignment} hasCohortFilter={hasCohortFilter} />
+      <JoyMapSection sectionKey="untapped_opportunity" cards={dm.untapped_opportunity} hasCohortFilter={hasCohortFilter} />
     </div>
   );
 };
@@ -2706,15 +2764,158 @@ const JoyMapProfileResults = ({ finding }) => {
   );
 };
 
+// ---- Phase 1.5: Joy-pattern audience builder ----
+const JoyPatternRuleBuilder = ({ rules, onAddRule, onRemoveRule }) => {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState([]);
+  const [criterionOptionsByKind, setCriterionOptionsByKind] = useState({});
+  const [pickedItem, setPickedItem] = useState(null);
+  const [criterion, setCriterion] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [searchErr, setSearchErr] = useState(null);
+
+  // Debounced search
+  useEffect(() => {
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      setLoading(true);
+      setSearchErr(null);
+      try {
+        const url = `/.netlify/functions/bjl-joy-map-items?q=${encodeURIComponent(query)}&limit=25`;
+        const r = await fetch(url, authedFetchInit());
+        if (!r.ok) throw new Error(`items lookup failed (${r.status})`);
+        const j = await r.json();
+        if (cancelled) return;
+        setResults(j.items || []);
+        if (j.criterion_options) setCriterionOptionsByKind(j.criterion_options);
+      } catch (e) {
+        if (!cancelled) setSearchErr(e.message || String(e));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }, 250);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [query]);
+
+  const handlePickItem = (it) => {
+    setPickedItem(it);
+    const opts = criterionOptionsByKind[it.scale_kind] || [];
+    setCriterion(opts[0]?.value || '');
+  };
+
+  const handleAddRule = () => {
+    if (!pickedItem || !criterion) return;
+    onAddRule({
+      item_id:     pickedItem.item_id,
+      item_name:   pickedItem.item_name,
+      kind:        pickedItem.scale_kind,
+      criterion:   criterion,
+      question_text: pickedItem.question_text,
+    });
+    setPickedItem(null);
+    setCriterion('');
+    setQuery('');
+  };
+
+  return (
+    <div className="joy-map-rules-builder">
+      {rules.length > 0 && (
+        <div className="joy-map-rules-list">
+          {rules.map((rule, i) => (
+            <div key={i} className="joy-map-rule">
+              <div className="joy-map-rule-text">
+                <span className="joy-map-rule-item">"{rule.item_name}"</span>
+                {rule.question_text && <span className="joy-map-rule-q"> ({rule.question_text})</span>}
+                <span className="joy-map-rule-criterion"> → {rule.criterion}</span>
+              </div>
+              <button className="joy-map-rule-remove" onClick={() => onRemoveRule(i)} title="Remove">×</button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="joy-map-rule-add">
+        <input
+          type="text"
+          className="joy-map-rule-search"
+          placeholder="Search BJL items by name or question text…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        {loading && <div className="joy-map-rule-hint">Searching…</div>}
+        {searchErr && <div className="joy-map-rule-err">{searchErr}</div>}
+        {!pickedItem && results.length > 0 && (
+          <div className="joy-map-rule-results">
+            {results.map((it) => (
+              <div key={it.item_id} className="joy-map-rule-result" onClick={() => handlePickItem(it)}>
+                <div className="joy-map-rule-result-name">{it.item_name}</div>
+                <div className="joy-map-rule-result-q">{it.question_text}</div>
+                <div className="joy-map-rule-result-kind">{it.scale_kind}</div>
+              </div>
+            ))}
+          </div>
+        )}
+        {pickedItem && (
+          <div className="joy-map-rule-criterion-row">
+            <div className="joy-map-rule-picked">
+              <div className="joy-map-rule-picked-name">"{pickedItem.item_name}"</div>
+              <div className="joy-map-rule-picked-q">{pickedItem.question_text}</div>
+            </div>
+            <select className="joy-map-rule-criterion-select" value={criterion} onChange={(e) => setCriterion(e.target.value)}>
+              {(criterionOptionsByKind[pickedItem.scale_kind] || []).map(opt => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+            <button className="btn primary" onClick={handleAddRule}>Add rule</button>
+            <button className="btn ghost" onClick={() => { setPickedItem(null); setCriterion(''); }}>Cancel</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
 const JoyMapMode = () => {
   const [subView, setSubView] = useState('dance_map');
+  const [audienceMode, setAudienceMode] = useState('demographic');
   const [filters, setFilters] = useState({});
+  const [joyPatternRules, setJoyPatternRules] = useState([]);
+  const [cohortN, setCohortN] = useState(null);
+  const [cohortNLoading, setCohortNLoading] = useState(false);
   const [brandMode, setBrandMode] = useState('text');
   const [brandText, setBrandText] = useState('');
   const [brandJson, setBrandJson] = useState('');
   const [running, setRunning] = useState(false);
   const [error, setError] = useState(null);
   const [finding, setFinding] = useState(null);
+
+  // Live cohort n — refresh when filters / rules / mode change.
+  useEffect(() => {
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      setCohortNLoading(true);
+      try {
+        const body = {
+          audience_filters: (audienceMode === 'demographic' || audienceMode === 'combined') ? filters : {},
+          joy_pattern_rules: (audienceMode === 'joy_pattern' || audienceMode === 'combined')
+            ? joyPatternRules.map(r => ({ item_id: r.item_id, kind: r.kind, criterion: r.criterion }))
+            : [],
+        };
+        const r = await fetch('/.netlify/functions/bjl-joy-map-cohort-n', authedFetchInit({
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        }));
+        if (!r.ok) throw new Error(`cohort-n failed (${r.status})`);
+        const j = await r.json();
+        if (!cancelled) setCohortN(j.cohort_n);
+      } catch (e) {
+        if (!cancelled) setCohortN(null);
+      } finally {
+        if (!cancelled) setCohortNLoading(false);
+      }
+    }, 350);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [audienceMode, filters, joyPatternRules]);
 
   const handleRun = async () => {
     setError(null);
@@ -2727,13 +2928,20 @@ const JoyMapMode = () => {
     if (subView === 'dance_map' && brandMode === 'text' && !brandText.trim()) {
       setError('Provide brand text or paste Waldo JSON.'); return;
     }
+    if ((audienceMode === 'joy_pattern' || audienceMode === 'combined') && joyPatternRules.length === 0) {
+      setError('Audience mode "' + audienceMode + '" requires at least one joy-pattern rule.'); return;
+    }
     setRunning(true);
     try {
       const requestBody = {
         workflow: subView,
         brand_text: subView === 'dance_map' && brandMode === 'text' ? brandText.trim() : null,
         brand_json: parsedJson,
-        audience_filters: filters,
+        audience_mode: audienceMode,
+        audience_filters: (audienceMode === 'demographic' || audienceMode === 'combined') ? filters : {},
+        joy_pattern_rules: (audienceMode === 'joy_pattern' || audienceMode === 'combined')
+          ? joyPatternRules.map(r => ({ item_id: r.item_id, kind: r.kind, criterion: r.criterion }))
+          : [],
       };
       const res = await fetch('/.netlify/functions/bjl-joy-map', authedFetchInit({
         method: 'POST',
@@ -2760,6 +2968,12 @@ const JoyMapMode = () => {
     }
   };
 
+  const removeRule = (idx) => setJoyPatternRules(joyPatternRules.filter((_, i) => i !== idx));
+  const addRule = (rule) => setJoyPatternRules([...joyPatternRules, rule]);
+
+  const showDemographic = audienceMode === 'demographic' || audienceMode === 'combined';
+  const showJoyPattern  = audienceMode === 'joy_pattern' || audienceMode === 'combined';
+
   return (
     <div className="joy-map-mode">
       <div className="joy-map-toolbar">
@@ -2769,20 +2983,37 @@ const JoyMapMode = () => {
 
       <div className="joy-map-inputs">
         <div className="joy-map-input-group">
-          <div className="joy-map-input-label">Audience filters (optional — empty = full sample)</div>
-          <div className="joy-map-filter-grid">
-            {Object.entries(JOY_MAP_FILTERS).map(([k, def]) => (
-              <label className="joy-map-filter" key={k}>
-                <span className="joy-map-filter-label">{def.label}</span>
-                <select
-                  value={filters[k] || ''}
-                  onChange={(e) => setFilters({ ...filters, [k]: e.target.value || undefined })}>
-                  <option value="">Any</option>
-                  {def.options.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                </select>
-              </label>
-            ))}
+          <div className="joy-map-input-label-row">
+            <span className="joy-map-input-label">Audience definition</span>
+            <span className="joy-map-cohort-n-live">
+              Cohort n: {cohortNLoading ? '…' : (cohortN !== null ? cohortN.toLocaleString() : '—')}
+            </span>
           </div>
+          <div className="joy-map-audience-mode-toggle">
+            <button className={`btn ${audienceMode === 'demographic' ? 'primary' : 'ghost'}`} onClick={() => setAudienceMode('demographic')}>Demographics</button>
+            <button className={`btn ${audienceMode === 'joy_pattern' ? 'primary' : 'ghost'}`} onClick={() => setAudienceMode('joy_pattern')}>Joy pattern</button>
+            <button className={`btn ${audienceMode === 'combined' ? 'primary' : 'ghost'}`} onClick={() => setAudienceMode('combined')}>Combined</button>
+          </div>
+
+          {showDemographic && (
+            <div className="joy-map-filter-grid">
+              {Object.entries(JOY_MAP_FILTERS).map(([k, def]) => (
+                <label className="joy-map-filter" key={k}>
+                  <span className="joy-map-filter-label">{def.label}</span>
+                  <select
+                    value={filters[k] || ''}
+                    onChange={(e) => setFilters({ ...filters, [k]: e.target.value || undefined })}>
+                    <option value="">Any</option>
+                    {def.options.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                  </select>
+                </label>
+              ))}
+            </div>
+          )}
+
+          {showJoyPattern && (
+            <JoyPatternRuleBuilder rules={joyPatternRules} onAddRule={addRule} onRemoveRule={removeRule} />
+          )}
         </div>
 
         {subView === 'dance_map' && (

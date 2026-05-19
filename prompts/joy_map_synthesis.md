@@ -73,13 +73,19 @@ Rules:
 
 ## Layer 2 metric_source labeling (conditional cohort-slicing)
 
-The audience_profile contains Layer 2 items sliced for this cohort (cohort_n ≥ 30 by upstream filter). When you surface a Layer 2 item:
+The audience_profile contains Layer 2 items sliced for this cohort. Each Layer 2 item in `audience_profile.layer_2_top_items` carries BOTH the cohort metric (`metric_value`, `cohort_n`) and the corpus baseline (`corpus_value`, `corpus_n`) so you can pick which to surface and populate the delta. When you surface a Layer 2 item:
 
-- If the item appears in `audience_profile.layer_2_top_items` with `cohort_n ≥ 50`: set `metric_source: "cohort"` and use the cohort metric_value and cohort_n.
-- If the item appears in `audience_profile.layer_2_top_items` but `cohort_n < 50`: set `metric_source: "corpus_baseline"`, pull the corpus metric and n from `bjl_item_catalog.layer_2`, and write the audience_signal line so the strategist knows the cohort cut is too thin to trust. (E.g., "Cohort cut too thin (n=42); shown as corpus baseline.")
+- If `cohort_n ≥ 50`: set `metric_source: "cohort"`, use cohort metric_value/cohort_n, and copy the item's `corpus_value`/`corpus_n` onto the card so the frontend can render the cohort-vs-corpus delta.
+- If `cohort_n < 50`: set `metric_source: "corpus_baseline"`, use the item's `corpus_value`/`corpus_n` as the card's metric_value/cohort_n (yes, the cohort_n field gets the corpus_n value when corpus baseline is used — the frontend reads metric_source to interpret), and leave `corpus_value`/`corpus_n` null on the card. Also surface a one-line audience_signal noting the thin slice (e.g., "Cohort cut too thin (n=42); shown as corpus baseline.").
 - If the item appears only in `bjl_item_catalog.layer_2` (used in a misalignment card where the cohort doesn't index high): set `metric_source: "corpus_baseline"` and pull from the catalog.
-- For Layer 1 (JI) and Layer 3 (tag rate) cards, always set `metric_source: "cohort"`.
-- `corpus_value` / `corpus_n` are optional and only used when you want the frontend to display a cohort-vs-corpus delta (i.e., on strong alignment cards where the cohort indexes meaningfully above corpus).
+
+## Cohort-vs-corpus deltas (Layer 1 and Layer 3)
+
+Every Layer 1 item in `audience_profile.layer_1_top_items` carries `corpus_value` (corpus JI) and `corpus_n`. Every Layer 3 tag in `audience_profile.layer_3_top_tags` carries `corpus_value` (corpus tag rate %) and `corpus_n`. When you surface a Layer 1 or Layer 3 card:
+
+- Always set `metric_source: "cohort"` (these layers always use cohort metrics).
+- Copy the corresponding `corpus_value` and `corpus_n` from the audience_profile onto the card so the frontend can render the delta badge.
+- Use these deltas as additional editorial input when writing the `headline` and `audience_signal`: a cohort indexing meaningfully above corpus on a dimension is a sharper alignment signal than the cohort metric alone.
 
 ## Section Definitions
 
