@@ -17,6 +17,7 @@
 const { createClient } = require('@supabase/supabase-js');
 const Anthropic = require('@anthropic-ai/sdk').default;
 const { buildJoyPatternCohortSQL } = require('./bjl-joy-pattern-helper');
+const { extractWaldoBrandFields } = require('./bjl-waldo-extractor');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
@@ -376,12 +377,42 @@ async function queryCatalogLayer3Taxonomy() {
 // ---------------------------------------------------------------------------
 
 function buildSynthesisUserMessage({ brandText, brandJson, audienceProfile, audienceFilters, cohortN, catalog }) {
-  const brandPayload = brandJson
-    ? `BRAND INPUT (Waldo JSON):\n${JSON.stringify(brandJson, null, 2)}`
-    : `BRAND INPUT (free-text):\n${brandText}`;
+  // Build the brand payload. Two paths:
+  //   - brandJson (Waldo JSON): source-aware extraction into three labeled
+  //     arrays (emphasis, tactical, friction). Excluded paths (perceived_gaps,
+  //     category, demographics, milestones, employee_sentiment) are dropped.
+  //   - brand_text (free-text): single emphasis block, no source attribution.
+  // Either way, the LLM must only quote from labeled emphasis/tactical/
+  // friction blocks. The prompt enforces this.
+  let brandSection;
+  if (brandJson) {
+    const fields = extractWaldoBrandFields(brandJson);
+    brandSection = [
+      'BRAND INPUT (Waldo JSON, source-aware extraction):',
+      '',
+      `brand_emphasis (positioning claims — eligible for alignment OR misalignment):`,
+      JSON.stringify(fields.emphasis, null, 2),
+      '',
+      `brand_tactical_signals (actions, not positioning — weak signal, default to caution):`,
+      JSON.stringify(fields.tactical, null, 2),
+      '',
+      `brand_friction_points (consumer-reported pain — opportunity-eligible only, NEVER misalignment):`,
+      JSON.stringify(fields.friction, null, 2),
+    ].join('\n');
+  } else {
+    brandSection = [
+      'BRAND INPUT (free-text — treat as a single emphasis blob):',
+      '',
+      'brand_emphasis:',
+      JSON.stringify([{ snippet: brandText || '', source_path: 'free_text' }], null, 2),
+      '',
+      'brand_tactical_signals: []',
+      'brand_friction_points: []',
+    ].join('\n');
+  }
 
   return [
-    brandPayload,
+    brandSection,
     '',
     'AUDIENCE FILTERS:',
     JSON.stringify(audienceFilters, null, 2),
