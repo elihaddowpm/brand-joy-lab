@@ -381,9 +381,25 @@ function extractTruncatedResponseText(raw) {
   return out;
 }
 
-async function runSynthesis(triage, scratch) {
+async function runSynthesis(triage, scratch, extraContext) {
   const systemPrompt = buildSynthesizerSystemPrompt(triage);
-  const userMessage = `Investigator scratch (${scratch.length} entries):\n${JSON.stringify(scratch, null, 2)}\n\nProduce the response now as JSON: {"response_text": "...", "followup_chips": ["...", "...", "..."]}`;
+
+  // The synthesizer authors the final response, so it MUST see the
+  // strategist context. Triage + investigator already received it; if we
+  // skip the synthesizer the strategist's pasted background never reaches
+  // the rendered output (Issue 1 in the v5.3 brief).
+  const parts = [];
+  if (extraContext && extraContext.strategistContext && String(extraContext.strategistContext).trim()) {
+    parts.push('[STRATEGIST CONTEXT]\nThe strategist pasted this context. Treat it as authoritative background on the brand, audience, or situation and reflect it in your response where relevant.\n\n' + String(extraContext.strategistContext).trim());
+  }
+  if (extraContext && extraContext.waldoContext) {
+    const wc = typeof extraContext.waldoContext === 'string'
+      ? extraContext.waldoContext
+      : JSON.stringify(extraContext.waldoContext).slice(0, 2000);
+    parts.push('[WALDO INTELLIGENCE]\n' + wc);
+  }
+  parts.push(`Investigator scratch (${scratch.length} entries):\n${JSON.stringify(scratch, null, 2)}\n\nProduce the response now as JSON: {"response_text": "...", "followup_chips": ["...", "...", "..."]}`);
+  const userMessage = parts.join('\n\n');
 
   // Output-volume cap: when any single investigator query returned more
   // than HEAVY_RESULT_THRESHOLD rows, augment the synthesizer's system
@@ -582,7 +598,7 @@ exports.handler = async (event) => {
     const { scratch, queryCount, hit_max_turns } = await runInvestigation(triage, job.prompt, job.extra_context);
 
     // Stage 3: Synthesis
-    const { response_text, followup_chips } = await runSynthesis(triage, scratch);
+    const { response_text, followup_chips } = await runSynthesis(triage, scratch, job.extra_context);
 
     // Mark complete. If we hit the depth budget without an end_turn,
     // append a meta entry so the synthesizer scratch reflects that state
