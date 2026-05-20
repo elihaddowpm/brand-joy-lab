@@ -107,99 +107,6 @@ const validateCredentials = async (emailText, strategistCtx) => {
   }
 };
 
-/* =========================================================================
- * Case study library loader — inlined port of case_studies/case_study_loader.js.
- * Because this file runs under text/babel (not native ESM), the exported
- * functions from case_study_loader.js are mirrored here so Babel-transformed
- * code can call them directly. The standalone module file remains in the repo
- * as the canonical source of truth; keep this block in sync when that file
- * changes.
- * ========================================================================= */
-let _caseStudyLibraryCache = null;
-const loadCaseStudyLibrary = async () => {
-  if (_caseStudyLibraryCache) return _caseStudyLibraryCache;
-  const response = await fetch("/case_studies/library.json");
-  if (!response.ok) throw new Error("Failed to load case study library: " + response.status);
-  _caseStudyLibraryCache = await response.json();
-  return _caseStudyLibraryCache;
-};
-
-const scoreCaseStudy = (caseStudy, prospectContext) => {
-  let score = 0;
-  const { category, pain_shape, pain_keywords = [], audience_hints = [], needs_current_proof, needs_quantitative_proof } = prospectContext;
-  const allTags = [...(caseStudy.use_for_tags || [])];
-  const allContext = [...(pain_keywords || []), ...(audience_hints || [])].map(s => s.toLowerCase());
-  for (const tag of allTags) {
-    const normalizedTag = tag.toLowerCase().replace(/_/g, " ");
-    for (const ctx of allContext) {
-      if (normalizedTag.includes(ctx) || ctx.includes(normalizedTag)) score += 2;
-    }
-  }
-  if (category && caseStudy.use_for_narrative) {
-    const narrative = caseStudy.use_for_narrative.toLowerCase();
-    if (narrative.includes(category.toLowerCase())) score += 5;
-  }
-  if (pain_shape === "performance" && caseStudy.parallel_type === "process") score += 10;
-  if (pain_shape === "brand" && caseStudy.parallel_type === "insight") score += 3;
-  if (pain_shape === "brand" && caseStudy.parallel_type === "process") score -= 20;
-  if (pain_shape === "performance" && caseStudy.parallel_type === "insight") score -= 10;
-  if (needs_current_proof && (caseStudy.timing_frame === "current" || caseStudy.timing_frame === "brand_new")) score += 4;
-  if (needs_quantitative_proof && caseStudy.results_type === "descriptive_only") score -= 15;
-  return score;
-};
-
-const filterCaseStudies = async (prospectContext, maxCases = 3) => {
-  const library = await loadCaseStudyLibrary();
-  const scored = library.case_studies.map(cs => ({ case_study: cs, score: scoreCaseStudy(cs, prospectContext) }));
-  scored.sort((a, b) => b.score - a.score);
-  const topN = scored.slice(0, Math.max(maxCases, 2));
-  if (scored.length > 0 && scored[0].score < 3) {
-    const brandDefault = scored.find(s =>
-      s.case_study.parallel_type === "insight" &&
-      s.case_study.results_type === "quantitative" &&
-      !topN.some(t => t.case_study.identifier === s.case_study.identifier)
-    );
-    if (brandDefault && topN.length < maxCases) topN.push(brandDefault);
-  }
-  return topN.map(s => s.case_study);
-};
-
-const formatSingleCaseStudy = (cs) => {
-  const lines = [];
-  lines.push("─── " + cs.client.toUpperCase() + " / " + cs.campaign.toUpperCase() + " ───");
-  if (cs.url) lines.push("URL: " + cs.url);
-  lines.push("Identifier: " + cs.identifier);
-  lines.push("When: " + cs.when);
-  lines.push("Situation: " + cs.situation);
-  lines.push("Strategic move: " + cs.strategic_move);
-  lines.push("Work: " + cs.work);
-  lines.push("Results: " + cs.results);
-  lines.push("Parallel type: " + cs.parallel_type + " (" + (cs.parallel_type === "process" ? "connect via process/discipline parallel, not insight parallel" : "connect via strategic insight parallel") + ")");
-  if (cs.results_type === "descriptive_only") {
-    lines.push("Results type: descriptive_only — do not cite numerical outcomes for this case; use strategic thinking and campaign name only.");
-  }
-  lines.push("Use for: " + cs.use_for_narrative);
-  if (cs.relative_positioning) lines.push("Relative positioning: " + cs.relative_positioning);
-  if (cs.email_usage_note) lines.push("EMAIL USAGE NOTE: " + cs.email_usage_note);
-  if (cs.relationship_credential) lines.push("Relationship credential: " + cs.relationship_credential);
-  return lines.join("\n");
-};
-
-const formatCaseStudiesForPrompt = (caseStudies) => {
-  if (!caseStudies || caseStudies.length === 0) {
-    return "No case studies pre-selected for this prospect. Use agency credentials only; do not fabricate case study references.";
-  }
-  const primary = caseStudies[0];
-  const alternatives = caseStudies.slice(1);
-  let output = "PRIMARY CASE STUDY (cite this one as the parallel reference in the email):\n\n";
-  output += formatSingleCaseStudy(primary);
-  if (alternatives.length > 0) {
-    output += "\n\nOTHER CASE STUDIES THE FILTER CONSIDERED (do not cite these; shown only so you understand what was ranked below the primary and why):\n\n";
-    output += alternatives.map(formatSingleCaseStudy).join("\n\n");
-  }
-  return output;
-};
-
 const extractProspectContext = ({ waldo, bjlInsights, strategistContext, prospectCategory }) => {
   const pain_keywords = [];
   const audience_hints = [];
@@ -870,42 +777,114 @@ const generateOneEmail = async ({
   userStrategistContext, userEmailInstructions, audienceModeValue,
   waldoAccount, prospectCategory, batchIndex,
 }) => {
-  // Pick the 2-3 most relevant case studies for this prospect.
-  let formattedCaseStudies = "";
-  try {
-    const prospectContext = extractProspectContext({
-      waldo: waldoAccount || null,
-      bjlInsights: insights || "",
-      strategistContext: userStrategistContext || "",
-      prospectCategory: prospectCategory || null,
-    });
-    const relevantCases = await filterCaseStudies(prospectContext, 3);
-    // BATCH ROTATION: which case study is primary depends on contact index
-    // within the account. Ensures multiple contacts at the same account don't
-    // all cite the same case study. Single-contact mode (batchIndex=0) is a
-    // no-op: the top-ranked case study stays primary.
-    const rotateBy = relevantCases.length > 0
-      ? ((Number.isFinite(batchIndex) ? batchIndex : 0) % relevantCases.length + relevantCases.length) % relevantCases.length
-      : 0;
-    const rotatedCases = rotateBy === 0
-      ? relevantCases
-      : [...relevantCases.slice(rotateBy), ...relevantCases.slice(0, rotateBy)];
-    formattedCaseStudies = formatCaseStudiesForPrompt(rotatedCases);
-  } catch (e) {
-    // On failure (e.g., library.json fetch error), fall through with empty case
-    // studies; buildEmailSystem will instruct the model to use credentials only.
-    formattedCaseStudies = "";
+  // Brief-first orchestration: parse the brief for content signals before
+  // fetching anything. Nothing injects unless the brief earns it.
+  const briefLower     = (userEmailInstructions || "").toLowerCase();
+  const wantsBJL       = /bjl|research|data|insight|stat|finding|consumer|traveler|fan/i.test(briefLower);
+  const wantsCaseStudy = /case study|case|client work|example|parallel|we worked/i.test(briefLower);
+  const wantsArticle   = /article|story|piece|published|read|blog/i.test(briefLower);
+
+  const prospectContext = extractProspectContext({
+    waldo: waldoAccount || null,
+    bjlInsights: insights || "",
+    strategistContext: userStrategistContext || "",
+    prospectCategory: prospectCategory || null,
+  });
+
+  // Conditional case study fetch. Server picks the row whose use_for_tags
+  // overlap best with prospectContext.pain_keywords + category, then
+  // rotates by batch_index so multiple contacts at the same account get
+  // different primary cases when overlap profiles are similar.
+  let caseStudyBlock = "";
+  if (wantsCaseStudy) {
+    try {
+      const csRes = await fetch("/api/bjl-content", authedFetchInit({
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "case_study",
+          category: prospectContext.category || "",
+          pain_keywords: prospectContext.pain_keywords || [],
+          batch_index: Number.isFinite(batchIndex) ? batchIndex : 0,
+        }),
+      }));
+      const csResult = await csRes.json();
+      if (csResult.found) {
+        const cs = csResult.data;
+        const resultsText = cs.results_type === "descriptive_only"
+          ? "(No performance data yet - describe the work and thinking only, no outcomes)"
+          : cs.results;
+        caseStudyBlock = [
+          "[CASE STUDY]",
+          "Client: " + cs.client + " - " + cs.campaign + (cs.when_note ? " (" + cs.when_note + ")" : ""),
+          "Situation: " + cs.situation,
+          "Strategic move: " + cs.strategic_move,
+          "The work: " + cs.work,
+          "Results: " + resultsText,
+          cs.email_usage_note ? "Usage note: " + cs.email_usage_note : "",
+          "[END CASE STUDY]",
+        ].filter(Boolean).join("\n");
+      }
+    } catch (e) {
+      console.warn("Case study fetch failed", e);
+    }
   }
+
+  // Conditional article fetch. Server returns top match by tag overlap;
+  // articles aren't rotated across contacts.
+  let articleBlock = "";
+  if (wantsArticle) {
+    try {
+      const aRes = await fetch("/api/bjl-content", authedFetchInit({
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "article",
+          category: prospectContext.category || "",
+          pain_keywords: prospectContext.pain_keywords || [],
+          batch_index: 0,
+        }),
+      }));
+      const aResult = await aRes.json();
+      if (aResult.found) {
+        const a = aResult.data;
+        articleBlock = [
+          "[ARTICLE - tease in one or two sentences, include the URL, do not summarize the full argument]",
+          "Title: " + a.title,
+          "Author: " + a.author,
+          "URL: " + a.url,
+          "Summary: " + a.summary,
+          "Key findings: " + ((a.key_findings || []).join(" | ")),
+          "[END ARTICLE]",
+        ].join("\n");
+      }
+    } catch (e) {
+      console.warn("Article fetch failed", e);
+    }
+  }
+
+  // Em dashes get stripped from brief, case study, and article. The
+  // waldoContext and insights pipelines handle their own formatting.
+  const stripEmDashes = s => (s || "").replace(/\u2014/g, "-").replace(/\u2013/g, "-");
+  const cleanBrief = stripEmDashes(userEmailInstructions || "").trim();
+  if (caseStudyBlock) caseStudyBlock = stripEmDashes(caseStudyBlock);
+  if (articleBlock)   articleBlock   = stripEmDashes(articleBlock);
+
   const EMAIL_SYSTEM = buildEmailSystem();
-  let userMsg = "";
-  if (userEmailInstructions && userEmailInstructions.trim()) userMsg += "[BRIEF]\n" + userEmailInstructions.trim() + "\n\n";
-  if (insights && insights.trim()) userMsg += "[BJL INSIGHTS — choose the single most relevant]\n" + insights.trim() + "\n\n";
-  if (waldoContext) userMsg += "[WALDO INTELLIGENCE]\n" + waldoContext + "\n\n";
-  if (userStrategistContext && userStrategistContext.trim()) userMsg += "[STRATEGIST CONTEXT]\n" + userStrategistContext.trim() + "\n\n";
-  if (formattedCaseStudies && formattedCaseStudies.trim()) userMsg += "[CASE STUDIES]\n" + formattedCaseStudies.trim() + "\n\n";
-  userMsg += "[Prospect] " + contactName + " at " + company + "\n";
-  userMsg += "[Audience mode] " + (audienceModeValue || "external") + "\n";
-  userMsg += "Write the outreach email for " + contactName + " at " + company + ".";
+
+  // userMsg assembly: only the blocks the brief earned.
+  const userMsg = [
+    cleanBrief ? "[BRIEF]\n" + cleanBrief + "\n[END BRIEF]" : "",
+    waldoContext ? "[WALDO INTELLIGENCE]\n" + waldoContext + "\n[END WALDO INTELLIGENCE]" : "",
+    caseStudyBlock,
+    articleBlock,
+    wantsBJL && insights && insights.trim()
+      ? "[BJL FINDING - translate into one plain behavioral observation. Do not quote joy scores or any number tied to research volume.]\n" + insights.trim() + "\n[END BJL FINDING]"
+      : "",
+    "Prospect: " + contactName + ", " + company,
+    "[Audience mode] " + (audienceModeValue || "external"),
+    "Write the outreach email for " + contactName + " at " + company + ".",
+  ].filter(Boolean).join("\n\n");
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 28000);
@@ -1996,7 +1975,7 @@ const OutreachMode = ({ setEvidenceRows, strategistContext, setStrategistContext
                     <span style={{color: "var(--grey-1)"}}>applied to every draft</span>
                   </div>
                   <textarea value={emailInstructions} onChange={e => setEmailInstructions(e.target.value)}
-                    placeholder="Write your brief here — what kind of email, what to include, how to close. If you're sharing an article, paste it below your instructions." />
+                    placeholder="Write your brief here. Describe the email type, what to include, and how to close. Reference an article, case study, or research and the tool will find the best match." />
                 </div>
               </div>
 
@@ -2309,7 +2288,7 @@ const BatchMode = ({ strategistContext, setStrategistContext }) => {
           </span>
         </div>
         <textarea value={instructions} onChange={e => setInstructions(e.target.value)} rows={2}
-          placeholder="Write your brief here — what kind of email, what to include, how to close. If you're sharing an article, paste it below your instructions." />
+          placeholder="Write your brief here. Describe the email type, what to include, and how to close. Reference an article, case study, or research and the tool will find the best match." />
         <div className="mono" style={{color: "var(--grey-2)"}}>{instructions.length} ch</div>
       </div>
 
