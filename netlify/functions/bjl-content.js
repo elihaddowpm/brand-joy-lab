@@ -1,28 +1,38 @@
 /**
- * bjl-content.js — synchronous lookup for case studies and articles
+ * bjl-content.js — synchronous lookup for case studies, articles, and BJL findings
  *
  * POST body:
  *   {
- *     type:          "case_study" | "article",
+ *     type:          "case_study" | "article" | "bjl_finding",
  *     category:      string,
  *     pain_keywords: string[],
- *     batch_index:   number      // case_study only; preserves cross-contact rotation
+ *     batch_index:   number      // case_study + bjl_finding; preserves cross-contact rotation
  *   }
  *
  * Response:
  *   { found: true,  type, data: { ... whitelisted fields ... } }
  *   { found: false, type }
  *
- * Scoring: count overlap between row tags (use_for_tags for case studies,
- * tags for articles) and the caller's pain_keywords, +1 if the prospect
- * category appears in those tags. Sort descending; return ranked[batch_index
- * % ranked.length] for case studies (so multiple contacts at the same
- * account get different primary cases when overlap profiles are similar),
- * or ranked[0] for articles.
+ * Scoring (case_study / article): count overlap between row tags
+ * (use_for_tags for case studies, tags for articles) and the caller's
+ * pain_keywords, +1 if the prospect category appears in those tags.
+ * Sort descending; return ranked[batch_index % ranked.length] for case
+ * studies, or ranked[0] for articles.
  *
- * Anon-key reads are sufficient: RLS is disabled on both bjl_case_studies
- * and bjl_articles. Both tables are small (single-digit row counts) so
- * client-side ranking after a full fetch is the simplest correct shape.
+ * bjl_finding: query bjl_scores (3,500+ rows; despite the "LEGACY" comment
+ * on the schema, this is the table that holds finding-level aggregates
+ * keyed by category + joy_index, which is what we need for a single
+ * behavioral observation). Map the prospect category to a BJL category via
+ * exact-then-fuzzy-then-general_joy fallback. Take top N by joy_index,
+ * rotate by batch_index, then strip any numeric score references before
+ * returning a single observation string. The LLM is instructed by the
+ * [BJL FINDING] wrapper to translate the raw observation into one plain
+ * behavioral sentence; the stripper here is belt-and-suspenders so a
+ * residual "44.2" or "JI 60" can't leak into the email.
+ *
+ * Anon-key reads are sufficient: RLS is disabled on bjl_case_studies and
+ * bjl_articles. bjl_scores has RLS enabled; the function uses service_role
+ * (configured in env), which bypasses RLS.
  */
 
 const { createClient } = require('@supabase/supabase-js');
@@ -32,7 +42,77 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY;
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-const VALID_TYPES = ['case_study', 'article'];
+const VALID_TYPES = ['case_study', 'article', 'bjl_finding'];
+
+// Loose mapping from prospect categories (which come from Waldo account
+// data, ad-hoc strings like "destination_marketing" or "attractions_entertainment")
+// to BJL category keys (a fixed taxonomy: travel_destinations, travel_attractions,
+// travel_hospitality, food_joy, sports_fandom, ...). Substring match in priority
+// order. If nothing hits, fall back to general_joy.
+const BJL_CATEGORY_FUZZY = [
+  { needle: 'destination', cat: 'travel_destinations' },
+  { needle: 'attraction',  cat: 'travel_attractions' },
+  { needle: 'hospital',    cat: 'travel_hospitality' },
+  { needle: 'travel',      cat: 'travel_journey_stages' },
+  { needle: 'tourism',     cat: 'travel_destinations' },
+  { needle: 'food',        cat: 'food_joy' },
+  { needle: 'restaurant',  cat: 'food_eating' },
+  { needle: 'grocer',      cat: 'retail_grocery' },
+  { needle: 'retail',      cat: 'retail_grocery' },
+  { needle: 'sport',       cat: 'sports_fandom' },
+  { needle: 'tailgat',     cat: 'sports_tailgating' },
+  { needle: 'health',      cat: 'health_wellness' },
+  { needle: 'wellness',    cat: 'health_wellness' },
+  { needle: 'tech',        cat: 'technology_internet' },
+  { needle: 'internet',    cat: 'technology_internet' },
+  { needle: 'furnitur',    cat: 'home_furniture' },
+  { needle: 'home',        cat: 'home_furniture' },
+  { needle: 'financ',      cat: 'financial' },
+  { needle: 'bank',        cat: 'financial' },
+  { needle: 'celebr',      cat: 'celebrities' },
+];
+
+function resolveBjlCategory(input) {
+  const c = String(input || '').toLowerCase().trim();
+  if (!c) return null;
+  // Exact match first
+  const direct = ['travel_destinations','travel_attractions','travel_hospitality','travel_journey_stages',
+    'brand_trust','celebrities','financial','food_eating','food_joy','general_joy',
+    'health_ratings','health_wellness','home_furniture','retail_grocery','sports_fandom',
+    'sports_tailgating','technology_internet'];
+  if (direct.includes(c)) return c;
+  // Fuzzy substring match in priority order
+  for (const { needle, cat } of BJL_CATEGORY_FUZZY) {
+    if (c.includes(needle)) return cat;
+  }
+  return null;
+}
+
+// Strip residual numeric score references before returning a finding text.
+// The LLM is also instructed not to quote them; this is a safety net.
+function stripScoreLanguage(s) {
+  return String(s || '')
+    .replace(/\d+\.?\d*\s*(?:joy\s*)?(?:index\s*)?points?/gi, '')
+    .replace(/\bJI\s*\d+\.?\d*/gi, '')
+    .replace(/\bscored?\s+\d+\.?\d*/gi, '')
+    .replace(/\bjoy\s+index\s+of\s+\d+\.?\d*/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+function composeFindingObservation(row) {
+  const item = String(row.item_name || '').trim();
+  // Trim common survey-question scaffolding so the observation reads more
+  // like a behavioral statement and less like a poll prompt.
+  let q = String(row.question || '').trim();
+  q = q.replace(/^to what (degree|extent)\s+(would|do|does|did)\s+/i, '')
+       .replace(/^how much\s+(would|do|does|did)\s+/i, '')
+       .replace(/[?]+\s*$/, '')
+       .replace(/\bbring\s+you\s+joy\b/i, 'bring people joy')
+       .trim();
+  const composed = item && q ? `${item} — ${q}` : (item || q);
+  return stripScoreLanguage(composed);
+}
 
 const CASE_STUDY_FIELDS = [
   'identifier', 'client', 'campaign', 'when_note',
@@ -126,27 +206,78 @@ exports.handler = async (event) => {
       };
     }
 
-    // article
-    const { data, error } = await supabase
-      .from('bjl_articles')
-      .select(ARTICLE_FIELDS)
-      .eq('is_active', true);
-    if (error) {
-      console.error('[bjl-content] articles query error:', error);
-      return { statusCode: 500, body: JSON.stringify({ error: 'Lookup failed', detail: error.message }) };
+    if (body.type === 'article') {
+      const { data, error } = await supabase
+        .from('bjl_articles')
+        .select(ARTICLE_FIELDS)
+        .eq('is_active', true);
+      if (error) {
+        console.error('[bjl-content] articles query error:', error);
+        return { statusCode: 500, body: JSON.stringify({ error: 'Lookup failed', detail: error.message }) };
+      }
+      const rows = data || [];
+      if (rows.length === 0) {
+        return { statusCode: 200, body: JSON.stringify({ found: false, type: 'article' }) };
+      }
+      const ranked = rows
+        .map(r => ({ row: r, score: scoreRow(r.tags, painKeywords, category) }))
+        .sort((a, b) => b.score - a.score);
+      const chosen = ranked[0].row;
+      return {
+        statusCode: 200,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ found: true, type: 'article', data: pick(chosen, ARTICLE_RETURN) }),
+      };
     }
-    const rows = data || [];
-    if (rows.length === 0) {
-      return { statusCode: 200, body: JSON.stringify({ found: false, type: 'article' }) };
+
+    // bjl_finding
+    const bjlCat = resolveBjlCategory(category);
+    // Fetch candidates: try resolved category first, then general_joy fallback.
+    async function fetchByCat(cat) {
+      const { data, error } = await supabase
+        .from('bjl_scores')
+        .select('item_name, question, category, joy_index, topics')
+        .eq('category', cat)
+        .not('joy_index', 'is', null)
+        .order('joy_index', { ascending: false })
+        .limit(10);
+      if (error) {
+        console.error('[bjl-content] bjl_scores query error:', error);
+        return [];
+      }
+      return data || [];
     }
-    const ranked = rows
-      .map(r => ({ row: r, score: scoreRow(r.tags, painKeywords, category) }))
-      .sort((a, b) => b.score - a.score);
-    const chosen = ranked[0].row;
+
+    let candidates = bjlCat ? await fetchByCat(bjlCat) : [];
+    if (candidates.length === 0 && bjlCat !== 'general_joy') {
+      candidates = await fetchByCat('general_joy');
+    }
+    if (candidates.length === 0) {
+      return { statusCode: 200, body: JSON.stringify({ found: false, type: 'bjl_finding' }) };
+    }
+
+    // Secondary rank by topic overlap with pain_keywords (the joy_index sort
+    // already picked top-of-category; this just nudges among them when the
+    // brief named something specific). Take the top 3, then rotate by
+    // batch_index so contacts at the same account see different findings.
+    const ranked = candidates
+      .map(r => ({ row: r, score: scoreRow(r.topics, painKeywords, category) }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 3);
+    const idx = ((batchIndex % ranked.length) + ranked.length) % ranked.length;
+    const chosenRow = ranked[idx].row;
+    const observation = composeFindingObservation(chosenRow);
+    if (!observation) {
+      return { statusCode: 200, body: JSON.stringify({ found: false, type: 'bjl_finding' }) };
+    }
     return {
       statusCode: 200,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ found: true, type: 'article', data: pick(chosen, ARTICLE_RETURN) }),
+      body: JSON.stringify({
+        found: true,
+        type: 'bjl_finding',
+        data: { observation, category: chosenRow.category },
+      }),
     };
   } catch (e) {
     console.error('[bjl-content] unexpected error:', e);
