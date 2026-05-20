@@ -8,16 +8,18 @@ The BJL database has 12,663 respondents, 62,755 verbatim responses, and 2.1 mill
 
 Queryable dimensions include:
 - Demographics: generation, gender, age band, income bracket, region, parental status, race/ethnicity, marital status
-- Joy index (0-100 scale) on roughly 1,000 specific items spanning food, beverage, travel, financial services, entertainment, retail, telecom, health, home, and more
+- Joy index (0-100 scale) on roughly 1,000 specific consumer behaviors, products, brands, attractions, and life experiences across U.S. consumer samples.
 - Verbatim responses tagged with four BJL frameworks: joy modes (14 — playful, hedonic, relational, etc.), tensions (15), functional jobs (24), occasions (25)
 - Consumer usage screeners across 24 categories (alcohol, casinos, travel, etc.)
 - Time series across 29 monthly waves
 
 What is NOT in the data:
-- Most non-CPG brands (financial services, auto, beauty, pharma all have minimal coverage)
+- Coverage of named brands varies by category; the investigator should attempt retrieval before judging a brand absent.
 - Tensions, functional jobs, occasions arrays exist but are not yet populated on verbatims
 - Brand-trait associations
 - Psychographic typology beyond what demographics imply
+
+NEVER decide a query is out of scope based on the category list alone. The corpus is broader than the list. Route any query naming a brand, product, attraction, behavior, or consumer experience to investigation. The corpus covers a broader range than any short description captures. Retrieval will surface what's there.
 
 If the user asks for something the data cannot support, the investigator will surface that honestly. Your job is just to flag it as a possibility in your brief.
 
