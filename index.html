@@ -667,11 +667,20 @@ const queryBJL = async ({
 // the clarification_needed bypass.
 const investigateQuery = async ({
   question, intent = null, debug = false,
+  strategistContext = null,
   priorConversationContext = null,
   onStatus = () => {}, onNote = () => {}, onChunk = () => {}, onDone = () => {},
   onError = () => {}, onDebug = () => {}, onEvidence = () => {},
   endpoint = "/api/bjl-query", signal,
 }) => {
+  // The Strategist Context pane lives in the Intelligence UI. Its value
+  // is held in IntelligenceMode state and threaded down through this
+  // helper. bjl-query.js (sync enqueue) reads body.strategistContext and
+  // persists it to extra_context.strategistContext, which the background
+  // worker passes to triage, investigator, and synthesizer.
+  const strategistContextStr = (typeof strategistContext === 'string' && strategistContext.trim())
+    ? strategistContext.trim()
+    : null;
   let enqueueRes;
   try {
     enqueueRes = await fetch(endpoint, authedFetchInit({
@@ -679,6 +688,7 @@ const investigateQuery = async ({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         query: question, intent, mode: "investigate", debug,
+        strategistContext: strategistContextStr,
         prior_conversation_context: priorConversationContext,
       }),
       signal,
@@ -1486,6 +1496,7 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
     await investigateQuery({
       question: promptText.trim(),
       intent: intent || null,
+      strategistContext: strategistContext || null,
       priorConversationContext: priorContext,
       onStatus: ({ phase }) => setPhase(phase),
       onNote: ({ note }) => setNotes(prev => [...prev, note]),
