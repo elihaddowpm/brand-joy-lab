@@ -773,9 +773,9 @@ const investigateQuery = async ({
  * Calls /api/claude. Applies validateCredentials + sanitizeEmail.
  * ========================================================================= */
 const generateOneEmail = async ({
-  contactName, company, waldoContext, insights,
+  contactName, company, waldoContext,
   userStrategistContext, userEmailInstructions, audienceModeValue,
-  waldoAccount, prospectCategory, batchIndex,
+  waldoAccount, prospectCategory, batchIndex, priorSameCompany,
 }) => {
   // Brief-first orchestration: parse the brief for content signals before
   // fetching anything. Nothing injects unless the brief earns it.
@@ -786,7 +786,7 @@ const generateOneEmail = async ({
 
   const prospectContext = extractProspectContext({
     waldo: waldoAccount || null,
-    bjlInsights: insights || "",
+    bjlInsights: "",
     strategistContext: userStrategistContext || "",
     prospectCategory: prospectCategory || null,
   });
@@ -863,12 +863,51 @@ const generateOneEmail = async ({
     }
   }
 
-  // Em dashes get stripped from brief, case study, and article. The
-  // waldoContext and insights pipelines handle their own formatting.
+  // Conditional BJL finding fetch. Server queries bjl_scores by resolved
+  // category (with general_joy fallback) and returns one observation with
+  // numeric score language already stripped. The [BJL FINDING] wrapper
+  // tells the model to translate it into one plain behavioral sentence.
+  let bjlBlock = "";
+  if (wantsBJL) {
+    try {
+      const bRes = await fetch("/api/bjl-content", authedFetchInit({
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "bjl_finding",
+          category: prospectContext.category || "",
+          pain_keywords: prospectContext.pain_keywords || [],
+          batch_index: Number.isFinite(batchIndex) ? batchIndex : 0,
+        }),
+      }));
+      const bResult = await bRes.json();
+      if (bResult.found && bResult.data && bResult.data.observation) {
+        bjlBlock = [
+          "[BJL FINDING - translate into one plain sentence describing what people do, feel, or prefer. No scores, no index numbers, no point gaps.]",
+          bResult.data.observation,
+          "[END BJL FINDING]",
+        ].join("\n");
+      }
+    } catch (e) {
+      console.warn("BJL finding fetch failed", e);
+    }
+  }
+
+  // Em dashes get stripped from brief, case study, article, and BJL block.
+  // The waldoContext pipeline handles its own formatting.
   const stripEmDashes = s => (s || "").replace(/\u2014/g, "-").replace(/\u2013/g, "-");
-  const cleanBrief = stripEmDashes(userEmailInstructions || "").trim();
+  let cleanBrief = stripEmDashes(userEmailInstructions || "").trim();
   if (caseStudyBlock) caseStudyBlock = stripEmDashes(caseStudyBlock);
   if (articleBlock)   articleBlock   = stripEmDashes(articleBlock);
+  if (bjlBlock)       bjlBlock       = stripEmDashes(bjlBlock);
+
+  // Same-company differentiation: when a prior contact at this same company
+  // is already in the batch, append a note so the model varies its hook.
+  if (priorSameCompany && cleanBrief) {
+    cleanBrief += "\n\n[NOTE: Another contact at this company is receiving a separate email in this batch. Use a different opening hook - do not repeat the same CEO quote, news reference, or first sentence used for other contacts at this organization.]";
+  } else if (priorSameCompany) {
+    cleanBrief = "[NOTE: Another contact at this company is receiving a separate email in this batch. Use a different opening hook - do not repeat the same CEO quote, news reference, or first sentence used for other contacts at this organization.]";
+  }
 
   const EMAIL_SYSTEM = buildEmailSystem();
 
@@ -878,9 +917,7 @@ const generateOneEmail = async ({
     waldoContext ? "[WALDO INTELLIGENCE]\n" + waldoContext + "\n[END WALDO INTELLIGENCE]" : "",
     caseStudyBlock,
     articleBlock,
-    wantsBJL && insights && insights.trim()
-      ? "[BJL FINDING - translate into one plain behavioral observation. Do not quote joy scores or any number tied to research volume.]\n" + insights.trim() + "\n[END BJL FINDING]"
-      : "",
+    bjlBlock,
     "Prospect: " + contactName + ", " + company,
     "[Audience mode] " + (audienceModeValue || "external"),
     "Write the outreach email for " + contactName + " at " + company + ".",
@@ -908,15 +945,87 @@ const generateOneEmail = async ({
     const data = await res.json();
     const rawText = data.content?.map(b => b.type === "text" ? b.text : "").filter(Boolean).join("\n") || "";
     const validated = await validateCredentials(rawText, userStrategistContext);
-    return { text: sanitizeEmail(validated), error: null };
+    let finalText = sanitizeEmail(validated);
+
+    // Subject-line fallback: parseSubjectBody tries multiple patterns
+    // (explicit "Subject:" prefix, first short non-empty line, quoted
+    // first line). If none hit, fire a single follow-up call to generate
+    // a subject from the body so we never ship a blank subject.
+    const parsed = parseSubjectBody(finalText);
+    if (!parsed.subject || !parsed.subject.trim()) {
+      try {
+        const subjCtrl = new AbortController();
+        const subjTimer = setTimeout(() => subjCtrl.abort(), 15000);
+        const subjRes = await fetch("/api/claude", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: subjCtrl.signal,
+          body: JSON.stringify({
+            model: "claude-sonnet-4-20250514", max_tokens: 60,
+            system: "You write email subject lines.",
+            messages: [{ role: "user", content:
+              "Write one subject line only, under 10 words, for this email. " +
+              "Return the subject line with no label, no quotes, and no punctuation at the end.\n\n" +
+              (parsed.body || finalText)
+            }],
+          }),
+        });
+        clearTimeout(subjTimer);
+        if (subjRes.status === 200) {
+          const subjData = await subjRes.json();
+          const subjRaw = subjData.content?.map(b => b.type === "text" ? b.text : "").filter(Boolean).join("\n") || "";
+          const subjLine = (subjRaw.split("\n").map(s => s.trim()).filter(Boolean)[0] || "")
+            .replace(/^[*_"'\s]+|[*_"'\s]+$/g, "")
+            .replace(/[.,;:!?]+$/, "")
+            .trim();
+          if (subjLine) {
+            finalText = "Subject: " + subjLine + "\n\n" + (parsed.body || finalText).trim();
+          }
+        }
+      } catch (e) {
+        console.warn("Subject fallback failed", e);
+      }
+    }
+
+    return { text: finalText, error: null };
   } catch (e) { return { text: "", error: e.name === "AbortError" ? "Timed out" : e.message }; }
 };
 
 const parseSubjectBody = (text) => {
-  const m = text.match(/Subject(?:\s*line)?\s*:\s*(.+)/i);
-  const subject = m ? m[1].replace(/^[*_]+|[*_]+$/g, "").trim() : "";
-  const body = text.replace(/Subject(?:\s*line)?\s*:.*\n?/i, "").trim();
-  return { subject, body };
+  if (!text) return { subject: "", body: "" };
+  const trimmed = text.replace(/^\s+/, "");
+
+  // Pattern 1: explicit "Subject:" / "Subject line:" prefix (markdown asterisks OK).
+  const m = trimmed.match(/^\**\s*Subject(?:\s*line)?\**\s*:\s*\**\s*(.+?)\s*\**\s*$/im);
+  if (m) {
+    const subject = m[1].replace(/^[*_"'\s]+|[*_"'\s]+$/g, "").trim();
+    const body = trimmed.replace(/^\**\s*Subject(?:\s*line)?\**\s*:.*\n?/im, "").trim();
+    return { subject, body };
+  }
+
+  // Pattern 2 / 3: first non-empty line as subject candidate, optionally
+  // unquoted. Only accept if it looks like a subject (short, no terminal
+  // sentence punctuation, not a salutation). Edge cases fall through to the
+  // empty-subject path where the caller fires the LLM fallback.
+  const lines = trimmed.split("\n");
+  const firstIdx = lines.findIndex(l => l.trim().length > 0);
+  if (firstIdx >= 0) {
+    const first = lines[firstIdx].trim();
+    const quoted = first.match(/^["']([^"'\n]+)["']\s*$/);
+    const candidate = quoted ? quoted[1] : first;
+    if (
+      candidate.length > 0 &&
+      candidate.length <= 100 &&
+      !/[.!?]$/.test(candidate) &&
+      !/^(hi|hello|hey|dear|good morning|good afternoon)\b/i.test(candidate)
+    ) {
+      const subject = candidate.replace(/^[*_"'\s]+|[*_"'\s]+$/g, "").trim();
+      const body = lines.slice(firstIdx + 1).join("\n").trim();
+      return { subject, body };
+    }
+  }
+
+  return { subject: "", body: trimmed.trim() };
 };
 
 /* =========================================================================
@@ -1763,11 +1872,6 @@ const contactSignalLabel = (account, contactName) => {
 const OutreachMode = ({ setEvidenceRows, strategistContext, setStrategistContext }) => {
   const [account, setAccount] = useState(null);
   const [selected, setSelected] = useState(new Set());
-  const [insights, setInsights] = useState("");
-  const [insightsReady, setInsightsReady] = useState(false);
-  const [insightsPulling, setInsightsPulling] = useState(false);
-  const [insightsPhase, setInsightsPhase] = useState(null);
-  const [insightsError, setInsightsError] = useState(null);
   const [emailInstructions, setEmailInstructions] = useState("");
   const [generating, setGenerating] = useState(false);
   const [results, setResults] = useState([]); // { contact, text, error }
@@ -1788,7 +1892,6 @@ const OutreachMode = ({ setEvidenceRows, strategistContext, setStrategistContext
       const a = parsed.accounts[0];
       setAccount(a);
       setSelected(new Set());
-      setInsights(""); setInsightsReady(false); setInsightsError(null);
       setResults([]);
     } catch (e) { setUploadError(e.message); }
   };
@@ -1805,37 +1908,8 @@ const OutreachMode = ({ setEvidenceRows, strategistContext, setStrategistContext
     setSelected(n);
   };
 
-  const pullInsights = async () => {
-    if (!account) return;
-    setInsightsPulling(true);
-    setInsightsReady(false);
-    setInsights("");
-    setInsightsError(null);
-    setInsightsPhase(null);
-    const tension = account.creative_tension || account.top_signal?.why_it_matters || "";
-    const query = [
-      `Pull BJL findings for outreach to ${account.company || account.name}`,
-      account.category ? `(${account.category})` : "",
-      tension ? `. Strategic tension: ${tension}` : "",
-    ].filter(Boolean).join(" ").trim();
-    const waldoCtx = buildWaldoSystemContext(account);
-    const combinedCtx = [strategistContext?.trim(), waldoCtx].filter(Boolean).join("\n\n");
-    let streamed = "";
-    await queryBJL({
-      query,
-      intentHint: "email_findings",
-      strategistContext: combinedCtx || undefined,
-      waldoContext: account,
-      onStatus: ({ phase }) => setInsightsPhase(phase),
-      onChunk: (t) => { streamed += t; setInsights(streamed); },
-      onEvidence: ({ rows }) => setEvidenceRows(rows || []),
-      onDone: () => { setInsightsReady(true); setInsightsPulling(false); setInsightsPhase(null); },
-      onError: ({ message, phase }) => { setInsightsError(`${phase || "error"}: ${message}`); setInsightsPulling(false); setInsightsPhase(null); },
-    });
-  };
-
   const generate = async () => {
-    if (!account || selected.size === 0 || !insightsReady) return;
+    if (!account || selected.size === 0) return;
     setGenerating(true);
     setResults([]);
     setGenProgress(0);
@@ -1848,13 +1922,13 @@ const OutreachMode = ({ setEvidenceRows, strategistContext, setStrategistContext
         contactName: c.name,
         company: account.company || account.name,
         waldoContext: waldoCtx,
-        insights,
         userStrategistContext: strategistContext,
         userEmailInstructions: emailInstructions,
         audienceModeValue: "external",
         waldoAccount: account,
         prospectCategory: account.category || null,
         batchIndex: i,
+        priorSameCompany: i > 0,
       });
       out.push({ contact: c, text, error });
       setResults([...out]);
@@ -1980,12 +2054,8 @@ const OutreachMode = ({ setEvidenceRows, strategistContext, setStrategistContext
               </div>
 
               <div style={{display: "flex", gap: 8, marginBottom: 18, alignItems: "center"}}>
-                <button className="btn primary" onClick={pullInsights} disabled={insightsPulling}>
-                  <Icon name="search" size={12} />
-                  {insightsPulling ? (PHASE_LABEL[insightsPhase] || "Pulling…") : insightsReady ? "Re-pull insights" : "Pull BJL insights"}
-                </button>
-                <button className="btn" onClick={generate}
-                  disabled={!insightsReady || selected.size === 0 || generating}>
+                <button className="btn primary" onClick={generate}
+                  disabled={selected.size === 0 || generating}>
                   <Icon name="sparkle" size={12} />
                   {generating ? `Generating ${genProgress}/${selected.size}…` : `Generate ${selected.size} emails`}
                 </button>
@@ -1995,21 +2065,6 @@ const OutreachMode = ({ setEvidenceRows, strategistContext, setStrategistContext
                   </button>
                 )}
               </div>
-
-              {insightsError && <div className="phase-pill err" style={{marginBottom: 18}}><span className="dot" />{insightsError}</div>}
-
-              {(insights || insightsPulling) && (
-                <div className="insight-tile" style={{marginBottom: 18}}>
-                  <div className="lbl">
-                    <span>BJL insights for this account</span>
-                    {insightsReady && <span style={{color: "var(--grey-1)"}}>ready</span>}
-                  </div>
-                  <div className="stream-doc" style={{fontSize: 13}}>
-                    {renderMarkdown(insights)}
-                    {insightsPulling && <span className="streaming-cursor" />}
-                  </div>
-                </div>
-              )}
 
               {results.length > 0 && (
                 <div className="stagger">
@@ -2126,8 +2181,12 @@ const BatchMode = ({ strategistContext, setStrategistContext }) => {
       const text = await file.text();
       const parsed = parseWaldoJSON(text);
       setWaldoData(parsed);
+      // All accounts are immediately eligible for email generation. The BJL
+      // pre-pull pipeline (pullForAccount/queryBJL) is no longer part of the
+      // email workflow; brief-first orchestration fetches the single BJL
+      // observation it needs at email-generation time via /api/bjl-content.
       const initStatus = {};
-      parsed.accounts.forEach(a => { initStatus[a.id] = "queued"; });
+      parsed.accounts.forEach(a => { initStatus[a.id] = "ready"; });
       setAccountStatus(initStatus);
       setAccountInsights({});
       setResults({});
@@ -2186,9 +2245,7 @@ const BatchMode = ({ strategistContext, setStrategistContext }) => {
     setGenerating(true);
     const out = { ...results };
     for (const account of accounts) {
-      if (accountStatus[account.id] !== "ready") continue;
       const waldoCtx = buildWaldoSystemContext(account);
-      const insights = accountInsights[account.id] || "";
       const contacts = (account.contacts || []).map(normalizeContact).filter(Boolean);
       out[account.id] = [];
       setResults({ ...out });
@@ -2198,13 +2255,13 @@ const BatchMode = ({ strategistContext, setStrategistContext }) => {
           contactName: c.name,
           company: account.company || account.name,
           waldoContext: waldoCtx,
-          insights,
           userStrategistContext: strategistContext,
           userEmailInstructions: instructions,
           audienceModeValue: "external",
           waldoAccount: account,
           prospectCategory: account.category || null,
           batchIndex: j,
+          priorSameCompany: j > 0,
         });
         out[account.id].push({ contact: c, text, error });
         setResults({ ...out });
@@ -2265,9 +2322,6 @@ const BatchMode = ({ strategistContext, setStrategistContext }) => {
           </button>
           <input ref={fileInputRef} type="file" accept=".json" style={{display: "none"}}
             onChange={(e) => e.target.files?.[0] && loadFile(e.target.files[0])} />
-          <button className="btn" onClick={runAllPull} disabled={pulling || accounts.length === 0}>
-            <Icon name="regen" size={12} />{pulling ? "Pulling…" : "Re-pull insights"}
-          </button>
           <button className="btn primary" onClick={runGenerate} disabled={eligibleContacts === 0 || generating}>
             <Icon name="sparkle" size={12} />
             {generating ? `Generating…` : `Generate all · ${eligibleContacts} emails`}
@@ -2293,14 +2347,11 @@ const BatchMode = ({ strategistContext, setStrategistContext }) => {
       </div>
 
       <div className="batch-progress">
-        <span>Insight retrieval</span>
-        <div className="progress-track">
-          <div className="progress-fill" style={{width: accounts.length ? (ready / accounts.length * 100) + "%" : "0%"}} />
-        </div>
-        <span><b style={{color: "var(--iron)"}}>{ready}</b> / {accounts.length || 0} ready</span>
+        <span><b style={{color: "var(--iron)"}}>{accounts.length || 0}</b> accounts loaded</span>
+        <span style={{color: "var(--grey-1)"}}>·</span>
+        <span>{totalContacts} contacts</span>
         <span style={{color: "var(--grey-1)"}}>·</span>
         <span>{totalDrafts} emails drafted</span>
-        {pulling && <span style={{color: "var(--grey-2)"}}>· pulling {pullProgress.current + 1}/{pullProgress.total}…</span>}
       </div>
 
       <div className="roster">
