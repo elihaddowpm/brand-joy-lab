@@ -2185,43 +2185,6 @@ const OutreachEmailCard = ({ result, index }) => {
  * inline email body preview.
  * ========================================================================= */
 
-// Parse the orchestrator's email_findings output into 4-5 structured findings.
-// The synthesis prompt says each finding has: (1) behavioral observation,
-// (2) supporting data in parens, (3) outreach implication. The format the
-// model actually emits is numbered list-ish. Tolerate variation.
-const parseFindings = (raw) => {
-  if (!raw) return [];
-  const lines = raw.split("\n");
-  const findings = [];
-  let current = null;
-  for (const line of lines) {
-    const numMatch = line.match(/^\s*(\d+)[.)]\s+(.*)$/);
-    if (numMatch) {
-      if (current) findings.push(current);
-      current = { idx: numMatch[1].padStart(2, "0"), headline: numMatch[2].trim(), body: "", implication: "" };
-      continue;
-    }
-    if (!current) continue;
-    const implMatch = line.match(/^\s*(?:outreach\s+)?implication\s*:\s*(.*)$/i);
-    if (implMatch) { current.implication = implMatch[1].trim(); continue; }
-    if (line.trim()) {
-      if (current.body) current.body += " " + line.trim();
-      else current.body = line.trim();
-    }
-  }
-  if (current) findings.push(current);
-  // If nothing parsed cleanly, emit a single "raw" finding so the user can still read it.
-  if (findings.length === 0) {
-    findings.push({ idx: "01", headline: "Findings", body: raw.trim(), implication: "" });
-  }
-  return findings;
-};
-
-const StatusPill = ({ status }) => {
-  const label = { ready: "Ready", loading: "Pulling", queued: "Queued", error: "Error" }[status] || status;
-  return <span className={`row-status s-${status}`}><span className="dot" />{label}</span>;
-};
-
 const BatchMode = ({ strategistContext, setStrategistContext }) => {
   const [waldoData, setWaldoData] = useState(null);
   const [accountInsights, setAccountInsights] = useState({});
@@ -2428,18 +2391,12 @@ const BatchMode = ({ strategistContext, setStrategistContext }) => {
           </div>
         )}
         {accounts.map((a, i) => {
-          const status = accountStatus[a.id] || "queued";
           const open = expanded.has(a.id);
-          const findings = parseFindings(accountInsights[a.id]);
           const accResults = results[a.id] || [];
           return (
             <BatchRow key={a.id}
-              account={a} index={i} status={status}
+              account={a} index={i}
               open={open} onToggle={() => toggleExpand(a.id)}
-              findings={findings}
-              rawInsight={accountInsights[a.id] || ""}
-              onInsightEdit={(text) => setAccountInsights(prev => ({ ...prev, [a.id]: text }))}
-              onRetry={() => retry(a)}
               results={accResults} />
           );
         })}
@@ -2448,13 +2405,11 @@ const BatchMode = ({ strategistContext, setStrategistContext }) => {
   );
 };
 
-const BatchRow = ({ account, index, status, open, onToggle, findings, rawInsight, onInsightEdit, onRetry, results }) => {
-  const [showRaw, setShowRaw] = useState(false);
-  const [insightExpanded, setInsightExpanded] = useState(false);
+const BatchRow = ({ account, index, open, onToggle, results }) => {
   const contactCount = (account.contacts || []).length;
   const draftCount = results.length;
   return (
-    <div className={`row ${status === "loading" ? "is-loading" : ""} ${status === "error" ? "is-error" : ""}`}>
+    <div className="row">
       <div className="row-head" onClick={onToggle}>
         <span className="row-idx">{String(index + 1).padStart(2, "0")}</span>
         <div>
@@ -2464,10 +2419,6 @@ const BatchRow = ({ account, index, status, open, onToggle, findings, rawInsight
         <span className="row-stat"><b>{contactCount}</b> contacts</span>
         <span className="row-stat">{draftCount ? <><b>{draftCount}</b> drafts</> : <>no drafts</>}</span>
         <div style={{display: "flex", alignItems: "center", gap: 10}}>
-          {status === "error" && (
-            <button className="row-retry" onClick={(e) => { e.stopPropagation(); onRetry(); }}>Retry</button>
-          )}
-          <StatusPill status={status} />
           <span style={{transform: open ? "rotate(90deg)" : "rotate(0)", transition: "transform 160ms ease", color: "var(--grey-2)"}}>
             <Icon name="chevRight" size={14} />
           </span>
@@ -2482,68 +2433,15 @@ const BatchRow = ({ account, index, status, open, onToggle, findings, rawInsight
               <AccountCard account={account} />
             </div>
           </div>
-          <div className="row-col">
-            <div className="lbl">
-              <span>BJL insights for this account</span>
-              <div style={{display: "flex", gap: 4}}>
-                <button className="mini-btn" onClick={onRetry}><Icon name="regen" size={10} /> Re-pull</button>
-              </div>
-            </div>
-            {status === "loading" && (
-              <div style={{padding: 16, border: "1px dashed var(--hairline-strong)", borderRadius: 2, color: "var(--grey-2)", fontSize: 13}}>
-                Retrieving BJL evidence…
-              </div>
-            )}
-            {status === "queued" && (
-              <div style={{padding: 16, border: "1px dashed var(--hairline-strong)", borderRadius: 2, color: "var(--grey-2)", fontSize: 13}}>
-                Queued — waiting for earlier accounts.
-              </div>
-            )}
-            {status === "error" && (
-              <div style={{padding: 16, border: "1px dashed var(--red)", borderRadius: 2, color: "var(--red)", fontSize: 13}}>
-                Pull failed. {rawInsight && <>Details: {rawInsight.slice(0, 200)}</>}
-              </div>
-            )}
-            {status === "ready" && !showRaw && (
-              <>
-                <div className={`insight-scroll ${insightExpanded ? "expanded" : ""}`}>
-                  {findings.map((f, j) => (
-                    <div key={j} className="insight-finding">
-                      <div className="if-idx">{f.idx}</div>
-                      <div className="if-headline">{f.headline}</div>
-                      {f.body && <div className="if-body">{f.body}</div>}
-                      {f.implication && <div className="if-implication"><b>Implication</b>{f.implication}</div>}
-                    </div>
-                  ))}
-                </div>
-                <div className="insight-scroll-foot">
-                  <button className="insight-raw-toggle" onClick={() => setShowRaw(true)}>View raw</button>
-                  <button className="insight-raw-toggle" onClick={() => setInsightExpanded(!insightExpanded)}>
-                    {insightExpanded ? "Collapse" : "Expand"}
-                  </button>
-                </div>
-              </>
-            )}
-            {status === "ready" && showRaw && (
-              <>
-                <textarea className="insight-raw"
-                  value={rawInsight}
-                  onChange={(e) => onInsightEdit && onInsightEdit(e.target.value)} />
-                <div className="insight-scroll-foot">
-                  <button className="insight-raw-toggle" onClick={() => setShowRaw(false)}>View structured</button>
-                </div>
-              </>
-            )}
-          </div>
 
-          <div className="row-col">
+          <div className="row-col row-col-full">
             <div className="lbl">
               <span>Drafted emails</span>
               <span className="mono" style={{color: "var(--grey-2)"}}>{results.length}/{contactCount}</span>
             </div>
             {results.length === 0 ? (
               <div style={{padding: 16, border: "1px dashed var(--hairline-strong)", borderRadius: 2, color: "var(--grey-2)", fontSize: 13}}>
-                Emails will draft here once this account's insight is ready and you click Generate all.
+                Emails will draft here once you click Generate all.
               </div>
             ) : (
               <div className="row-emails">
