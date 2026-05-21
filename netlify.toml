@@ -43,3 +43,8 @@
   from = "/api/bjl-config"
   to = "/.netlify/functions/bjl-config"
   status = 200
+
+[[redirects]]
+  from = "/api/bjl-content"
+  to = "/.netlify/functions/bjl-content"
+  status = 200
