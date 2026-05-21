@@ -963,8 +963,14 @@ exports.handler = async (event) => {
       models: { routing: ROUTING_MODEL, synthesis: SYNTHESIS_MODEL },
     };
 
+    // activeCohortN is the cohort the Audience Map was actually computed
+    // against. When Pass 4 ran, it equals the reverse-engineered cohort n;
+    // when Pass 4 was skipped (demographic seed) or fell back (under-floor
+    // reverse cohort), it equals the seed cohort n. The Fix 3 refactor
+    // block-scoped the prior `reverseCohortN` constant inside the
+    // useReverse branch, so this section must use activeCohortN.
     const oneLine = `Audience Map: ${routing.routing_notice || routing.strategy}. `
-      + `Reverse-engineered n=${reverseCohortN.toLocaleString()}.`;
+      + `Cohort n=${activeCohortN.toLocaleString()}.`;
 
     await supabase.from('bjl_query_jobs').update({
       status: 'complete',
@@ -972,7 +978,8 @@ exports.handler = async (event) => {
       scratch: {
         one_line_summary: oneLine,
         seed_cohort_n: seedCohortN,
-        reverse_engineered_cohort_n: reverseCohortN,
+        reverse_engineered_cohort_n: activeCohortN,
+        pass_4_ran: useReverse,
         strategy: routing.strategy,
       },
       completed_at: new Date().toISOString(),
