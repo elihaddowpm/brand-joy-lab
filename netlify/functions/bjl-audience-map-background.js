@@ -418,20 +418,39 @@ async function profileDemographics(cohortSQL) {
   `);
   const corpusDist = await execSQL(corpusParts.join('\nUNION ALL\n'), 'profile demo corpus');
 
-  // Race columns are booleans; pull each separately.
+  // Race columns are booleans. The columns are only populated in recent
+  // fieldings (the older 2023-mid-2025 waves carry race_* = false uniformly).
+  // Computing race percentages across the full corpus pulls in those zeros
+  // and dilutes the dominant values — producing the "White 0% vs 16.6%
+  // corpus" artifact reported in v5.4 Fix 4 Bug A.
+  //
+  // The fix: scope BOTH the cohort and corpus race calculations to
+  // respondents whose fielding has any race signal at all (proxy: at least
+  // one race_* = true exists in that fielding). Apples-to-apples
+  // comparison.
   const raceCols = ['race_american_indian','race_asian','race_black','race_hispanic','race_middle_eastern','race_pacific_islander','race_white'];
+  const RACE_FIELDING_FILTER = `
+    fielding_id IN (
+      SELECT fielding_id
+      FROM bjl_respondents
+      WHERE (race_white OR race_black OR race_asian OR race_hispanic OR race_american_indian OR race_pacific_islander OR race_middle_eastern)
+      GROUP BY fielding_id
+    )
+  `;
   const cohortRaceSql = raceCols.map(c => `
     SELECT '${c}'::text AS value,
            COUNT(*) FILTER (WHERE ${c} = true) AS cohort_yes,
            COUNT(*) AS cohort_total
     FROM bjl_respondents
     WHERE respondent_id IN ${cohortSQL}
+      AND ${RACE_FIELDING_FILTER}
   `).join('\nUNION ALL\n');
   const corpusRaceSql = raceCols.map(c => `
     SELECT '${c}'::text AS value,
            COUNT(*) FILTER (WHERE ${c} = true) AS corpus_yes,
            COUNT(*) AS corpus_total
     FROM bjl_respondents
+    WHERE ${RACE_FIELDING_FILTER}
   `).join('\nUNION ALL\n');
   const cohortRace = await execSQL(cohortRaceSql, 'profile race cohort');
   const corpusRace = await execSQL(corpusRaceSql, 'profile race corpus');
@@ -580,22 +599,31 @@ function buildDemographicShape(demoProfile) {
     let corpusTotal = corpusRows.reduce((s, r) => s + Number(r.corpus_n), 0);
     let denominatorNote = null;
 
-    // Special handling for parental_status: exclude Unknown from both
-    // numerator and denominator, label clearly.
+    // Parental status special handling (v5.4 Fix 4 Bug B): the corpus is
+    // ~77% "Unknown" and ~23% "Parent" with no third value. The previous
+    // logic excluded Unknown from both denominators, which collapsed the
+    // result to 100% Parent on both sides (every reported value is Parent).
+    // The strategist-useful framing is the raw rate against the full
+    // denominator — typical Rock Hall demos surface as ~50% Parent (cohort)
+    // vs ~23% Parent (corpus), a +27pp directional skew worth seeing.
+    //
+    // We keep both denominators raw (include Unknown), force the row to
+    // surface the "Parent" value (not the dominant Unknown), and label
+    // it explicitly as a raw rate so the strategist knows what they're
+    // reading.
     let cohortRowsFiltered = cohortRows;
     let corpusRowsFiltered = corpusRows;
+    let forcedTopValue = null;
     if (field === 'parental_status') {
-      cohortRowsFiltered = cohortRows.filter(r => r.value && r.value !== 'Unknown' && r.value !== 'unknown');
-      corpusRowsFiltered = corpusRows.filter(r => r.value && r.value !== 'Unknown' && r.value !== 'unknown');
-      total = cohortRowsFiltered.reduce((s, r) => s + Number(r.cohort_n), 0);
-      corpusTotal = corpusRowsFiltered.reduce((s, r) => s + Number(r.corpus_n), 0);
-      denominatorNote = 'of those reporting';
+      forcedTopValue = 'Parent';
+      denominatorNote = 'raw rate (parental_status not collected in all fieldings; absolute magnitudes are directional)';
     }
 
     if (total === 0 || corpusTotal === 0) continue;
 
-    // Top value = max cohort_n in the cohort distribution
-    const top = cohortRowsFiltered.sort((a, b) => Number(b.cohort_n) - Number(a.cohort_n))[0];
+    const top = forcedTopValue
+      ? cohortRowsFiltered.find(r => r.value === forcedTopValue)
+      : cohortRowsFiltered.sort((a, b) => Number(b.cohort_n) - Number(a.cohort_n))[0];
     if (!top) continue;
     const topCorpus = corpusRowsFiltered.find(r => r.value === top.value);
 
@@ -846,54 +874,88 @@ exports.handler = async (event) => {
       throw new Error('Pass 3 returned no parameters');
     }
 
-    // Pass 4: reverse-engineer
-    const reverseCohortSQL = buildReverseCohortSQL(synthesis.parameters);
-    if (!reverseCohortSQL) {
-      throw new Error('Pass 3 parameters produced no usable cohort SQL');
-    }
-    const reverseCohortN = await cohortCount(reverseCohortSQL);
-    if (reverseCohortN < LOW_N_REFUSE_THRESHOLD) {
-      const finding = {
-        workflow: 'audience_map',
-        low_n_refused: true,
-        reverse_engineered_cohort_n: reverseCohortN,
-        seed_cohort_n: seedCohortN,
-        parameters: synthesis.parameters,
-        routing: {
-          strategy: routing.strategy,
-          routing_notice: routing.routing_notice,
-        },
-        message: `Reverse-engineered audience is too small (n=${reverseCohortN}; minimum 30). The parameter set was too tight. Try a broader audience description or relax specificity.`,
-      };
-      await supabase.from('bjl_query_jobs').update({
-        status: 'complete',
-        finding: JSON.stringify(finding),
-        scratch: { low_n_refused: true, reverse_n: reverseCohortN },
-        completed_at: new Date().toISOString(),
-      }).eq('job_id', jobId);
-      return { statusCode: 200, body: 'ok (low-n refused)' };
+    // Pass 4: reverse-engineer — conditional by seed strategy.
+    //
+    // v5.4 Fix 3: not every seed strategy benefits from reverse-engineering.
+    //   brand_entity / multi_trait / category   → run Pass 4
+    //   demographic                             → SKIP. The Pass 2 cohort
+    //                                              is already the audience;
+    //                                              reverse-engineering on top
+    //                                              of joy-pattern params
+    //                                              over-constrains and
+    //                                              collapses the cohort.
+    //   hybrid                                  → run Pass 4 on the
+    //                                              brand/trait component,
+    //                                              then intersect with the
+    //                                              demographic filter.
+    //
+    // Plus: if the reverse-engineered cohort lands below the n=30 refusal
+    // floor, fall back to the Pass 2 (seed) cohort with a note rather than
+    // erroring. The strategist gets a usable Audience Map either way.
+    const STRATEGIES_THAT_SKIP_PASS_4 = new Set(['demographic']);
+    const STRATEGIES_THAT_APPLY_DEMO_FILTER_POST = new Set(['hybrid']);
+    let useReverse = !STRATEGIES_THAT_SKIP_PASS_4.has(routing.strategy);
+    let pass4Note = null;
+
+    let activeCohortSQL = seedCohortSQL;
+    let activeCohortN   = seedCohortN;
+
+    if (useReverse) {
+      let reverseCohortSQL = buildReverseCohortSQL(synthesis.parameters);
+      if (!reverseCohortSQL) {
+        useReverse = false;
+        pass4Note = 'Pass 3 parameters produced no usable cohort SQL; using seed cohort as audience.';
+      } else {
+        // Hybrid: intersect the reverse cohort with the demographic filter
+        // from Pass 1 so the final cohort respects both the brand/trait
+        // dimensions and the demographic constraint.
+        if (STRATEGIES_THAT_APPLY_DEMO_FILTER_POST.has(routing.strategy)
+            && routing.demographic_filter) {
+          const dc = demographicClauseSQL(routing.demographic_filter, 'resp');
+          if (dc.length > 0) {
+            const demoSQL = `(SELECT DISTINCT resp.respondent_id FROM bjl_respondents resp WHERE ${dc.join(' AND ')})`;
+            reverseCohortSQL = `(${reverseCohortSQL.slice(1,-1)}\nINTERSECT\n${demoSQL.slice(1,-1)})`;
+          }
+        }
+        const reverseCohortN = await cohortCount(reverseCohortSQL);
+        if (reverseCohortN < LOW_N_REFUSE_THRESHOLD) {
+          // Fall back to the seed cohort with a transparent note.
+          useReverse = false;
+          pass4Note = `Reverse-engineered audience too small to use (n=${reverseCohortN}). Showing seed cohort instead.`;
+        } else {
+          activeCohortSQL = reverseCohortSQL;
+          activeCohortN   = reverseCohortN;
+        }
+      }
+    } else {
+      pass4Note = 'Demographic seed strategy — Pass 2 cohort used directly. Reverse-engineering skipped.';
     }
 
     const pickedQids = (synthesis.sections.decision_context || [])
       .map(b => Number(b.question_id)).filter(Number.isFinite);
 
+    // Profile whichever cohort is active. For skip-Pass-4 paths this re-uses
+    // the seed cohort SQL; for run-Pass-4 paths this is the reverse-engineered
+    // cohort SQL (optionally hybrid-intersected with the demographic filter).
     const [revL1, revL3, revDemo, revL2] = await Promise.all([
-      profileLayer1UniversalCore(reverseCohortSQL),
-      profileLayer3(reverseCohortSQL),
-      profileDemographics(reverseCohortSQL),
-      profileLayer2Battery(reverseCohortSQL, pickedQids),
+      profileLayer1UniversalCore(activeCohortSQL),
+      profileLayer3(activeCohortSQL),
+      profileDemographics(activeCohortSQL),
+      profileLayer2Battery(activeCohortSQL, pickedQids),
     ]);
 
     const reverseProfile = {
-      cohort_n: reverseCohortN,
+      cohort_n: activeCohortN,
       layer_1: revL1,
       layer_3: revL3,
       demographics: revDemo,
     };
 
     const finalFinding = mergeFinal(
-      routing, synthesis, reverseProfile, revL2, seedCohortN, reverseCohortN
+      routing, synthesis, reverseProfile, revL2, seedCohortN, activeCohortN
     );
+    if (pass4Note) finalFinding.pass_4_note = pass4Note;
+    finalFinding.pass_4_ran = useReverse;
     finalFinding.description = description;
     finalFinding.diagnostics = {
       catalog_size: catalog.length,

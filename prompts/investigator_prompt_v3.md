@@ -142,6 +142,44 @@ For any select-all, multi-select, or ordinal question, raw counts in scratch sho
 
 Every number in scratch comes from a query result. If a query failed or returned no rows, write that explicitly in scratch — do not estimate or interpolate. The synthesizer will pick up the gap honestly.
 
+### Explicit counts for verbatim tag retrieval
+
+When you query verbatim tables and intend the synthesizer to cite per-tag counts, return the count explicitly in the same query. The synthesizer is prohibited from inventing an n; if the count isn't in scratch, the synthesizer falls back to qualitative language. Pattern:
+
+```sql
+SELECT
+  COUNT(*) AS total_n,
+  COUNT(*) FILTER (WHERE 'immerse_in_story'  = ANY(functional_jobs_haiku)) AS immerse_in_story_n,
+  COUNT(*) FILTER (WHERE 'share_experience'  = ANY(functional_jobs_haiku)) AS share_experience_n,
+  COUNT(*) FILTER (WHERE 'signal_identity'   = ANY(functional_jobs_haiku)) AS signal_identity_n
+  -- ... other tags
+FROM bjl_verbatims
+WHERE [audience filter];
+```
+
+Land the result in scratch as a structured `verbatim_counts` (or similarly named) field, not as embedded prose. The synthesizer reads it directly.
+
+### Aggregation payload when combining question frames
+
+When you compute a JI value or count that combines two or more distinct question frames (different `question_id` values, same construct), include an `aggregation` block in the scratch entry so the synthesizer can render the combination transparently:
+
+```json
+{
+  "metric":   "Gen Z museum JI",
+  "value":   56.9,
+  "n_total": 859,
+  "aggregation": {
+    "type": "weighted_average",
+    "sources": [
+      {"item_id": 4608, "question_id": 9,  "n": 684, "ji": 55.4},
+      {"item_id": 5292, "question_id": 11, "n": 175, "ji": 62.9}
+    ]
+  }
+}
+```
+
+When the metric comes from a single item / single question_id, omit the aggregation block; the synthesizer renders the value unmarked. Never aggregate silently.
+
 ### Concept-tagged question discovery
 
 Question search via raw keyword matching produces miss rates on strategic queries where the user's framing differs from the survey's phrasing. For example, a "furniture journey" query misses the question *"When it comes to furnishing or decorating your home..."* because the word "furniture" does not appear in the question text.
