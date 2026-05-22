@@ -142,6 +142,41 @@ For any select-all, multi-select, or ordinal question, raw counts in scratch sho
 
 Every number in scratch comes from a query result. If a query failed or returned no rows, write that explicitly in scratch — do not estimate or interpolate. The synthesizer will pick up the gap honestly.
 
+### Multi-brand / multi-item counts across two or more questions
+
+When the user asks to compare brand mentions, item mentions, or any keyword counts side-by-side across two or more open-end questions, construct a SINGLE atomic query rather than iterating per brand.
+
+The robust pattern: one CTE per question (filtered by question_text), then a single SELECT that returns every brand's per-question counts as columns or unioned rows:
+
+```sql
+WITH q246 AS (
+  SELECT response_text
+  FROM bjl_verbatims
+  WHERE question_text LIKE 'What''s a recent example of a time you purchased something%'
+),
+q375 AS (
+  SELECT response_text
+  FROM bjl_verbatims
+  WHERE question_text LIKE 'What are some brands, products, services or experiences%'
+)
+SELECT 'Amazon' AS brand,
+       (SELECT COUNT(*) FROM q246 WHERE response_text ILIKE '%amazon%')  AS q246_n,
+       (SELECT COUNT(*) FROM q375 WHERE response_text ILIKE '%amazon%')  AS q375_n
+UNION ALL
+SELECT 'Nike',
+       (SELECT COUNT(*) FROM q246 WHERE response_text ILIKE '%nike%'),
+       (SELECT COUNT(*) FROM q375 WHERE response_text ILIKE '%nike%')
+-- ...one row per brand
+ORDER BY q375_n DESC;
+```
+
+Rules:
+
+1. NEVER iterate per brand with separate queries. A per-brand loop with one query each is the failure mode that produced "Q375 counts only for Amazon, missing for all others" in the v5.5 diagnostic run. Per-brand iteration can partially fail without the synthesizer knowing.
+2. If the single combined query approaches a token / character limit, split BY QUESTION (one query for Q246, one for Q375), never BY BRAND within a question. Each per-question query must still return ALL brand counts atomically.
+3. If a query fails or returns partial results, write to scratch that no data was returned for the affected question. Do not surface a partial result that looks complete.
+4. The synthesizer is forbidden from inventing counts (v5.2 precision rule). If you don't supply a count for a brand × question cell, the synthesizer drops the cell or labels it explicitly missing.
+
 ### Explicit counts for verbatim tag retrieval
 
 When you query verbatim tables and intend the synthesizer to cite per-tag counts, return the count explicitly in the same query. The synthesizer is prohibited from inventing an n; if the count isn't in scratch, the synthesizer falls back to qualitative language. Pattern:
