@@ -297,124 +297,172 @@ exports.handler = async (event) => {
       };
     }
 
-    // bjl_finding via /api/bjl-query investigator pipeline.
+    // bjl_finding — inline corpus aggregation.
     //
-    // The previous implementation ran its own FTS + Sonnet synthesis here.
-    // That approach was fast but narrow — it never saw the corpus-wide
-    // aggregates the investigator produces. The new path enqueues a job
-    // on /api/bjl-query with email_mode=true and polls /api/bjl-query-status
-    // for the one-sentence result. Generation is slower but the finding
-    // is defensible across the full bjl_verbatims/bjl_responses corpus,
-    // and the synthesize stage's email_mode override (in
-    // bjl-query-background.js) trims the output to a single counterintuitive
-    // sentence rather than the standard interpretive response.
-    const authHeader = event.headers.authorization || event.headers.Authorization || '';
-    const hostHeader = event.headers.host || event.headers.Host;
-    const siteUrl = process.env.URL || (hostHeader ? `https://${hostHeader}` : '');
-    if (!siteUrl) {
-      console.error('[bjl-content] bjl_finding: no site URL available for server-to-server call');
-      return { statusCode: 200, body: JSON.stringify({ found: false, type: 'bjl_finding', error: 'no_site_url' }) };
-    }
-
-    const categoryLabel = (category && category.trim()) || 'this category';
+    // Two-hop server-to-server (bjl-content -> bjl-query -> background ->
+    // status polling) exceeded the Netlify sync timeout. This path runs
+    // the same shape of analysis inline: aggregate joy_mode and topic
+    // distributions across the category's full verbatim corpus, pull a
+    // small high-signal verbatim sample via FTS, and hand all three to
+    // Sonnet for one synthesized sentence. Defensible because the
+    // distributions ARE the corpus, not a sample picked by ranking.
+    const resolvedCat = resolveBjlCategory(category) || 'general_joy';
+    const categoryLabel = (category && category.trim())
+      || resolvedCat.replace(/_/g, ' ');
     const companyLabel = (company || '').trim() || 'a brand in this category';
-    const painSummary = (Array.isArray(painKeywords) ? painKeywords : [])
-      .filter(Boolean)
-      .slice(0, 6)
-      .join(', ');
-    const investigatorPrompt =
-      `Find one counterintuitive finding from BJL consumer research that would land as a data point ` +
-      `in a cold outreach email to ${companyLabel}, a ${categoryLabel} brand` +
-      (painSummary ? ` (signals: ${painSummary})` : '') +
-      `. Look for what consumers in or adjacent to this category actually do, feel, or prefer — ` +
-      `especially anything that contradicts what brands like ${companyLabel} typically assume about their audience.`;
 
-    let jobId = null;
-    try {
-      const enqRes = await fetch(`${siteUrl}/.netlify/functions/bjl-query`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(authHeader ? { Authorization: authHeader } : {}),
-        },
-        body: JSON.stringify({
-          query: investigatorPrompt,
-          intentHint: 'email_findings',
-          email_mode: true,
-          mode: 'email',
-        }),
+    // 1. Joy-mode distribution across the corpus slice for this category.
+    //    joy_modes is a text[]; unnest client-side. Pull broad so the
+    //    distribution is stable; if the server caps the response we use
+    //    whatever it returned (still corpus-wide for typical categories).
+    const { data: modeRows, error: modeErr } = await supabase
+      .from('bjl_verbatims')
+      .select('joy_modes')
+      .eq('category', resolvedCat)
+      .not('joy_modes', 'is', null)
+      .limit(10000);
+    if (modeErr) console.warn('[bjl-content] joy_modes aggregation error:', modeErr.message);
+
+    const modeCounts = {};
+    (modeRows || []).forEach(row => {
+      (row.joy_modes || []).forEach(m => {
+        if (!m) return;
+        modeCounts[m] = (modeCounts[m] || 0) + 1;
       });
-      if (enqRes.status !== 202) {
-        const txt = await enqRes.text().catch(() => '');
-        console.error('[bjl-content] bjl-query enqueue non-202:', enqRes.status, txt.slice(0, 300));
-        return {
-          statusCode: 200,
-          body: JSON.stringify({
-            found: false, type: 'bjl_finding',
-            error: 'enqueue_failed', enqueue_status: enqRes.status,
-          }),
-        };
-      }
-      const enqData = await enqRes.json();
-      jobId = enqData && enqData.job_id;
-    } catch (e) {
-      console.error('[bjl-content] bjl-query enqueue threw:', e && e.message);
-      return { statusCode: 200, body: JSON.stringify({ found: false, type: 'bjl_finding', error: 'enqueue_threw' }) };
-    }
-    if (!jobId) {
-      return { statusCode: 200, body: JSON.stringify({ found: false, type: 'bjl_finding', error: 'no_job_id' }) };
-    }
+    });
+    const modeTotal = Object.values(modeCounts).reduce((a, b) => a + b, 0);
+    const modeDistribution = Object.entries(modeCounts)
+      .sort(([, a], [, b]) => b - a)
+      .map(([mode, count]) => `${mode}: ${modeTotal ? Math.round((count / modeTotal) * 100) : 0}% (n=${count})`);
 
-    // Poll bjl-query-status for completion. Budget leaves headroom under
-    // the sync-function timeout ceiling; if the investigator hasn't
-    // converged in this window the orchestrator just omits the BJL block.
-    const POLL_INTERVAL_MS = 2000;
-    const POLL_BUDGET_MS   = 22000;
-    const pollStart = Date.now();
-    let finalJob = null;
-    while (Date.now() - pollStart < POLL_BUDGET_MS) {
-      await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
-      try {
-        const statusRes = await fetch(
-          `${siteUrl}/.netlify/functions/bjl-query-status?id=${encodeURIComponent(jobId)}`,
-          { headers: authHeader ? { Authorization: authHeader } : {} }
-        );
-        if (statusRes.status !== 200) continue;
-        const sb = await statusRes.json();
-        if (sb.status === 'complete' || sb.status === 'error' || sb.status === 'clarification_needed') {
-          finalJob = sb;
-          break;
-        }
-      } catch (e) {
-        console.warn('[bjl-content] status poll threw:', e && e.message);
-      }
-    }
+    // 2. Top topics across the same corpus slice.
+    const { data: topicRows, error: topicErr } = await supabase
+      .from('bjl_verbatims')
+      .select('topics')
+      .eq('category', resolvedCat)
+      .not('topics', 'is', null)
+      .limit(10000);
+    if (topicErr) console.warn('[bjl-content] topics aggregation error:', topicErr.message);
 
-    const pollMs = Date.now() - pollStart;
-    console.log('[bjl-content] bjl_finding (investigator)', {
-      jobId,
-      poll_ms: pollMs,
-      final_status: finalJob && finalJob.status,
-      query_count: finalJob && finalJob.query_count,
-      stage: finalJob && finalJob.stage,
+    const topicCounts = {};
+    (topicRows || []).forEach(row => {
+      (row.topics || []).forEach(t => {
+        if (!t) return;
+        topicCounts[t] = (topicCounts[t] || 0) + 1;
+      });
+    });
+    const topTopics = Object.entries(topicCounts)
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 8)
+      .map(([topic, count]) => `${topic} (${count})`);
+
+    // 3. Representative verbatim sample via FTS on search_vector. Filter
+    //    rejects punctuation that breaks websearch tsquery; >3-char tokens
+    //    drawn from company name + pain_keywords drive relevance.
+    const tokenize = s => String(s || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter(w => w.length > 3);
+    const tokens = Array.from(new Set([
+      ...tokenize(company),
+      ...((Array.isArray(painKeywords) ? painKeywords : []).flatMap(k => tokenize(k))),
+    ]));
+    const searchTerms = tokens.join(' OR ');
+
+    let verbatimRows = [];
+    if (searchTerms) {
+      const { data: vRows, error: vErr } = await supabase
+        .from('bjl_verbatims')
+        .select('response_text')
+        .textSearch('search_vector', searchTerms, { type: 'websearch' })
+        .not('response_text', 'is', null)
+        .limit(20);
+      if (vErr) console.warn('[bjl-content] verbatim FTS error:', vErr.message);
+      else verbatimRows = vRows || [];
+    }
+    const verbatimList = verbatimRows
+      .map(r => String(r.response_text || '').trim().replace(/\s+/g, ' ').slice(0, 250))
+      .filter(Boolean);
+    const verbatimSample = verbatimList.slice(0, 15).join(' | ');
+
+    const verbatimsAnalyzed = (modeRows || []).length;
+
+    console.log('[bjl-content] bjl_finding (inline_aggregate)', {
+      raw_category: category,
+      resolved_category: resolvedCat,
+      verbatims_analyzed: verbatimsAnalyzed,
+      mode_total_tags: modeTotal,
+      mode_distribution_n: modeDistribution.length,
+      top_topics_n: topTopics.length,
+      search_terms: searchTerms,
+      verbatim_sample_n: verbatimList.length,
     });
 
-    if (!finalJob || finalJob.status !== 'complete' || !finalJob.finding) {
+    let observation = '';
+    if (!anthropic) {
+      console.error('[bjl-content] ANTHROPIC_API_KEY missing; bjl_finding cannot synthesize');
+    } else if (verbatimsAnalyzed === 0 && verbatimList.length === 0) {
+      // Nothing to synthesize — category mismatch or empty slice. Skip
+      // the LLM call entirely so we don't waste tokens producing a
+      // hallucinated finding from empty context.
+      console.warn('[bjl-content] bjl_finding: no corpus data for category', {
+        raw_category: category, resolved_category: resolvedCat,
+      });
+    } else {
+      try {
+        const synth = await anthropic.messages.create({
+          model: SONNET_MODEL,
+          max_tokens: 150,
+          messages: [{
+            role: 'user',
+            content:
+`You are preparing a single BJL data point for a cold outreach email to ${companyLabel}, a ${categoryLabel} brand.
+
+Here is aggregated BJL consumer research for this category:
+
+JOY MODE DISTRIBUTION (${modeTotal} mode tags across ${verbatimsAnalyzed} verbatims):
+${modeDistribution.join('\n') || '(no joy_mode tags in this slice)'}
+
+TOP TOPICS IN VERBATIMS:
+${topTopics.join(', ') || '(no topic tags in this slice)'}
+
+REPRESENTATIVE VERBATIMS:
+${verbatimSample || '(no verbatim sample available)'}
+
+Your job: find the single most counterintuitive or surprising finding in this data. Something that reveals a gap between what ${companyLabel} and brands like them typically assume about their audience and what consumers actually experience or feel.
+
+Rules:
+- One sentence only
+- Plain language — no scores, no percentages, no research terms, no markdown
+- Do not describe obvious preferences
+- Do not use generic phrases like "escape from everyday life" or "people enjoy"
+- The finding should make a CMO lean forward, not nod along
+- Draw from the joy mode distribution or topic patterns — these are corpus-wide numbers, not anecdotes`,
+          }],
+        });
+        const raw = (synth && synth.content && synth.content[0] && synth.content[0].text) || '';
+        observation = stripScoreLanguage(String(raw).trim());
+      } catch (e) {
+        console.error('[bjl-content] sonnet synthesis failed:', e && e.message);
+      }
+    }
+
+    if (!observation) {
       return {
         statusCode: 200,
         body: JSON.stringify({
           found: false,
           type: 'bjl_finding',
-          error: finalJob ? finalJob.status : 'investigator_timeout',
-          job_id: jobId,
-          poll_ms: pollMs,
+          diagnostic: {
+            raw_category: category,
+            resolved_category: resolvedCat,
+            verbatims_analyzed: verbatimsAnalyzed,
+            mode_total_tags: modeTotal,
+            verbatim_sample_n: verbatimList.length,
+          },
         }),
       };
-    }
-
-    const observation = stripScoreLanguage(String(finalJob.finding).trim());
-    if (!observation) {
-      return { statusCode: 200, body: JSON.stringify({ found: false, type: 'bjl_finding', job_id: jobId }) };
     }
 
     return {
@@ -423,24 +471,32 @@ exports.handler = async (event) => {
       body: JSON.stringify({
         found: true,
         type: 'bjl_finding',
-        data: { observation, category: category || null },
+        data: { observation, category: resolvedCat },
         inputs: {
-          via: 'investigator',
-          job_id: jobId,
-          query_count: finalJob.query_count || 0,
-          poll_ms: pollMs,
+          via: 'inline_aggregate',
+          raw_category: category,
+          resolved_category: resolvedCat,
           category_label: categoryLabel,
+          verbatims_analyzed: verbatimsAnalyzed,
+          mode_total_tags: modeTotal,
+          search_terms: searchTerms,
         },
-        // The Sources panel expects score_rows + verbatims arrays. With the
-        // investigator path the raw inputs aren't easily extractable from
-        // the scratch JSON, and the user's spec says the full analysis is
-        // discarded. Surface a single provenance line so the panel shows
-        // where the finding came from; leave verbatims empty.
         sources: {
+          // New fields per spec — Sources panel can render these directly
+          // (and the EmailSources component already lists score_rows as
+          // bullets, so populating score_rows with the distribution gives
+          // the existing UI the corpus-wide view without a frontend edit).
+          mode_distribution: modeDistribution,
+          top_topics: topTopics,
+          verbatim_sample: verbatimList.slice(0, 10),
+          total_verbatims_analyzed: verbatimsAnalyzed,
+          // Back-compat with the existing EmailSources renderer:
           score_rows: [
-            `BJL investigator pipeline (${finalJob.query_count || 0} corpus queries, job ${String(jobId).slice(0, 8)})`,
-          ],
-          verbatims: [],
+            `Verbatims analyzed: ${verbatimsAnalyzed} (category=${resolvedCat})`,
+            ...modeDistribution,
+            topTopics.length ? `Top topics: ${topTopics.join(', ')}` : '',
+          ].filter(Boolean),
+          verbatims: verbatimList.slice(0, 10),
         },
       }),
     };
