@@ -911,6 +911,7 @@ const generateOneEmail = async ({
         category: prospectContext.category || "",
         pain_keywords: prospectContext.pain_keywords || [],
         batch_index: 0,
+        brief: userEmailInstructions || "",
       };
       console.log("[bjl-orch] -> article request", aPayload);
       const aRes = await fetch("/api/bjl-content", authedFetchInit({
