@@ -859,6 +859,12 @@ const generateOneEmail = async ({
     prospectCategory: prospectCategory || null,
   });
 
+  // Sources provenance: lifted to outer scope so we can bundle them into
+  // the function's return value for the Sources panel under each draft.
+  let caseStudySources = null;
+  let articleSources = null;
+  let bjlSources = null;
+
   // Conditional case study fetch. Server picks the row whose use_for_tags
   // overlap best with prospectContext.pain_keywords + category, then
   // rotates by batch_index so multiple contacts at the same account get
@@ -895,6 +901,7 @@ const generateOneEmail = async ({
           cs.email_usage_note ? "Usage note: " + cs.email_usage_note : "",
           "[END CASE STUDY]",
         ].filter(Boolean).join("\n");
+        caseStudySources = csResult.sources || { identifier: cs.identifier, tags_matched: [] };
       }
     } catch (e) {
       console.warn("Case study fetch failed", e);
@@ -932,6 +939,7 @@ const generateOneEmail = async ({
           "Key findings: " + ((a.key_findings || []).join(" | ")),
           "[END ARTICLE]",
         ].join("\n");
+        articleSources = aResult.sources || { match_method: "tag_overlap", title: a.title, tags_matched: [] };
       }
     } catch (e) {
       console.warn("Article fetch failed", e);
@@ -966,6 +974,11 @@ const generateOneEmail = async ({
           bResult.data.observation,
           "[END BJL FINDING]",
         ].join("\n");
+        bjlSources = {
+          observation: bResult.data.observation,
+          score_rows: (bResult.sources && bResult.sources.score_rows) || [],
+          verbatims: (bResult.sources && bResult.sources.verbatims) || [],
+        };
       }
     } catch (e) {
       console.warn("BJL finding fetch failed", e);
@@ -1019,7 +1032,7 @@ const generateOneEmail = async ({
       let errData; try { errData = await res.json(); } catch { errData = null; }
       const errMsg = errData?.error?.message
         || (res.status === 429 ? "Rate limit hit — increase delay between calls" : "API error " + res.status);
-      return { text: "", error: errMsg };
+      return { text: "", error: errMsg, sources: { caseStudy: caseStudySources, article: articleSources, bjl: bjlSources } };
     }
     const data = await res.json();
     const rawText = data.content?.map(b => b.type === "text" ? b.text : "").filter(Boolean).join("\n") || "";
@@ -1066,8 +1079,8 @@ const generateOneEmail = async ({
       }
     }
 
-    return { text: finalText, error: null };
-  } catch (e) { return { text: "", error: e.name === "AbortError" ? "Timed out" : e.message }; }
+    return { text: finalText, error: null, sources: { caseStudy: caseStudySources, article: articleSources, bjl: bjlSources } };
+  } catch (e) { return { text: "", error: e.name === "AbortError" ? "Timed out" : e.message, sources: { caseStudy: caseStudySources, article: articleSources, bjl: bjlSources } }; }
 };
 
 const parseSubjectBody = (text) => {
@@ -1998,7 +2011,7 @@ const OutreachMode = ({ setEvidenceRows, strategistContext, setStrategistContext
     const selList = contacts.filter(c => selected.has(contactKey(c)));
     for (let i = 0; i < selList.length; i++) {
       const c = selList[i];
-      const { text, error } = await generateOneEmail({
+      const { text, error, sources } = await generateOneEmail({
         contactName: c.name,
         company: account.company || account.name,
         waldoContext: waldoCtx,
@@ -2010,7 +2023,7 @@ const OutreachMode = ({ setEvidenceRows, strategistContext, setStrategistContext
         batchIndex: i,
         priorSameCompany: i > 0,
       });
-      out.push({ contact: c, text, error });
+      out.push({ contact: c, text, error, sources });
       setResults([...out]);
       setGenProgress(i + 1);
       if (i < selList.length - 1) await new Promise(r => setTimeout(r, 5000));
@@ -2159,8 +2172,94 @@ const OutreachMode = ({ setEvidenceRows, strategistContext, setStrategistContext
   );
 };
 
+// EmailSources — data provenance panel rendered under each draft. Lets the
+// strategist spot-check what /api/bjl-content actually pulled before
+// sending. Not a validation gate; collapsed by default. Only renders
+// sections for the content types that fired and returned data.
+const EmailSources = ({ sources }) => {
+  const [open, setOpen] = useState(false);
+  if (!sources) return null;
+  const article = sources.article;
+  const bjl = sources.bjl;
+  const cs = sources.caseStudy;
+  const hasArticle = article && (article.title || (article.tags_matched || []).length);
+  const hasBjl = bjl && bjl.observation;
+  const hasCs = cs && cs.identifier;
+  if (!hasArticle && !hasBjl && !hasCs) return null;
+  const sectionStyle = { marginBottom: 12 };
+  const headerStyle = { fontWeight: 600, fontSize: 11, letterSpacing: "0.04em", marginBottom: 4, color: "var(--grey-1)" };
+  return (
+    <div style={{ marginTop: 8 }}>
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        style={{
+          background: "none", border: "none", padding: "4px 0",
+          color: "var(--grey-2)", fontSize: 12, cursor: "pointer",
+          display: "inline-flex", alignItems: "center", gap: 6,
+        }}
+      >
+        <span style={{
+          display: "inline-flex",
+          transform: open ? "rotate(90deg)" : "none",
+          transition: "transform 160ms ease",
+        }}>
+          <Icon name="chevRight" size={12} />
+        </span>
+        Sources
+      </button>
+      {open && (
+        <div style={{
+          fontSize: 12, lineHeight: 1.5, color: "var(--grey-1)",
+          paddingLeft: 10, marginLeft: 4, marginTop: 6,
+          borderLeft: "2px solid var(--grey-4, #e5e5e5)",
+        }}>
+          {hasArticle && (
+            <div style={sectionStyle}>
+              <div style={headerStyle}>ARTICLE</div>
+              {article.title ? <div>Title: {article.title}</div> : null}
+              <div>Matched by: {article.match_method === "title_match" ? "title match" : "tag overlap"}</div>
+              {(article.tags_matched || []).length > 0 ? (
+                <div>Tags matched: {article.tags_matched.join(", ")}</div>
+              ) : null}
+            </div>
+          )}
+          {hasBjl && (
+            <div style={sectionStyle}>
+              <div style={headerStyle}>BJL FINDING</div>
+              <div>Synthesized observation: {bjl.observation}</div>
+              {(bjl.score_rows || []).length > 0 ? (
+                <div style={{ marginTop: 4 }}>
+                  Raw inputs used:
+                  <ul style={{ margin: "2px 0 0", paddingLeft: 16 }}>
+                    {bjl.score_rows.map((r, i) => <li key={i}>{r}</li>)}
+                  </ul>
+                </div>
+              ) : null}
+              {(bjl.verbatims || []).length > 0 ? (
+                <div style={{ marginTop: 4 }}>
+                  Verbatims: {bjl.verbatims.map((v, i) => `"${v}"`).join(" | ")}
+                </div>
+              ) : null}
+            </div>
+          )}
+          {hasCs && (
+            <div>
+              <div style={headerStyle}>CASE STUDY</div>
+              <div>Identifier: {cs.identifier}</div>
+              {(cs.tags_matched || []).length > 0 ? (
+                <div>Tags matched: {cs.tags_matched.join(", ")}</div>
+              ) : null}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const OutreachEmailCard = ({ result, index }) => {
-  const { contact, text, error } = result;
+  const { contact, text, error, sources } = result;
   const { subject, body } = parseSubjectBody(text || "");
   const initials = (contact.name || "?").split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase();
   return (
@@ -2185,6 +2284,7 @@ const OutreachEmailCard = ({ result, index }) => {
           <>
             <div className="ec-subject"><span className="label">Subject</span>{subject || "(no subject)"}</div>
             {body.split(/\n{2,}/).map((p, i) => <p key={i}>{p}</p>)}
+            <EmailSources sources={sources} />
           </>
         )}
       </div>
@@ -2294,7 +2394,7 @@ const BatchMode = ({ strategistContext, setStrategistContext }) => {
       setResults({ ...out });
       for (let j = 0; j < contacts.length; j++) {
         const c = contacts[j];
-        const { text, error } = await generateOneEmail({
+        const { text, error, sources } = await generateOneEmail({
           contactName: c.name,
           company: account.company || account.name,
           waldoContext: waldoCtx,
@@ -2306,7 +2406,7 @@ const BatchMode = ({ strategistContext, setStrategistContext }) => {
           batchIndex: j,
           priorSameCompany: j > 0,
         });
-        out[account.id].push({ contact: c, text, error });
+        out[account.id].push({ contact: c, text, error, sources });
         setResults({ ...out });
         if (j < contacts.length - 1) await new Promise(r => setTimeout(r, 5000));
       }
@@ -2470,7 +2570,7 @@ const BatchRow = ({ account, index, open, onToggle, results }) => {
 
 const BatchEmailRow = ({ result }) => {
   const [expanded, setExpanded] = useState(false);
-  const { contact, text, error } = result;
+  const { contact, text, error, sources } = result;
   const { subject, body } = parseSubjectBody(text || "");
   return (
     <div className={`row-email v2 ${expanded ? "expanded" : ""}`}>
@@ -2495,6 +2595,7 @@ const BatchEmailRow = ({ result }) => {
       ) : (
         <>
           <div className="re-body">{body}</div>
+          <EmailSources sources={sources} />
           <button className="re-expand" onClick={() => setExpanded(!expanded)}>
             {expanded ? "Collapse" : "Expand full body"}
           </button>

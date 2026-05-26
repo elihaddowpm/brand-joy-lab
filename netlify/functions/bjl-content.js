@@ -164,6 +164,23 @@ function scoreRow(rowTags, painKeywords, category) {
   return score;
 }
 
+// Like scoreRow but returns the actual list of overlapping tags (preserving
+// the row's original casing). Used to build the sources panel so the user
+// can see which prospect signals drove the match.
+function overlapTags(rowTags, painKeywords, category) {
+  const tags = Array.isArray(rowTags) ? rowTags : [];
+  const kwSet = new Set(
+    (Array.isArray(painKeywords) ? painKeywords : []).map(k => String(k).toLowerCase())
+  );
+  const catLow = String(category || '').toLowerCase().trim();
+  const matched = [];
+  for (const t of tags) {
+    const tl = String(t).toLowerCase();
+    if (kwSet.has(tl) || (catLow && tl === catLow)) matched.push(t);
+  }
+  return Array.from(new Set(matched));
+}
+
 exports.handler = async (event) => {
   if (event.httpMethod !== 'POST') {
     return { statusCode: 405, body: JSON.stringify({ error: 'Method not allowed' }) };
@@ -216,7 +233,15 @@ exports.handler = async (event) => {
       return {
         statusCode: 200,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ found: true, type: 'case_study', data: pick(chosen, CASE_STUDY_RETURN) }),
+        body: JSON.stringify({
+          found: true,
+          type: 'case_study',
+          data: pick(chosen, CASE_STUDY_RETURN),
+          sources: {
+            identifier: chosen.identifier,
+            tags_matched: overlapTags(chosen.use_for_tags, painKeywords, category),
+          },
+        }),
       };
     }
 
@@ -263,6 +288,11 @@ exports.handler = async (event) => {
           type: 'article',
           match_path: matchPath,
           data: pick(chosen, ARTICLE_RETURN),
+          sources: {
+            match_method: matchPath === 'title_substring' ? 'title_match' : 'tag_overlap',
+            title: chosen.title,
+            tags_matched: overlapTags(chosen.tags, painKeywords, category),
+          },
         }),
       };
     }
@@ -418,6 +448,19 @@ Rules:
           scores_n: rotated.length,
           verbatims_n: verbatimRows.length,
           category_label: categoryLabel,
+        },
+        // Raw inputs the synthesis call saw, for the email Sources panel.
+        // score_rows = the same "item — question" pairs in surveyContext;
+        // verbatims = the response_text values, truncation preserved.
+        sources: {
+          score_rows: rotated.map(r => {
+            const item = String(r.row.item_name || '').trim();
+            const q = String(r.row.question || '').trim();
+            return item && q ? `${item} — ${q}` : (item || q);
+          }).filter(Boolean),
+          verbatims: verbatimRows
+            .map(v => String(v.response_text || '').trim().replace(/\s+/g, ' ').slice(0, 250))
+            .filter(Boolean),
         },
       }),
     };
