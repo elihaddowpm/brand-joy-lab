@@ -418,13 +418,22 @@ async function runSynthesis(triage, scratch, extraContext) {
     ? `${systemPrompt}\n\n## OUTPUT VOLUME CAP\n\nNOTE: One or more queries returned more than ${HEAVY_RESULT_THRESHOLD} rows. Do NOT enumerate every row. Show the top 50 by relevance, total count, and add: "I can show more if you narrow the query — try filtering by [demographic/topic/etc]."`
     : systemPrompt;
 
-  const lengthKey = (triage && triage.response_length) || 'medium';
+  // email_mode: invoked from /api/bjl-content for bjl_finding requests. The
+  // full investigator analysis runs as normal, but the synthesize stage
+  // emits a single counterintuitive sentence for use as a cold-email data
+  // point. The caller discards everything except response_text.
+  const emailMode = !!(extraContext && extraContext.email_mode === true);
+  const finalSystemPrompt = emailMode
+    ? `${augmentedSystemPrompt}\n\n## EMAIL MODE\n\nFrom your full analysis, extract only the single most counterintuitive finding. Return one plain sentence only. No scores, no index numbers, no markdown. Put the sentence in response_text. followup_chips may be empty.`
+    : augmentedSystemPrompt;
+
+  const lengthKey = emailMode ? 'short' : ((triage && triage.response_length) || 'medium');
   const maxTokens = LENGTH_TO_MAX_TOKENS[lengthKey] || LENGTH_TO_MAX_TOKENS.medium;
 
   const response = await anthropic.messages.create({
     model: SONNET_MODEL,
     max_tokens: maxTokens,
-    system: augmentedSystemPrompt,
+    system: finalSystemPrompt,
     messages: [{ role: 'user', content: userMessage }]
   });
 

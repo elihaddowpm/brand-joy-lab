@@ -297,215 +297,150 @@ exports.handler = async (event) => {
       };
     }
 
-    // bjl_finding
-    const bjlCat = resolveBjlCategory(category);
-    // Fetch candidates: try resolved category first, then general_joy fallback.
-    async function fetchByCat(cat) {
-      const { data, error } = await supabase
-        .from('bjl_scores')
-        .select('item_name, question, category, joy_index, topics')
-        .eq('category', cat)
-        .not('joy_index', 'is', null)
-        .order('joy_index', { ascending: false })
-        .limit(10);
-      if (error) {
-        console.error('[bjl-content] bjl_scores query error:', error);
-        return [];
-      }
-      return data || [];
+    // bjl_finding via /api/bjl-query investigator pipeline.
+    //
+    // The previous implementation ran its own FTS + Sonnet synthesis here.
+    // That approach was fast but narrow — it never saw the corpus-wide
+    // aggregates the investigator produces. The new path enqueues a job
+    // on /api/bjl-query with email_mode=true and polls /api/bjl-query-status
+    // for the one-sentence result. Generation is slower but the finding
+    // is defensible across the full bjl_verbatims/bjl_responses corpus,
+    // and the synthesize stage's email_mode override (in
+    // bjl-query-background.js) trims the output to a single counterintuitive
+    // sentence rather than the standard interpretive response.
+    const authHeader = event.headers.authorization || event.headers.Authorization || '';
+    const hostHeader = event.headers.host || event.headers.Host;
+    const siteUrl = process.env.URL || (hostHeader ? `https://${hostHeader}` : '');
+    if (!siteUrl) {
+      console.error('[bjl-content] bjl_finding: no site URL available for server-to-server call');
+      return { statusCode: 200, body: JSON.stringify({ found: false, type: 'bjl_finding', error: 'no_site_url' }) };
     }
 
-    let candidates = bjlCat ? await fetchByCat(bjlCat) : [];
-    if (candidates.length === 0 && bjlCat !== 'general_joy') {
-      candidates = await fetchByCat('general_joy');
-    }
-    if (candidates.length === 0) {
-      return { statusCode: 200, body: JSON.stringify({ found: false, type: 'bjl_finding' }) };
-    }
-
-    // Rank candidates by topic overlap with pain_keywords (the joy_index sort
-    // already picked top-of-category; this nudges among them when the brief
-    // named something specific). Use up to 10 — Sonnet needs material to
-    // find something non-obvious. Cross-contact variety now comes from
-    // synthesis variance plus per-email verbatim search, not row rotation.
-    const ranked = candidates
-      .map(r => ({ row: r, score: scoreRow(r.topics, painKeywords, category) }))
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 10);
-    if (ranked.length === 0) {
-      return { statusCode: 200, body: JSON.stringify({ found: false, type: 'bjl_finding' }) };
-    }
-    const lead = ranked[0].row;
-    const chosenCategory = lead.category;
-
-    const surveyContext = ranked
-      .map(r => {
-        const item = String(r.row.item_name || '').trim();
-        const q = String(r.row.question || '').trim();
-        return item && q ? `${item} (${q})` : (item || q);
-      })
+    const categoryLabel = (category && category.trim()) || 'this category';
+    const companyLabel = (company || '').trim() || 'a brand in this category';
+    const painSummary = (Array.isArray(painKeywords) ? painKeywords : [])
       .filter(Boolean)
-      .join(' | ');
+      .slice(0, 6)
+      .join(', ');
+    const investigatorPrompt =
+      `Find one counterintuitive finding from BJL consumer research that would land as a data point ` +
+      `in a cold outreach email to ${companyLabel}, a ${categoryLabel} brand` +
+      (painSummary ? ` (signals: ${painSummary})` : '') +
+      `. Look for what consumers in or adjacent to this category actually do, feel, or prefer — ` +
+      `especially anything that contradicts what brands like ${companyLabel} typically assume about their audience.`;
 
-    // Verbatim retrieval: full-text search on search_vector (GIN-indexed,
-    // tsvector built from response_text + question_text + themes + tags).
-    // Search terms come from the company name and the raw prospect category.
-    // Broad category filtering returns Hawaii vacations alongside theme park
-    // verbatims; targeted FTS keeps the signal tight.
-    const STOPWORDS = new Set([
-      'this','that','with','from','have','your','their','these','those',
-      'will','what','when','about','they','them','then','than','into',
-      'inc','llc','corp','company','brand','group','inc.','co.',
-    ]);
-    const tokenize = s => String(s || '')
-      .toLowerCase()
-      .replace(/[^a-z0-9\s]/g, ' ')
-      .split(/\s+/)
-      .filter(w => w.length > 3 && !STOPWORDS.has(w));
-    const companyTerms = tokenize(company);
-    const categoryTerms = tokenize(category);
-    const searchTermsArr = Array.from(new Set([...companyTerms, ...categoryTerms]));
-    const searchTerms = searchTermsArr.join(' OR ');
-
-    let verbatimRows = [];
-    let verbatimSource = 'none';
+    let jobId = null;
     try {
-      if (searchTerms) {
-        // websearch tsquery accepts natural "term1 OR term2" syntax. Default
-        // type would interpret the string as raw tsquery and fail on OR.
-        const { data: ftsVerbs, error: ftsErr } = await supabase
-          .from('bjl_verbatims')
-          .select('response_text')
-          .textSearch('search_vector', searchTerms, { type: 'websearch' })
-          .not('response_text', 'is', null)
-          .limit(30);
-        if (ftsErr) {
-          console.warn('[bjl-content] verbatim FTS error:', ftsErr.message);
-        } else if (ftsVerbs && ftsVerbs.length > 0) {
-          verbatimRows = ftsVerbs;
-          verbatimSource = 'fulltext_search';
-        }
+      const enqRes = await fetch(`${siteUrl}/.netlify/functions/bjl-query`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authHeader ? { Authorization: authHeader } : {}),
+        },
+        body: JSON.stringify({
+          query: investigatorPrompt,
+          intentHint: 'email_findings',
+          email_mode: true,
+          mode: 'email',
+        }),
+      });
+      if (enqRes.status !== 202) {
+        const txt = await enqRes.text().catch(() => '');
+        console.error('[bjl-content] bjl-query enqueue non-202:', enqRes.status, txt.slice(0, 300));
+        return {
+          statusCode: 200,
+          body: JSON.stringify({
+            found: false, type: 'bjl_finding',
+            error: 'enqueue_failed', enqueue_status: enqRes.status,
+          }),
+        };
       }
-      // Fallback 1: topics array contains the raw prospect category.
-      if (verbatimRows.length === 0 && category) {
-        const { data: topicVerbs } = await supabase
-          .from('bjl_verbatims')
-          .select('response_text')
-          .contains('topics', [category])
-          .not('response_text', 'is', null)
-          .limit(30);
-        if (topicVerbs && topicVerbs.length > 0) {
-          verbatimRows = topicVerbs;
-          verbatimSource = 'topics_contains';
-        }
-      }
-      // Fallback 2: equal category (the previous behavior).
-      if (verbatimRows.length === 0) {
-        const { data: catVerbs } = await supabase
-          .from('bjl_verbatims')
-          .select('response_text')
-          .eq('category', chosenCategory)
-          .not('response_text', 'is', null)
-          .limit(30);
-        if (catVerbs && catVerbs.length > 0) {
-          verbatimRows = catVerbs;
-          verbatimSource = 'category_eq';
-        }
-      }
+      const enqData = await enqRes.json();
+      jobId = enqData && enqData.job_id;
     } catch (e) {
-      console.warn('[bjl-content] verbatim fetch failed:', e && e.message);
+      console.error('[bjl-content] bjl-query enqueue threw:', e && e.message);
+      return { statusCode: 200, body: JSON.stringify({ found: false, type: 'bjl_finding', error: 'enqueue_threw' }) };
     }
-    const verbatimContext = verbatimRows
-      .map(v => String(v.response_text || '').trim().replace(/\s+/g, ' ').slice(0, 250))
-      .filter(Boolean)
-      .join(' | ');
+    if (!jobId) {
+      return { statusCode: 200, body: JSON.stringify({ found: false, type: 'bjl_finding', error: 'no_job_id' }) };
+    }
 
-    // Humanize the category for the prompt. Prefer the raw prospect category
-    // (closer to how the user names it) over the BJL taxonomy key.
-    const categoryLabel = (category && category.trim())
-      || String(chosenCategory || '').replace(/_/g, ' ').trim()
-      || 'unknown';
-    const companyLabel = company.trim() || 'a brand in this category';
+    // Poll bjl-query-status for completion. Budget leaves headroom under
+    // the sync-function timeout ceiling; if the investigator hasn't
+    // converged in this window the orchestrator just omits the BJL block.
+    const POLL_INTERVAL_MS = 2000;
+    const POLL_BUDGET_MS   = 22000;
+    const pollStart = Date.now();
+    let finalJob = null;
+    while (Date.now() - pollStart < POLL_BUDGET_MS) {
+      await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
+      try {
+        const statusRes = await fetch(
+          `${siteUrl}/.netlify/functions/bjl-query-status?id=${encodeURIComponent(jobId)}`,
+          { headers: authHeader ? { Authorization: authHeader } : {} }
+        );
+        if (statusRes.status !== 200) continue;
+        const sb = await statusRes.json();
+        if (sb.status === 'complete' || sb.status === 'error' || sb.status === 'clarification_needed') {
+          finalJob = sb;
+          break;
+        }
+      } catch (e) {
+        console.warn('[bjl-content] status poll threw:', e && e.message);
+      }
+    }
 
-    // Diagnostics: log search terms + verbatim count + source path before
-    // synthesis so we can verify on the next test batch whether FTS is
-    // pulling the right rows.
-    console.log('[bjl-content] bjl_finding inputs', {
-      company: companyLabel,
-      category: categoryLabel,
-      bjlCat,
-      chosenCategory,
-      searchTerms,
-      verbatim_source: verbatimSource,
-      scores_n: ranked.length,
-      verbatims_n: verbatimRows.length,
+    const pollMs = Date.now() - pollStart;
+    console.log('[bjl-content] bjl_finding (investigator)', {
+      jobId,
+      poll_ms: pollMs,
+      final_status: finalJob && finalJob.status,
+      query_count: finalJob && finalJob.query_count,
+      stage: finalJob && finalJob.stage,
     });
 
-    let observation = '';
-    if (anthropic) {
-      try {
-        const synth = await anthropic.messages.create({
-          model: SONNET_MODEL,
-          max_tokens: 200,
-          messages: [{
-            role: 'user',
-            content:
-`You are a strategist preparing a single data point for a cold outreach email to ${companyLabel}, a ${categoryLabel} brand.
-
-Here is BJL consumer research data relevant to this category:
-
-SURVEY FINDINGS:
-${surveyContext}
-
-CONSUMER VERBATIMS (${verbatimRows.length} responses):
-${verbatimContext}
-
-Your job: find the single most counterintuitive or surprising insight in this data — something that reveals a gap between what ${companyLabel} and brands like them typically assume about their audience and what consumers actually experience or feel.
-
-Rules:
-- One sentence only
-- Plain language — no scores, no percentages, no research terms, no markdown, no headers
-- Do not describe obvious preferences
-- Do not use generic leisure language like "escape from everyday life"
-- The sentence should make a CMO at ${companyLabel} lean forward, not nod along
-- If verbatims contain direct quotes that are surprising or revealing, the insight can reference what consumers actually said`,
-          }],
-        });
-        const raw = (synth && synth.content && synth.content[0] && synth.content[0].text) || '';
-        observation = stripScoreLanguage(String(raw).trim());
-      } catch (e) {
-        console.error('[bjl-content] sonnet synthesis failed:', e && e.message);
-      }
-    } else {
-      console.error('[bjl-content] ANTHROPIC_API_KEY missing; bjl_finding cannot synthesize');
+    if (!finalJob || finalJob.status !== 'complete' || !finalJob.finding) {
+      return {
+        statusCode: 200,
+        body: JSON.stringify({
+          found: false,
+          type: 'bjl_finding',
+          error: finalJob ? finalJob.status : 'investigator_timeout',
+          job_id: jobId,
+          poll_ms: pollMs,
+        }),
+      };
     }
 
+    const observation = stripScoreLanguage(String(finalJob.finding).trim());
     if (!observation) {
-      return { statusCode: 200, body: JSON.stringify({ found: false, type: 'bjl_finding' }) };
+      return { statusCode: 200, body: JSON.stringify({ found: false, type: 'bjl_finding', job_id: jobId }) };
     }
+
     return {
       statusCode: 200,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         found: true,
         type: 'bjl_finding',
-        data: { observation, category: chosenCategory },
+        data: { observation, category: category || null },
         inputs: {
-          scores_n: ranked.length,
-          verbatims_n: verbatimRows.length,
+          via: 'investigator',
+          job_id: jobId,
+          query_count: finalJob.query_count || 0,
+          poll_ms: pollMs,
           category_label: categoryLabel,
-          search_terms: searchTerms,
-          verbatim_source: verbatimSource,
         },
+        // The Sources panel expects score_rows + verbatims arrays. With the
+        // investigator path the raw inputs aren't easily extractable from
+        // the scratch JSON, and the user's spec says the full analysis is
+        // discarded. Surface a single provenance line so the panel shows
+        // where the finding came from; leave verbatims empty.
         sources: {
-          score_rows: ranked.map(r => {
-            const item = String(r.row.item_name || '').trim();
-            const q = String(r.row.question || '').trim();
-            return item && q ? `${item} — ${q}` : (item || q);
-          }).filter(Boolean),
-          verbatims: verbatimRows
-            .map(v => String(v.response_text || '').trim().replace(/\s+/g, ' ').slice(0, 250))
-            .filter(Boolean),
+          score_rows: [
+            `BJL investigator pipeline (${finalJob.query_count || 0} corpus queries, job ${String(jobId).slice(0, 8)})`,
+          ],
+          verbatims: [],
         },
       }),
     };
