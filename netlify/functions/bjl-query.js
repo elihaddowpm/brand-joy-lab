@@ -55,6 +55,11 @@ function normalizeRequest(body) {
     if (body.intentHint) extra.intentHint = body.intentHint;
     if (body.intent) extra.intent = body.intent;
     if (body.mode) extra.mode = body.mode;
+    // email_mode: when true, the synthesize stage produces a single
+    // counterintuitive sentence (no scores, no markdown) instead of the
+    // standard interpretive response. Used by /api/bjl-content to route
+    // bjl_finding requests through the corpus-wide investigator pipeline.
+    if (body.email_mode === true) extra.email_mode = true;
 
     return {
       prompt: body.query,
