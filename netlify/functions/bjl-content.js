@@ -45,6 +45,9 @@ const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 const anthropic = ANTHROPIC_API_KEY ? new Anthropic({ apiKey: ANTHROPIC_API_KEY }) : null;
 const HAIKU_MODEL = 'claude-haiku-4-5-20251001';
+// bjl_finding synthesis runs on Sonnet, not Haiku — Haiku with 80 tokens
+// only summarizes; Sonnet with room to reason can surface a tension.
+const SONNET_MODEL = 'claude-sonnet-4-20250514';
 
 // Length of the title prefix used for in-brief substring matching. Long
 // enough to be distinctive across the article catalog, short enough to
@@ -189,6 +192,7 @@ exports.handler = async (event) => {
   const painKeywords  = Array.isArray(body.pain_keywords) ? body.pain_keywords : [];
   const batchIndex    = Number.isFinite(body.batch_index) ? body.batch_index : 0;
   const brief         = typeof body.brief === 'string' ? body.brief : '';
+  const company       = typeof body.company === 'string' ? body.company : '';
 
   try {
     if (body.type === 'case_study') {
@@ -306,12 +310,13 @@ exports.handler = async (event) => {
     const chosenCategory = lead.category;
 
     // The rows we just picked are survey instrument text (item + question
-    // stem), not findings. Hand them to Haiku to synthesize one plain
-    // behavioral sentence before we ship the response. Without this step
-    // the email model gets "Hawaii — If you were deciding today about a
-    // vacation… be TO CHOOSE each of the following destinations:" and
-    // fabricates a finding around it. With synthesis it gets a usable
-    // behavioral observation.
+    // stem), not findings. Hand them — together with quotable consumer
+    // verbatims for the same category — to Sonnet to find a counterintuitive
+    // observation. Without this step the email model gets "Hawaii — If you
+    // were deciding today about a vacation… be TO CHOOSE each of the
+    // following destinations:" and fabricates around it. With richer inputs
+    // and a more capable model, it can surface a tension instead of a
+    // restatement.
     const surveyContext = rotated
       .map(r => {
         const item = String(r.row.item_name || '').trim();
@@ -321,25 +326,77 @@ exports.handler = async (event) => {
       .filter(Boolean)
       .join(' | ');
 
+    // Verbatims for the chosen category. Prefer quotable rows; widen the
+    // filter if we don't get enough. Truncate each to keep token budget in
+    // check; verbatims over ~250 chars tend to be tangential anyway.
+    let verbatimRows = [];
+    try {
+      const { data: qVerbs, error: qErr } = await supabase
+        .from('bjl_verbatims')
+        .select('response_text')
+        .eq('category', chosenCategory)
+        .eq('is_quotable', true)
+        .not('response_text', 'is', null)
+        .limit(10);
+      if (qErr) console.warn('[bjl-content] quotable verbatim fetch error:', qErr.message);
+      verbatimRows = qVerbs || [];
+      if (verbatimRows.length < 5) {
+        const { data: anyVerbs } = await supabase
+          .from('bjl_verbatims')
+          .select('response_text')
+          .eq('category', chosenCategory)
+          .not('response_text', 'is', null)
+          .limit(10);
+        verbatimRows = anyVerbs || verbatimRows;
+      }
+    } catch (e) {
+      console.warn('[bjl-content] verbatim fetch failed:', e && e.message);
+    }
+    const verbatimContext = verbatimRows
+      .map(v => String(v.response_text || '').trim().replace(/\s+/g, ' ').slice(0, 250))
+      .filter(Boolean)
+      .join(' | ');
+
+    // Humanize the category for the prompt. Prefer the raw prospect category
+    // (closer to how the user names it) over the BJL taxonomy key.
+    const categoryLabel = (category && category.trim())
+      || String(chosenCategory || '').replace(/_/g, ' ').trim()
+      || 'unknown';
+    const companyLabel = company.trim() || 'a brand';
+
     let observation = '';
     if (anthropic) {
       try {
         const synth = await anthropic.messages.create({
-          model: HAIKU_MODEL,
-          max_tokens: 80,
+          model: SONNET_MODEL,
+          max_tokens: 200,
           messages: [{
             role: 'user',
             content:
-              `Category: ${chosenCategory}. Survey context: ${surveyContext}. ` +
-              `Write one sentence describing what people feel or prefer about ` +
-              `this experience. Plain language only. No scores, no percentages, ` +
-              `no research terms, no survey language.`,
+`You are a strategist preparing a single data point for a cold outreach email to ${companyLabel}, a ${categoryLabel} brand.
+
+Here is BJL consumer research data for this category:
+
+SURVEY FINDINGS:
+${surveyContext}
+
+CONSUMER VERBATIMS:
+${verbatimContext}
+
+Your job: find the single most counterintuitive or surprising insight in this data — something that reveals a gap between what brands in this category typically assume and what consumers actually experience or feel.
+
+Rules:
+- One sentence only
+- Plain language — no scores, no percentages, no research terms, no markdown, no headers
+- Do not describe obvious preferences (do not say "people enjoy" or "consumers prefer" or "escape from everyday life")
+- The sentence should make a CMO lean forward, not nod along
+- If the data contains something unexpected about who feels the most joy, when they feel it, or why — lead with that`,
           }],
         });
         const raw = (synth && synth.content && synth.content[0] && synth.content[0].text) || '';
         observation = stripScoreLanguage(String(raw).trim());
       } catch (e) {
-        console.error('[bjl-content] haiku synthesis failed:', e && e.message);
+        console.error('[bjl-content] sonnet synthesis failed:', e && e.message);
       }
     } else {
       console.error('[bjl-content] ANTHROPIC_API_KEY missing; bjl_finding cannot synthesize');
@@ -355,6 +412,13 @@ exports.handler = async (event) => {
         found: true,
         type: 'bjl_finding',
         data: { observation, category: chosenCategory },
+        // Observability: how rich were the inputs? Lets the orchestrator
+        // log {scores_n, verbatims_n} and flag thin synthesis upstream.
+        inputs: {
+          scores_n: rotated.length,
+          verbatims_n: verbatimRows.length,
+          category_label: categoryLabel,
+        },
       }),
     };
   } catch (e) {
