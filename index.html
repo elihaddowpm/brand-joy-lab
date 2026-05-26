@@ -950,6 +950,7 @@ const generateOneEmail = async ({
         category: prospectContext.category || "",
         pain_keywords: prospectContext.pain_keywords || [],
         batch_index: Number.isFinite(batchIndex) ? batchIndex : 0,
+        company: company || "",
       };
       console.log("[bjl-orch] -> bjl_finding request", bPayload);
       const bRes = await fetch("/api/bjl-content", authedFetchInit({
