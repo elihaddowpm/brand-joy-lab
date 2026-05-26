@@ -36,11 +36,20 @@
  */
 
 const { createClient } = require('@supabase/supabase-js');
+const Anthropic = require('@anthropic-ai/sdk').default;
 const { verifyAndAuthorize } = require('./bjl-auth-helper');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY;
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+const anthropic = ANTHROPIC_API_KEY ? new Anthropic({ apiKey: ANTHROPIC_API_KEY }) : null;
+const HAIKU_MODEL = 'claude-haiku-4-5-20251001';
+
+// Length of the title prefix used for in-brief substring matching. Long
+// enough to be distinctive across the article catalog, short enough to
+// tolerate strategists abbreviating or only naming the first phrase.
+const TITLE_MATCH_LEN = 25;
 
 const VALID_TYPES = ['case_study', 'article', 'bjl_finding'];
 
@@ -179,6 +188,7 @@ exports.handler = async (event) => {
   const category      = typeof body.category === 'string' ? body.category : '';
   const painKeywords  = Array.isArray(body.pain_keywords) ? body.pain_keywords : [];
   const batchIndex    = Number.isFinite(body.batch_index) ? body.batch_index : 0;
+  const brief         = typeof body.brief === 'string' ? body.brief : '';
 
   try {
     if (body.type === 'case_study') {
@@ -219,14 +229,37 @@ exports.handler = async (event) => {
       if (rows.length === 0) {
         return { statusCode: 200, body: JSON.stringify({ found: false, type: 'article' }) };
       }
-      const ranked = rows
-        .map(r => ({ row: r, score: scoreRow(r.tags, painKeywords, category) }))
-        .sort((a, b) => b.score - a.score);
-      const chosen = ranked[0].row;
+      // Title-substring match first: if the brief names an article by its
+      // opening phrase (first TITLE_MATCH_LEN chars), prefer that article
+      // over tag-overlap ranking. Specified-by-name beats heuristic match.
+      let chosen = null;
+      let matchPath = 'tag_overlap';
+      const briefLower = brief.toLowerCase();
+      if (briefLower) {
+        const hit = rows.find(r => {
+          const prefix = String(r.title || '').toLowerCase().slice(0, TITLE_MATCH_LEN).trim();
+          return prefix && briefLower.includes(prefix);
+        });
+        if (hit) {
+          chosen = hit;
+          matchPath = 'title_substring';
+        }
+      }
+      if (!chosen) {
+        const ranked = rows
+          .map(r => ({ row: r, score: scoreRow(r.tags, painKeywords, category) }))
+          .sort((a, b) => b.score - a.score);
+        chosen = ranked[0].row;
+      }
       return {
         statusCode: 200,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ found: true, type: 'article', data: pick(chosen, ARTICLE_RETURN) }),
+        body: JSON.stringify({
+          found: true,
+          type: 'article',
+          match_path: matchPath,
+          data: pick(chosen, ARTICLE_RETURN),
+        }),
       };
     }
 
@@ -264,9 +297,54 @@ exports.handler = async (event) => {
       .map(r => ({ row: r, score: scoreRow(r.topics, painKeywords, category) }))
       .sort((a, b) => b.score - a.score)
       .slice(0, 3);
+    if (ranked.length === 0) {
+      return { statusCode: 200, body: JSON.stringify({ found: false, type: 'bjl_finding' }) };
+    }
     const idx = ((batchIndex % ranked.length) + ranked.length) % ranked.length;
-    const chosenRow = ranked[idx].row;
-    const observation = composeFindingObservation(chosenRow);
+    const rotated = ranked.slice(idx).concat(ranked.slice(0, idx));
+    const lead = rotated[0].row;
+    const chosenCategory = lead.category;
+
+    // The rows we just picked are survey instrument text (item + question
+    // stem), not findings. Hand them to Haiku to synthesize one plain
+    // behavioral sentence before we ship the response. Without this step
+    // the email model gets "Hawaii — If you were deciding today about a
+    // vacation… be TO CHOOSE each of the following destinations:" and
+    // fabricates a finding around it. With synthesis it gets a usable
+    // behavioral observation.
+    const surveyContext = rotated
+      .map(r => {
+        const item = String(r.row.item_name || '').trim();
+        const q = String(r.row.question || '').trim();
+        return item && q ? `${item} (${q})` : (item || q);
+      })
+      .filter(Boolean)
+      .join(' | ');
+
+    let observation = '';
+    if (anthropic) {
+      try {
+        const synth = await anthropic.messages.create({
+          model: HAIKU_MODEL,
+          max_tokens: 80,
+          messages: [{
+            role: 'user',
+            content:
+              `Category: ${chosenCategory}. Survey context: ${surveyContext}. ` +
+              `Write one sentence describing what people feel or prefer about ` +
+              `this experience. Plain language only. No scores, no percentages, ` +
+              `no research terms, no survey language.`,
+          }],
+        });
+        const raw = (synth && synth.content && synth.content[0] && synth.content[0].text) || '';
+        observation = stripScoreLanguage(String(raw).trim());
+      } catch (e) {
+        console.error('[bjl-content] haiku synthesis failed:', e && e.message);
+      }
+    } else {
+      console.error('[bjl-content] ANTHROPIC_API_KEY missing; bjl_finding cannot synthesize');
+    }
+
     if (!observation) {
       return { statusCode: 200, body: JSON.stringify({ found: false, type: 'bjl_finding' }) };
     }
@@ -276,7 +354,7 @@ exports.handler = async (event) => {
       body: JSON.stringify({
         found: true,
         type: 'bjl_finding',
-        data: { observation, category: chosenRow.category },
+        data: { observation, category: chosenCategory },
       }),
     };
   } catch (e) {
