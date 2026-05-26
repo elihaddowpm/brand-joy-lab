@@ -849,6 +849,8 @@ const generateOneEmail = async ({
   const wantsBJL       = /bjl|research|data|insight|stat|finding|consumer|traveler|fan/i.test(briefLower);
   const wantsCaseStudy = /case study|case|client work|example|parallel|we worked/i.test(briefLower);
   const wantsArticle   = /article|story|piece|published|read|blog/i.test(briefLower);
+  // DEBUG: orchestrator instrumentation — remove after diagnosis
+  console.log("[bjl-orch] signals for", contactName, "@", company, { wantsBJL, wantsCaseStudy, wantsArticle, briefSample: briefLower.slice(0, 240) });
 
   const prospectContext = extractProspectContext({
     waldo: waldoAccount || null,
@@ -864,17 +866,20 @@ const generateOneEmail = async ({
   let caseStudyBlock = "";
   if (wantsCaseStudy) {
     try {
+      const csPayload = {
+        type: "case_study",
+        category: prospectContext.category || "",
+        pain_keywords: prospectContext.pain_keywords || [],
+        batch_index: Number.isFinite(batchIndex) ? batchIndex : 0,
+      };
+      console.log("[bjl-orch] -> case_study request", csPayload);
       const csRes = await fetch("/api/bjl-content", authedFetchInit({
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          type: "case_study",
-          category: prospectContext.category || "",
-          pain_keywords: prospectContext.pain_keywords || [],
-          batch_index: Number.isFinite(batchIndex) ? batchIndex : 0,
-        }),
+        body: JSON.stringify(csPayload),
       }));
       const csResult = await csRes.json();
+      console.log("[bjl-orch] <- case_study response", { status: csRes.status, body: csResult });
       if (csResult.found) {
         const cs = csResult.data;
         const resultsText = cs.results_type === "descriptive_only"
@@ -901,17 +906,20 @@ const generateOneEmail = async ({
   let articleBlock = "";
   if (wantsArticle) {
     try {
+      const aPayload = {
+        type: "article",
+        category: prospectContext.category || "",
+        pain_keywords: prospectContext.pain_keywords || [],
+        batch_index: 0,
+      };
+      console.log("[bjl-orch] -> article request", aPayload);
       const aRes = await fetch("/api/bjl-content", authedFetchInit({
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          type: "article",
-          category: prospectContext.category || "",
-          pain_keywords: prospectContext.pain_keywords || [],
-          batch_index: 0,
-        }),
+        body: JSON.stringify(aPayload),
       }));
       const aResult = await aRes.json();
+      console.log("[bjl-orch] <- article response", { status: aRes.status, body: aResult });
       if (aResult.found) {
         const a = aResult.data;
         articleBlock = [
@@ -936,17 +944,20 @@ const generateOneEmail = async ({
   let bjlBlock = "";
   if (wantsBJL) {
     try {
+      const bPayload = {
+        type: "bjl_finding",
+        category: prospectContext.category || "",
+        pain_keywords: prospectContext.pain_keywords || [],
+        batch_index: Number.isFinite(batchIndex) ? batchIndex : 0,
+      };
+      console.log("[bjl-orch] -> bjl_finding request", bPayload);
       const bRes = await fetch("/api/bjl-content", authedFetchInit({
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          type: "bjl_finding",
-          category: prospectContext.category || "",
-          pain_keywords: prospectContext.pain_keywords || [],
-          batch_index: Number.isFinite(batchIndex) ? batchIndex : 0,
-        }),
+        body: JSON.stringify(bPayload),
       }));
       const bResult = await bRes.json();
+      console.log("[bjl-orch] <- bjl_finding response", { status: bRes.status, body: bResult });
       if (bResult.found && bResult.data && bResult.data.observation) {
         bjlBlock = [
           "[BJL FINDING - translate into one plain sentence describing what people do, feel, or prefer. No scores, no index numbers, no point gaps.]",
