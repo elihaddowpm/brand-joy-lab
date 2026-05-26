@@ -323,31 +323,22 @@ exports.handler = async (event) => {
       return { statusCode: 200, body: JSON.stringify({ found: false, type: 'bjl_finding' }) };
     }
 
-    // Secondary rank by topic overlap with pain_keywords (the joy_index sort
-    // already picked top-of-category; this just nudges among them when the
-    // brief named something specific). Take the top 3, then rotate by
-    // batch_index so contacts at the same account see different findings.
+    // Rank candidates by topic overlap with pain_keywords (the joy_index sort
+    // already picked top-of-category; this nudges among them when the brief
+    // named something specific). Use up to 10 — Sonnet needs material to
+    // find something non-obvious. Cross-contact variety now comes from
+    // synthesis variance plus per-email verbatim search, not row rotation.
     const ranked = candidates
       .map(r => ({ row: r, score: scoreRow(r.topics, painKeywords, category) }))
       .sort((a, b) => b.score - a.score)
-      .slice(0, 3);
+      .slice(0, 10);
     if (ranked.length === 0) {
       return { statusCode: 200, body: JSON.stringify({ found: false, type: 'bjl_finding' }) };
     }
-    const idx = ((batchIndex % ranked.length) + ranked.length) % ranked.length;
-    const rotated = ranked.slice(idx).concat(ranked.slice(0, idx));
-    const lead = rotated[0].row;
+    const lead = ranked[0].row;
     const chosenCategory = lead.category;
 
-    // The rows we just picked are survey instrument text (item + question
-    // stem), not findings. Hand them — together with quotable consumer
-    // verbatims for the same category — to Sonnet to find a counterintuitive
-    // observation. Without this step the email model gets "Hawaii — If you
-    // were deciding today about a vacation… be TO CHOOSE each of the
-    // following destinations:" and fabricates around it. With richer inputs
-    // and a more capable model, it can surface a tension instead of a
-    // restatement.
-    const surveyContext = rotated
+    const surveyContext = ranked
       .map(r => {
         const item = String(r.row.item_name || '').trim();
         const q = String(r.row.question || '').trim();
@@ -356,28 +347,70 @@ exports.handler = async (event) => {
       .filter(Boolean)
       .join(' | ');
 
-    // Verbatims for the chosen category. Prefer quotable rows; widen the
-    // filter if we don't get enough. Truncate each to keep token budget in
-    // check; verbatims over ~250 chars tend to be tangential anyway.
+    // Verbatim retrieval: full-text search on search_vector (GIN-indexed,
+    // tsvector built from response_text + question_text + themes + tags).
+    // Search terms come from the company name and the raw prospect category.
+    // Broad category filtering returns Hawaii vacations alongside theme park
+    // verbatims; targeted FTS keeps the signal tight.
+    const STOPWORDS = new Set([
+      'this','that','with','from','have','your','their','these','those',
+      'will','what','when','about','they','them','then','than','into',
+      'inc','llc','corp','company','brand','group','inc.','co.',
+    ]);
+    const tokenize = s => String(s || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter(w => w.length > 3 && !STOPWORDS.has(w));
+    const companyTerms = tokenize(company);
+    const categoryTerms = tokenize(category);
+    const searchTermsArr = Array.from(new Set([...companyTerms, ...categoryTerms]));
+    const searchTerms = searchTermsArr.join(' OR ');
+
     let verbatimRows = [];
+    let verbatimSource = 'none';
     try {
-      const { data: qVerbs, error: qErr } = await supabase
-        .from('bjl_verbatims')
-        .select('response_text')
-        .eq('category', chosenCategory)
-        .eq('is_quotable', true)
-        .not('response_text', 'is', null)
-        .limit(10);
-      if (qErr) console.warn('[bjl-content] quotable verbatim fetch error:', qErr.message);
-      verbatimRows = qVerbs || [];
-      if (verbatimRows.length < 5) {
-        const { data: anyVerbs } = await supabase
+      if (searchTerms) {
+        // websearch tsquery accepts natural "term1 OR term2" syntax. Default
+        // type would interpret the string as raw tsquery and fail on OR.
+        const { data: ftsVerbs, error: ftsErr } = await supabase
+          .from('bjl_verbatims')
+          .select('response_text')
+          .textSearch('search_vector', searchTerms, { type: 'websearch' })
+          .not('response_text', 'is', null)
+          .limit(30);
+        if (ftsErr) {
+          console.warn('[bjl-content] verbatim FTS error:', ftsErr.message);
+        } else if (ftsVerbs && ftsVerbs.length > 0) {
+          verbatimRows = ftsVerbs;
+          verbatimSource = 'fulltext_search';
+        }
+      }
+      // Fallback 1: topics array contains the raw prospect category.
+      if (verbatimRows.length === 0 && category) {
+        const { data: topicVerbs } = await supabase
+          .from('bjl_verbatims')
+          .select('response_text')
+          .contains('topics', [category])
+          .not('response_text', 'is', null)
+          .limit(30);
+        if (topicVerbs && topicVerbs.length > 0) {
+          verbatimRows = topicVerbs;
+          verbatimSource = 'topics_contains';
+        }
+      }
+      // Fallback 2: equal category (the previous behavior).
+      if (verbatimRows.length === 0) {
+        const { data: catVerbs } = await supabase
           .from('bjl_verbatims')
           .select('response_text')
           .eq('category', chosenCategory)
           .not('response_text', 'is', null)
-          .limit(10);
-        verbatimRows = anyVerbs || verbatimRows;
+          .limit(30);
+        if (catVerbs && catVerbs.length > 0) {
+          verbatimRows = catVerbs;
+          verbatimSource = 'category_eq';
+        }
       }
     } catch (e) {
       console.warn('[bjl-content] verbatim fetch failed:', e && e.message);
@@ -392,7 +425,21 @@ exports.handler = async (event) => {
     const categoryLabel = (category && category.trim())
       || String(chosenCategory || '').replace(/_/g, ' ').trim()
       || 'unknown';
-    const companyLabel = company.trim() || 'a brand';
+    const companyLabel = company.trim() || 'a brand in this category';
+
+    // Diagnostics: log search terms + verbatim count + source path before
+    // synthesis so we can verify on the next test batch whether FTS is
+    // pulling the right rows.
+    console.log('[bjl-content] bjl_finding inputs', {
+      company: companyLabel,
+      category: categoryLabel,
+      bjlCat,
+      chosenCategory,
+      searchTerms,
+      verbatim_source: verbatimSource,
+      scores_n: ranked.length,
+      verbatims_n: verbatimRows.length,
+    });
 
     let observation = '';
     if (anthropic) {
@@ -405,22 +452,23 @@ exports.handler = async (event) => {
             content:
 `You are a strategist preparing a single data point for a cold outreach email to ${companyLabel}, a ${categoryLabel} brand.
 
-Here is BJL consumer research data for this category:
+Here is BJL consumer research data relevant to this category:
 
 SURVEY FINDINGS:
 ${surveyContext}
 
-CONSUMER VERBATIMS:
+CONSUMER VERBATIMS (${verbatimRows.length} responses):
 ${verbatimContext}
 
-Your job: find the single most counterintuitive or surprising insight in this data — something that reveals a gap between what brands in this category typically assume and what consumers actually experience or feel.
+Your job: find the single most counterintuitive or surprising insight in this data — something that reveals a gap between what ${companyLabel} and brands like them typically assume about their audience and what consumers actually experience or feel.
 
 Rules:
 - One sentence only
 - Plain language — no scores, no percentages, no research terms, no markdown, no headers
-- Do not describe obvious preferences (do not say "people enjoy" or "consumers prefer" or "escape from everyday life")
-- The sentence should make a CMO lean forward, not nod along
-- If the data contains something unexpected about who feels the most joy, when they feel it, or why — lead with that`,
+- Do not describe obvious preferences
+- Do not use generic leisure language like "escape from everyday life"
+- The sentence should make a CMO at ${companyLabel} lean forward, not nod along
+- If verbatims contain direct quotes that are surprising or revealing, the insight can reference what consumers actually said`,
           }],
         });
         const raw = (synth && synth.content && synth.content[0] && synth.content[0].text) || '';
@@ -442,18 +490,15 @@ Rules:
         found: true,
         type: 'bjl_finding',
         data: { observation, category: chosenCategory },
-        // Observability: how rich were the inputs? Lets the orchestrator
-        // log {scores_n, verbatims_n} and flag thin synthesis upstream.
         inputs: {
-          scores_n: rotated.length,
+          scores_n: ranked.length,
           verbatims_n: verbatimRows.length,
           category_label: categoryLabel,
+          search_terms: searchTerms,
+          verbatim_source: verbatimSource,
         },
-        // Raw inputs the synthesis call saw, for the email Sources panel.
-        // score_rows = the same "item — question" pairs in surveyContext;
-        // verbatims = the response_text values, truncation preserved.
         sources: {
-          score_rows: rotated.map(r => {
+          score_rows: ranked.map(r => {
             const item = String(r.row.item_name || '').trim();
             const q = String(r.row.question || '').trim();
             return item && q ? `${item} — ${q}` : (item || q);
