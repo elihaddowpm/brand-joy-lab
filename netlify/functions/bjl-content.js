@@ -54,7 +54,11 @@ const SONNET_MODEL = 'claude-sonnet-4-20250514';
 // tolerate strategists abbreviating or only naming the first phrase.
 const TITLE_MATCH_LEN = 25;
 
-const VALID_TYPES = ['case_study', 'article', 'bjl_finding'];
+// bjl_finding is no longer served here. Frontend now pre-pulls per account
+// via /api/bjl-query with email_mode: true and injects the cached one-sentence
+// observation directly into generateOneEmail. Keeping case_study and article
+// here; both are stable.
+const VALID_TYPES = ['case_study', 'article'];
 
 // Loose mapping from prospect categories (which come from Waldo account
 // data, ad-hoc strings like "destination_marketing" or "attractions_entertainment")
@@ -297,208 +301,14 @@ exports.handler = async (event) => {
       };
     }
 
-    // bjl_finding — inline corpus aggregation.
-    //
-    // Two-hop server-to-server (bjl-content -> bjl-query -> background ->
-    // status polling) exceeded the Netlify sync timeout. This path runs
-    // the same shape of analysis inline: aggregate joy_mode and topic
-    // distributions across the category's full verbatim corpus, pull a
-    // small high-signal verbatim sample via FTS, and hand all three to
-    // Sonnet for one synthesized sentence. Defensible because the
-    // distributions ARE the corpus, not a sample picked by ranking.
-    const resolvedCat = resolveBjlCategory(category) || 'general_joy';
-    const categoryLabel = (category && category.trim())
-      || resolvedCat.replace(/_/g, ' ');
-    const companyLabel = (company || '').trim() || 'a brand in this category';
-
-    // 1. Joy-mode distribution across the corpus slice for this category.
-    //    joy_modes is a text[]; unnest client-side. Pull broad so the
-    //    distribution is stable; if the server caps the response we use
-    //    whatever it returned (still corpus-wide for typical categories).
-    const { data: modeRows, error: modeErr } = await supabase
-      .from('bjl_verbatims')
-      .select('joy_modes')
-      .eq('category', resolvedCat)
-      .not('joy_modes', 'is', null)
-      .limit(10000);
-    if (modeErr) console.warn('[bjl-content] joy_modes aggregation error:', modeErr.message);
-
-    const modeCounts = {};
-    (modeRows || []).forEach(row => {
-      (row.joy_modes || []).forEach(m => {
-        if (!m) return;
-        modeCounts[m] = (modeCounts[m] || 0) + 1;
-      });
-    });
-    const modeTotal = Object.values(modeCounts).reduce((a, b) => a + b, 0);
-    const modeDistribution = Object.entries(modeCounts)
-      .sort(([, a], [, b]) => b - a)
-      .map(([mode, count]) => `${mode}: ${modeTotal ? Math.round((count / modeTotal) * 100) : 0}% (n=${count})`);
-
-    // 2. Top topics across the same corpus slice.
-    const { data: topicRows, error: topicErr } = await supabase
-      .from('bjl_verbatims')
-      .select('topics')
-      .eq('category', resolvedCat)
-      .not('topics', 'is', null)
-      .limit(10000);
-    if (topicErr) console.warn('[bjl-content] topics aggregation error:', topicErr.message);
-
-    const topicCounts = {};
-    (topicRows || []).forEach(row => {
-      (row.topics || []).forEach(t => {
-        if (!t) return;
-        topicCounts[t] = (topicCounts[t] || 0) + 1;
-      });
-    });
-    const topTopics = Object.entries(topicCounts)
-      .sort(([, a], [, b]) => b - a)
-      .slice(0, 8)
-      .map(([topic, count]) => `${topic} (${count})`);
-
-    // 3. Representative verbatim sample via FTS on search_vector. Filter
-    //    rejects punctuation that breaks websearch tsquery; >3-char tokens
-    //    drawn from company name + pain_keywords drive relevance.
-    const tokenize = s => String(s || '')
-      .toLowerCase()
-      .replace(/[^a-z0-9\s]/g, ' ')
-      .split(/\s+/)
-      .filter(w => w.length > 3);
-    const tokens = Array.from(new Set([
-      ...tokenize(company),
-      ...((Array.isArray(painKeywords) ? painKeywords : []).flatMap(k => tokenize(k))),
-    ]));
-    const searchTerms = tokens.join(' OR ');
-
-    let verbatimRows = [];
-    if (searchTerms) {
-      const { data: vRows, error: vErr } = await supabase
-        .from('bjl_verbatims')
-        .select('response_text')
-        .textSearch('search_vector', searchTerms, { type: 'websearch' })
-        .not('response_text', 'is', null)
-        .limit(20);
-      if (vErr) console.warn('[bjl-content] verbatim FTS error:', vErr.message);
-      else verbatimRows = vRows || [];
-    }
-    const verbatimList = verbatimRows
-      .map(r => String(r.response_text || '').trim().replace(/\s+/g, ' ').slice(0, 250))
-      .filter(Boolean);
-    const verbatimSample = verbatimList.slice(0, 15).join(' | ');
-
-    const verbatimsAnalyzed = (modeRows || []).length;
-
-    console.log('[bjl-content] bjl_finding (inline_aggregate)', {
-      raw_category: category,
-      resolved_category: resolvedCat,
-      verbatims_analyzed: verbatimsAnalyzed,
-      mode_total_tags: modeTotal,
-      mode_distribution_n: modeDistribution.length,
-      top_topics_n: topTopics.length,
-      search_terms: searchTerms,
-      verbatim_sample_n: verbatimList.length,
-    });
-
-    let observation = '';
-    if (!anthropic) {
-      console.error('[bjl-content] ANTHROPIC_API_KEY missing; bjl_finding cannot synthesize');
-    } else if (verbatimsAnalyzed === 0 && verbatimList.length === 0) {
-      // Nothing to synthesize — category mismatch or empty slice. Skip
-      // the LLM call entirely so we don't waste tokens producing a
-      // hallucinated finding from empty context.
-      console.warn('[bjl-content] bjl_finding: no corpus data for category', {
-        raw_category: category, resolved_category: resolvedCat,
-      });
-    } else {
-      try {
-        const synth = await anthropic.messages.create({
-          model: SONNET_MODEL,
-          max_tokens: 150,
-          messages: [{
-            role: 'user',
-            content:
-`You are preparing a single BJL data point for a cold outreach email to ${companyLabel}, a ${categoryLabel} brand.
-
-Here is aggregated BJL consumer research for this category:
-
-JOY MODE DISTRIBUTION (${modeTotal} mode tags across ${verbatimsAnalyzed} verbatims):
-${modeDistribution.join('\n') || '(no joy_mode tags in this slice)'}
-
-TOP TOPICS IN VERBATIMS:
-${topTopics.join(', ') || '(no topic tags in this slice)'}
-
-REPRESENTATIVE VERBATIMS:
-${verbatimSample || '(no verbatim sample available)'}
-
-Your job: find the single most counterintuitive or surprising finding in this data. Something that reveals a gap between what ${companyLabel} and brands like them typically assume about their audience and what consumers actually experience or feel.
-
-Rules:
-- One sentence only
-- Plain language — no scores, no percentages, no research terms, no markdown
-- Do not describe obvious preferences
-- Do not use generic phrases like "escape from everyday life" or "people enjoy"
-- The finding should make a CMO lean forward, not nod along
-- Draw from the joy mode distribution or topic patterns — these are corpus-wide numbers, not anecdotes`,
-          }],
-        });
-        const raw = (synth && synth.content && synth.content[0] && synth.content[0].text) || '';
-        observation = stripScoreLanguage(String(raw).trim());
-      } catch (e) {
-        console.error('[bjl-content] sonnet synthesis failed:', e && e.message);
-      }
-    }
-
-    if (!observation) {
-      return {
-        statusCode: 200,
-        body: JSON.stringify({
-          found: false,
-          type: 'bjl_finding',
-          diagnostic: {
-            raw_category: category,
-            resolved_category: resolvedCat,
-            verbatims_analyzed: verbatimsAnalyzed,
-            mode_total_tags: modeTotal,
-            verbatim_sample_n: verbatimList.length,
-          },
-        }),
-      };
-    }
-
+    // bjl_finding removed — frontend now pre-pulls per account via
+    // /api/bjl-query with email_mode: true and injects the cached
+    // one-sentence finding directly into generateOneEmail. The
+    // VALID_TYPES gate above rejects type:bjl_finding requests with
+    // 400; this fallthrough exists only as a defensive guard.
     return {
-      statusCode: 200,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        found: true,
-        type: 'bjl_finding',
-        data: { observation, category: resolvedCat },
-        inputs: {
-          via: 'inline_aggregate',
-          raw_category: category,
-          resolved_category: resolvedCat,
-          category_label: categoryLabel,
-          verbatims_analyzed: verbatimsAnalyzed,
-          mode_total_tags: modeTotal,
-          search_terms: searchTerms,
-        },
-        sources: {
-          // New fields per spec — Sources panel can render these directly
-          // (and the EmailSources component already lists score_rows as
-          // bullets, so populating score_rows with the distribution gives
-          // the existing UI the corpus-wide view without a frontend edit).
-          mode_distribution: modeDistribution,
-          top_topics: topTopics,
-          verbatim_sample: verbatimList.slice(0, 10),
-          total_verbatims_analyzed: verbatimsAnalyzed,
-          // Back-compat with the existing EmailSources renderer:
-          score_rows: [
-            `Verbatims analyzed: ${verbatimsAnalyzed} (category=${resolvedCat})`,
-            ...modeDistribution,
-            topTopics.length ? `Top topics: ${topTopics.join(', ')}` : '',
-          ].filter(Boolean),
-          verbatims: verbatimList.slice(0, 10),
-        },
-      }),
+      statusCode: 400,
+      body: JSON.stringify({ error: `Unhandled type: ${body.type}` }),
     };
   } catch (e) {
     console.error('[bjl-content] unexpected error:', e);

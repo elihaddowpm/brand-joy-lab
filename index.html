@@ -632,6 +632,7 @@ const _stageToPhase = (job) => {
 // triage_brief, followup_chips, clarifying_question via onDone.
 const queryBJL = async ({
   query, intentHint, strategistContext, waldoContext, debug = false,
+  emailMode = false,
   priorConversationContext = null,
   onStatus = () => {}, onChunk = () => {}, onDone = () => {},
   onError = () => {}, onDebug = () => {}, onEvidence = () => {},
@@ -645,6 +646,10 @@ const queryBJL = async ({
       body: JSON.stringify({
         query, intentHint, strategistContext, waldoContext, debug,
         mode: "email",
+        // email_mode trips the synthesize-stage override on the server
+        // (bjl-query-background.js) to return a single counterintuitive
+        // sentence instead of the full interpretive response.
+        email_mode: !!emailMode,
         prior_conversation_context: priorConversationContext,
       }),
       signal,
@@ -849,6 +854,10 @@ const generateOneEmail = async ({
   contactName, company, waldoContext,
   userStrategistContext, userEmailInstructions, audienceModeValue,
   waldoAccount, prospectCategory, batchIndex, priorSameCompany,
+  // bjlInsights: pre-pulled one-sentence finding from /api/bjl-query
+  // (email_mode=true). Cached per account by the caller, so multiple
+  // contacts at the same account reuse the same finding.
+  bjlInsights = "",
 }) => {
   // Brief-first orchestration: parse the brief for content signals before
   // fetching anything. Nothing injects unless the brief earns it.
@@ -953,43 +962,26 @@ const generateOneEmail = async ({
     }
   }
 
-  // Conditional BJL finding fetch. Server queries bjl_scores by resolved
-  // category (with general_joy fallback) and returns one observation with
-  // numeric score language already stripped. The [BJL FINDING] wrapper
-  // tells the model to translate it into one plain behavioral sentence.
+  // BJL finding: the caller pre-pulls per-account via /api/bjl-query
+  // (email_mode=true) and passes the resulting one-sentence observation
+  // in as bjlInsights. No inline fetch from this function anymore — the
+  // previous inline approach hit timeouts when chained through
+  // /api/bjl-content. wantsBJL is still used as the gate so a populated
+  // insight cache doesn't leak into emails whose brief didn't ask for it.
   let bjlBlock = "";
-  if (wantsBJL) {
-    try {
-      const bPayload = {
-        type: "bjl_finding",
-        category: prospectContext.category || "",
-        pain_keywords: prospectContext.pain_keywords || [],
-        batch_index: Number.isFinite(batchIndex) ? batchIndex : 0,
-        company: company || "",
-      };
-      console.log("[bjl-orch] -> bjl_finding request", bPayload);
-      const bRes = await fetch("/api/bjl-content", authedFetchInit({
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(bPayload),
-      }));
-      const bResult = await bRes.json();
-      console.log("[bjl-orch] <- bjl_finding response", { status: bRes.status, body: bResult });
-      if (bResult.found && bResult.data && bResult.data.observation) {
-        bjlBlock = [
-          "[BJL FINDING - translate into one plain sentence describing what people do, feel, or prefer. No scores, no index numbers, no point gaps.]",
-          bResult.data.observation,
-          "[END BJL FINDING]",
-        ].join("\n");
-        bjlSources = {
-          observation: bResult.data.observation,
-          score_rows: (bResult.sources && bResult.sources.score_rows) || [],
-          verbatims: (bResult.sources && bResult.sources.verbatims) || [],
-        };
-      }
-    } catch (e) {
-      console.warn("BJL finding fetch failed", e);
-    }
+  if (wantsBJL && bjlInsights && String(bjlInsights).trim()) {
+    const observation = String(bjlInsights).trim();
+    bjlBlock = [
+      "[BJL FINDING - translate into one plain sentence describing what people do, feel, or prefer. No scores, no index numbers, no point gaps.]",
+      observation,
+      "[END BJL FINDING]",
+    ].join("\n");
+    bjlSources = {
+      observation,
+      score_rows: ["BJL investigator pipeline (corpus-wide, pre-pulled per account)"],
+      verbatims: [],
+    };
+    console.log("[bjl-orch] cached bjl_finding used for", contactName, "@", company);
   }
 
   // Em dashes get stripped from brief, case study, article, and BJL block.
@@ -1039,7 +1031,7 @@ const generateOneEmail = async ({
       let errData; try { errData = await res.json(); } catch { errData = null; }
       const errMsg = errData?.error?.message
         || (res.status === 429 ? "Rate limit hit — increase delay between calls" : "API error " + res.status);
-      return { text: "", error: errMsg, sources: { caseStudy: caseStudySources, article: articleSources, bjl: bjlSources } };
+      return { text: "", error: errMsg, polished: false, sources: { caseStudy: caseStudySources, article: articleSources, bjl: bjlSources } };
     }
     const data = await res.json();
     const rawText = data.content?.map(b => b.type === "text" ? b.text : "").filter(Boolean).join("\n") || "";
@@ -1086,8 +1078,63 @@ const generateOneEmail = async ({
       }
     }
 
-    return { text: finalText, error: null, sources: { caseStudy: caseStudySources, article: articleSources, bjl: bjlSources } };
-  } catch (e) { return { text: "", error: e.name === "AbortError" ? "Timed out" : e.message, sources: { caseStudy: caseStudySources, article: articleSources, bjl: bjlSources } }; }
+    // Haiku polish pass — catches em dashes, is/isn't constructions, and
+    // corporate jargon that survive the generation model despite the system
+    // prompt rules. Two steps: (1) regex strip em/en dashes, (2) Haiku call
+    // with a tight rewrite prompt. On any failure or empty response the
+    // pre-polish text ships unchanged.
+    let polished = false;
+    const stripEmDashesPolish = s => (s || "")
+      .replace(/\u2014/g, "-")
+      .replace(/\u2013/g, "-");
+    const parsedForPolish = parseSubjectBody(finalText);
+    const subjectForPolish = parsedForPolish.subject;
+    const bodyForPolish = stripEmDashesPolish(parsedForPolish.body || finalText);
+    if (bodyForPolish && bodyForPolish.trim()) {
+      try {
+        const polishCtrl = new AbortController();
+        const polishTimer = setTimeout(() => polishCtrl.abort(), 20000);
+        const polishRes = await fetch("/api/claude", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: polishCtrl.signal,
+          body: JSON.stringify({
+            model: "claude-haiku-4-5-20251001",
+            max_tokens: 700,
+            messages: [{
+              role: "user",
+              content:
+                "Review this outreach email and make minimal edits only. Fix these specific issues if present:\n" +
+                "1. Remove any em dashes (\u2014) and replace with a comma, period, or reworded phrase\n" +
+                "2. Remove any \"is/isn't\" or \"isn't/is\" constructions - rewrite the sentence without them\n" +
+                "3. Replace corporate jargon (leverage, unlock, actionable, synergies, in today's landscape, drive results) with plain human language\n" +
+                "4. If any sentence reads like it was written by a tool rather than a person, smooth it out\n\n" +
+                "Do not change the content, structure, data points, case study references, article link, or closing ask. Return only the revised email body with no commentary, no labels, no preamble.\n\n" +
+                "EMAIL:\n" + bodyForPolish,
+            }],
+          }),
+        });
+        clearTimeout(polishTimer);
+        if (polishRes.status === 200) {
+          const polishData = await polishRes.json();
+          const cleanRaw = polishData.content?.map(b => b.type === "text" ? b.text : "").filter(Boolean).join("\n") || "";
+          const cleanBody = stripEmDashesPolish(cleanRaw.trim());
+          if (cleanBody) {
+            finalText = subjectForPolish
+              ? "Subject: " + subjectForPolish + "\n\n" + cleanBody
+              : cleanBody;
+            polished = true;
+          }
+        } else {
+          console.warn("Polish pass non-200:", polishRes.status);
+        }
+      } catch (e) {
+        console.warn("Polish pass failed", e);
+      }
+    }
+
+    return { text: finalText, error: null, polished, sources: { caseStudy: caseStudySources, article: articleSources, bjl: bjlSources } };
+  } catch (e) { return { text: "", error: e.name === "AbortError" ? "Timed out" : e.message, polished: false, sources: { caseStudy: caseStudySources, article: articleSources, bjl: bjlSources } }; }
 };
 
 const parseSubjectBody = (text) => {
@@ -1976,6 +2023,7 @@ const OutreachMode = ({ setEvidenceRows, strategistContext, setStrategistContext
   const [generating, setGenerating] = useState(false);
   const [results, setResults] = useState([]); // { contact, text, error }
   const [genProgress, setGenProgress] = useState(0);
+  const [bjlPullStatus, setBjlPullStatus] = useState("idle"); // idle | loading | ready | error
   const [uploadError, setUploadError] = useState(null);
   const fileInputRef = useRef(null);
 
@@ -2014,11 +2062,52 @@ const OutreachMode = ({ setEvidenceRows, strategistContext, setStrategistContext
     setResults([]);
     setGenProgress(0);
     const waldoCtx = buildWaldoSystemContext(account);
+
+    // Brief-signal check (must mirror the regex in generateOneEmail) — if
+    // the brief asks for BJL data, pre-pull one corpus-wide finding via
+    // the investigator pipeline and cache it for all contacts at this
+    // account. queryBJL polls bjl-query-status itself; we wait for the
+    // single one-sentence result here (10-30s typical).
+    const briefLowerOuter = (emailInstructions || "").toLowerCase();
+    const wantsBJLOuter = /bjl|research|data|insight|stat|finding|consumer|traveler|fan/i.test(briefLowerOuter);
+    let bjlInsight = "";
+    if (wantsBJLOuter) {
+      setBjlPullStatus("loading");
+      const tension = account.creative_tension || account.top_signal?.why_it_matters || "";
+      const pullQuery = [
+        `Pull one BJL finding for outreach to ${account.company || account.name}`,
+        account.category ? `(${account.category})` : "",
+        tension ? `. Strategic tension: ${tension}` : "",
+      ].filter(Boolean).join(" ").trim();
+      let streamed = "";
+      let pullOk = false;
+      let pullErr = null;
+      try {
+        await queryBJL({
+          query: pullQuery,
+          intentHint: "email_findings",
+          emailMode: true,
+          strategistContext: strategistContext || undefined,
+          waldoContext: account,
+          onChunk: (t) => { streamed += t; },
+          onDone: () => { pullOk = true; },
+          onError: ({ message }) => { pullErr = message; },
+        });
+      } catch (e) {
+        pullErr = e.message;
+      }
+      bjlInsight = pullOk ? streamed.trim() : "";
+      setBjlPullStatus(pullOk ? "ready" : "error");
+      if (!pullOk) console.warn("[bjl-orch] pre-pull failed:", pullErr);
+    } else {
+      setBjlPullStatus("idle");
+    }
+
     const out = [];
     const selList = contacts.filter(c => selected.has(contactKey(c)));
     for (let i = 0; i < selList.length; i++) {
       const c = selList[i];
-      const { text, error, sources } = await generateOneEmail({
+      const { text, error, polished, sources } = await generateOneEmail({
         contactName: c.name,
         company: account.company || account.name,
         waldoContext: waldoCtx,
@@ -2029,8 +2118,9 @@ const OutreachMode = ({ setEvidenceRows, strategistContext, setStrategistContext
         prospectCategory: account.category || null,
         batchIndex: i,
         priorSameCompany: i > 0,
+        bjlInsights: bjlInsight,
       });
-      out.push({ contact: c, text, error, sources });
+      out.push({ contact: c, text, error, polished, sources });
       setResults([...out]);
       setGenProgress(i + 1);
       if (i < selList.length - 1) await new Promise(r => setTimeout(r, 5000));
@@ -2159,6 +2249,16 @@ const OutreachMode = ({ setEvidenceRows, strategistContext, setStrategistContext
                   <Icon name="sparkle" size={12} />
                   {generating ? `Generating ${genProgress}/${selected.size}…` : `Generate ${selected.size} emails`}
                 </button>
+                {generating && bjlPullStatus === "loading" && (
+                  <span style={{fontSize: 12, color: "var(--grey-2)"}}>
+                    Gathering BJL insights…
+                  </span>
+                )}
+                {generating && bjlPullStatus === "error" && (
+                  <span style={{fontSize: 12, color: "var(--red, #b00)"}}>
+                    BJL pull failed — emails will generate without the [BJL FINDING] block.
+                  </span>
+                )}
                 {results.length > 0 && !generating && (
                   <button className="btn ghost" onClick={exportCSV}>
                     <Icon name="download" size={12} /> Export CSV
@@ -2183,38 +2283,54 @@ const OutreachMode = ({ setEvidenceRows, strategistContext, setStrategistContext
 // strategist spot-check what /api/bjl-content actually pulled before
 // sending. Not a validation gate; collapsed by default. Only renders
 // sections for the content types that fired and returned data.
-const EmailSources = ({ sources }) => {
+const EmailSources = ({ sources, polished = false }) => {
   const [open, setOpen] = useState(false);
-  if (!sources) return null;
-  const article = sources.article;
-  const bjl = sources.bjl;
-  const cs = sources.caseStudy;
+  const article = sources && sources.article;
+  const bjl = sources && sources.bjl;
+  const cs = sources && sources.caseStudy;
   const hasArticle = article && (article.title || (article.tags_matched || []).length);
   const hasBjl = bjl && bjl.observation;
   const hasCs = cs && cs.identifier;
-  if (!hasArticle && !hasBjl && !hasCs) return null;
+  // Render if any provenance OR if the polish pass ran. The polished
+  // indicator sits next to the Sources toggle label as a tiny pill so
+  // the user knows the Haiku rewrite shipped without having to expand.
+  if (!hasArticle && !hasBjl && !hasCs && !polished) return null;
   const sectionStyle = { marginBottom: 12 };
   const headerStyle = { fontWeight: 600, fontSize: 11, letterSpacing: "0.04em", marginBottom: 4, color: "var(--grey-1)" };
+  const hasAnySources = hasArticle || hasBjl || hasCs;
   return (
     <div style={{ marginTop: 8 }}>
-      <button
-        type="button"
-        onClick={() => setOpen(!open)}
-        style={{
-          background: "none", border: "none", padding: "4px 0",
-          color: "var(--grey-2)", fontSize: 12, cursor: "pointer",
-          display: "inline-flex", alignItems: "center", gap: 6,
-        }}
-      >
-        <span style={{
-          display: "inline-flex",
-          transform: open ? "rotate(90deg)" : "none",
-          transition: "transform 160ms ease",
-        }}>
-          <Icon name="chevRight" size={12} />
-        </span>
-        Sources
-      </button>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        {hasAnySources ? (
+          <button
+            type="button"
+            onClick={() => setOpen(!open)}
+            style={{
+              background: "none", border: "none", padding: "4px 0",
+              color: "var(--grey-2)", fontSize: 12, cursor: "pointer",
+              display: "inline-flex", alignItems: "center", gap: 6,
+            }}
+          >
+            <span style={{
+              display: "inline-flex",
+              transform: open ? "rotate(90deg)" : "none",
+              transition: "transform 160ms ease",
+            }}>
+              <Icon name="chevRight" size={12} />
+            </span>
+            Sources
+          </button>
+        ) : null}
+        {polished ? (
+          <span title="Haiku polish pass ran on this draft" style={{
+            display: "inline-flex", alignItems: "center", gap: 4,
+            fontSize: 11, color: "var(--grey-2)",
+            padding: "2px 6px", border: "1px solid var(--grey-4, #e5e5e5)", borderRadius: 3,
+          }}>
+            polished
+          </span>
+        ) : null}
+      </div>
       {open && (
         <div style={{
           fontSize: 12, lineHeight: 1.5, color: "var(--grey-1)",
@@ -2266,7 +2382,7 @@ const EmailSources = ({ sources }) => {
 };
 
 const OutreachEmailCard = ({ result, index }) => {
-  const { contact, text, error, sources } = result;
+  const { contact, text, error, sources, polished } = result;
   const { subject, body } = parseSubjectBody(text || "");
   const initials = (contact.name || "?").split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase();
   return (
@@ -2291,7 +2407,7 @@ const OutreachEmailCard = ({ result, index }) => {
           <>
             <div className="ec-subject"><span className="label">Subject</span>{subject || "(no subject)"}</div>
             {body.split(/\n{2,}/).map((p, i) => <p key={i}>{p}</p>)}
-            <EmailSources sources={sources} />
+            <EmailSources sources={sources} polished={polished} />
           </>
         )}
       </div>
@@ -2359,6 +2475,7 @@ const BatchMode = ({ strategistContext, setStrategistContext }) => {
     await queryBJL({
       query,
       intentHint: "email_findings",
+      emailMode: true,
       strategistContext: combinedCtx || undefined,
       waldoContext: account,
       onChunk: (t) => { streamed += t; },
@@ -2372,7 +2489,10 @@ const BatchMode = ({ strategistContext, setStrategistContext }) => {
       setAccountStatus(prev => ({ ...prev, [account.id]: "error" }));
       setAccountInsights(prev => ({ ...prev, [account.id]: streamed || errMsg || "Pull failed" }));
     }
-    return ok;
+    // Return both the success flag and the streamed text so callers
+    // running in the same tick can use the value without waiting on
+    // accountInsights state to settle.
+    return { ok, text: ok ? streamed : "" };
   };
 
   const runAllPull = async () => {
@@ -2388,20 +2508,47 @@ const BatchMode = ({ strategistContext, setStrategistContext }) => {
     setPulling(false);
   };
 
-  const retry = async (account) => { await pullForAccount(account); };
+  const retry = async (account) => { const r = await pullForAccount(account); return r && r.ok; };
 
   const runGenerate = async () => {
     if (!accounts.length) return;
     setGenerating(true);
+
+    // Brief-signal check (mirrors the regex in generateOneEmail). If the
+    // brief asks for BJL, each account gets one pre-pulled corpus-wide
+    // finding via /api/bjl-query (email_mode=true). pullForAccount caches
+    // into accountInsights so multiple contacts at the same account reuse
+    // the same finding.
+    const briefLowerOuter = (instructions || "").toLowerCase();
+    const wantsBJLOuter = /bjl|research|data|insight|stat|finding|consumer|traveler|fan/i.test(briefLowerOuter);
+
     const out = { ...results };
+    // Local insight cache so we don't have to wait on accountInsights state
+    // round-tripping between account iterations.
+    const insightLocal = { ...accountInsights };
     for (const account of accounts) {
       const waldoCtx = buildWaldoSystemContext(account);
       const contacts = (account.contacts || []).map(normalizeContact).filter(Boolean);
       out[account.id] = [];
       setResults({ ...out });
+
+      let bjlInsight = "";
+      if (wantsBJLOuter) {
+        const cached = insightLocal[account.id];
+        if (cached && String(cached).trim()) {
+          bjlInsight = String(cached).trim();
+        } else {
+          const pulled = await pullForAccount(account);
+          if (pulled && pulled.ok && pulled.text) {
+            bjlInsight = String(pulled.text).trim();
+            insightLocal[account.id] = bjlInsight;
+          }
+        }
+      }
+
       for (let j = 0; j < contacts.length; j++) {
         const c = contacts[j];
-        const { text, error, sources } = await generateOneEmail({
+        const { text, error, polished, sources } = await generateOneEmail({
           contactName: c.name,
           company: account.company || account.name,
           waldoContext: waldoCtx,
@@ -2412,8 +2559,9 @@ const BatchMode = ({ strategistContext, setStrategistContext }) => {
           prospectCategory: account.category || null,
           batchIndex: j,
           priorSameCompany: j > 0,
+          bjlInsights: bjlInsight,
         });
-        out[account.id].push({ contact: c, text, error, sources });
+        out[account.id].push({ contact: c, text, error, polished, sources });
         setResults({ ...out });
         if (j < contacts.length - 1) await new Promise(r => setTimeout(r, 5000));
       }
@@ -2517,7 +2665,8 @@ const BatchMode = ({ strategistContext, setStrategistContext }) => {
             <BatchRow key={a.id}
               account={a} index={i}
               open={open} onToggle={() => toggleExpand(a.id)}
-              results={accResults} />
+              results={accResults}
+              bjlStatus={accountStatus[a.id]} />
           );
         })}
       </div>
@@ -2525,7 +2674,7 @@ const BatchMode = ({ strategistContext, setStrategistContext }) => {
   );
 };
 
-const BatchRow = ({ account, index, open, onToggle, results }) => {
+const BatchRow = ({ account, index, open, onToggle, results, bjlStatus }) => {
   const contactCount = (account.contacts || []).length;
   const draftCount = results.length;
   return (
@@ -2538,6 +2687,15 @@ const BatchRow = ({ account, index, open, onToggle, results }) => {
         </div>
         <span className="row-stat"><b>{contactCount}</b> contacts</span>
         <span className="row-stat">{draftCount ? <><b>{draftCount}</b> drafts</> : <>no drafts</>}</span>
+        {bjlStatus === "loading" ? (
+          <span className="row-stat" style={{color: "var(--grey-2)"}}>
+            Gathering BJL insights…
+          </span>
+        ) : bjlStatus === "error" ? (
+          <span className="row-stat" style={{color: "var(--red, #b00)"}}>
+            BJL pull failed
+          </span>
+        ) : null}
         <div style={{display: "flex", alignItems: "center", gap: 10}}>
           <span style={{transform: open ? "rotate(90deg)" : "rotate(0)", transition: "transform 160ms ease", color: "var(--grey-2)"}}>
             <Icon name="chevRight" size={14} />
@@ -2577,7 +2735,7 @@ const BatchRow = ({ account, index, open, onToggle, results }) => {
 
 const BatchEmailRow = ({ result }) => {
   const [expanded, setExpanded] = useState(false);
-  const { contact, text, error, sources } = result;
+  const { contact, text, error, sources, polished } = result;
   const { subject, body } = parseSubjectBody(text || "");
   return (
     <div className={`row-email v2 ${expanded ? "expanded" : ""}`}>
@@ -2602,7 +2760,7 @@ const BatchEmailRow = ({ result }) => {
       ) : (
         <>
           <div className="re-body">{body}</div>
-          <EmailSources sources={sources} />
+          <EmailSources sources={sources} polished={polished} />
           <button className="re-expand" onClick={() => setExpanded(!expanded)}>
             {expanded ? "Collapse" : "Expand full body"}
           </button>

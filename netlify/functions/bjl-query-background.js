@@ -424,7 +424,7 @@ async function runSynthesis(triage, scratch, extraContext) {
   // point. The caller discards everything except response_text.
   const emailMode = !!(extraContext && extraContext.email_mode === true);
   const finalSystemPrompt = emailMode
-    ? `${augmentedSystemPrompt}\n\n## EMAIL MODE\n\nFrom your full analysis, extract only the single most counterintuitive finding. Return one plain sentence only. No scores, no index numbers, no markdown. Put the sentence in response_text. followup_chips may be empty.`
+    ? `${augmentedSystemPrompt}\n\n## EMAIL MODE\n\nFrom your full analysis, extract only the single most counterintuitive finding for use in a cold outreach email. Return one plain sentence only - no scores, no index numbers, no markdown, no methodology. Describe what people feel, prefer, or do in plain language. Discard the rest of your analysis. Put the sentence in response_text. followup_chips may be empty.`
     : augmentedSystemPrompt;
 
   const lengthKey = emailMode ? 'short' : ((triage && triage.response_length) || 'medium');
