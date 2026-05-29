@@ -72,36 +72,118 @@ Read the card and it should be obvious what the brand is saying AND what the aud
 - **Banned**: "leverage", "unlock", "synergies", "actionable", "in today's landscape". No em dashes. No "is/isn't" rhetorical pivots. No hedging.
 - One declarative thought per headline.
 
+## Differentiation ranking and floors (v5.7) — applies to ALL sections
+
+Card selection across all three sections is driven by ONE standardized ranking of the Audience Map's signals. Layer 1 JI items and Layer 3 tags sit on different units (JI 0–100 vs tag rate % points), so they're compared on a standardized differentiation score:
+
+```
+differentiation ≈ |delta| / SE
+  where SE is the standard error of the metric:
+    - Tag rate (proportion p on n verbatims):
+        SE_pp ≈ sqrt(p * (1 - p) / n) * 100
+    - JI (mean on n respondents):
+        SE_ji ≈ stddev_ji / sqrt(n)
+        (approximate stddev_ji ≈ 25 if unavailable per-item;
+         this is the pooled JI dispersion across the corpus.)
+```
+
+The score puts a +51 JI peak with n=274 at the top, a +4pp tag delta with n=274 in the middle, and a -0.2pp tag delta near zero. Compute it qualitatively per signal — exact SE arithmetic is fine but order-of-magnitude judgment is the point.
+
+**Differentiation floor — non-negotiable.** A signal qualifies for ANY card only if BOTH hold:
+
+```
+Tag-rate signals:
+  - |delta_pp| ≥ max(3.0, 2 × SE_pp)
+  - per-item n ≥ 50
+
+JI signals (Layer 1, Layer 2):
+  - |delta| ≥ 10 JI points (or, for Layer 2 top-box %, ≥ 5 percentage points)
+  - per-item n ≥ 100
+```
+
+Worked example: a Layer 3 tag at p=0.029, n=66 has SE_pp ≈ 2.06pp. A delta of -0.2pp falls inside one SE and well below the 3pp practical floor. It does NOT become a card. Same for any other near-zero-delta tag. The Herschend Dance Map's `immerse_in_story -0.2pp` and `luxury_vs_value -0.2pp` misalignment cards were the failure mode this floor eliminates.
+
+**Sections draw from one ranking, NOT from one layer.** High-differentiation Layer 1 signals are eligible for Strong Alignment and Misalignment, not only Opportunity. The previous failure mode — Alignment/Misalignment built on low-delta Layer 3 tags while the high-delta Layer 1 behaviors were stranded in Opportunity — comes from selecting per-section without standardization. Standardize, then assign by brand-side intersection.
+
 ## Section definitions
 
-**`strong_alignment`** — The brand emphasizes X AND the Audience Map shows X as a peak or dominant signature.
-- A `brand_emphasis` snippet (or a consistent `brand_tactical_signals` snippet) maps to one of:
-  - An item in `joy_peaks` (Layer 1 elevated)
-  - A top-3 tag in `emotional_signature` for some framework (Layer 3 dominant)
-  - An item in `decision_context` with positive `delta_pp` (Layer 2 driver)
-- Copy `metric_value`, `corpus_value`, `cohort_n` directly from the Audience Map.
+All three sections pull from the SAME standardized ranking of qualifying signals (see Differentiation section above). Section assignment depends on how brand input intersects the signal, NOT on which Audience Map layer the signal came from.
 
-**`misalignment`** — The brand emphasizes X AND the Audience Map shows X is NOT a peak.
-- Maps to either:
-  - An item in `joy_valleys` (cohort scores notably lower) — strongest signal
-  - A dimension the brand emphasizes that simply doesn't surface anywhere in the Audience Map's peaks / signature / context
-- For absence-grounded cards (no specific Audience Map item to cite): set `metric_value` and `corpus_value` to null; put the absence interpretation in `audience_signal` (e.g., "Audience profile does not surface inspirational-educational framing in any of its peaks, signature tags, or decision drivers.").
+**`strong_alignment`** — Signal with positive delta AND the brand mapping bridge maps a `brand_emphasis` snippet (or consistent `brand_tactical_signals`) to it.
+- The signal may be any qualifying item from `joy_peaks` (Layer 1), top tags in `emotional_signature` (Layer 3), or positive-delta items in `decision_context` (Layer 2).
+- A high-delta Layer 1 behavior that the brand demonstrably addresses (e.g., brand emphasizes "live spectator entertainment" and `joy_peaks` includes "basketball +47") is a stronger alignment card than a low-delta Layer 3 tag the brand happens to touch.
+- Copy `metric_value`, `corpus_value`, and `cohort_n` directly from the Audience Map.
+
+**`misalignment`** — Either:
+- A signal where the brand emphasizes a dimension AND the Audience Map shows it BELOW corpus (`joy_valleys` item, or a negative-delta `decision_context` item, or a tag the brand emphasizes that's depressed in the cohort), OR
+- A `brand_emphasis` claim that has NO corresponding peak / dominant tag / positive driver anywhere in the Audience Map (an absence-grounded card).
+
+Rules:
+- For absence-grounded cards: set `metric_value` and `corpus_value` to null; put the absence interpretation in `audience_signal` (e.g., "Audience profile does not surface inspirational-educational framing in any of its peaks, signature tags, or decision drivers.").
 - **NEVER source misalignment from `brand_friction_points`.** Reframe friction as opportunity.
 - Tactical-signal caveat: a `brand_tactical_signals` snippet is misalignment-eligible only when SHARPLY inconsistent with stated emphasis.
 
-**`untapped_opportunity`** — The Audience Map shows Y as a peak or dominant signature AND the brand input does NOT address Y. Or: a `brand_friction_points` snippet aligns with an Audience Map peak.
-- For audience-led: take the highest-delta items from `joy_peaks` / `emotional_signature` that brand_emphasis does NOT touch.
+**`untapped_opportunity`** — A qualifying signal with positive delta that the brand mapping bridge can NOT connect to any `brand_emphasis` snippet, ranked by differentiation. Or: a `brand_friction_points` snippet aligns with an Audience Map peak.
+- For audience-led: take the highest-differentiation signals from `joy_peaks` / `emotional_signature` / `decision_context` that brand_emphasis does NOT touch.
 - For friction-led: cite the friction snippet AND a supporting Audience Map peak/tag.
 - Every opportunity card carries a one-sentence `stretch_angle`.
 
-## Cap
+## Brand mapping bridge reaches Layer 1 (v5.7)
 
-Maximum 5 cards per section, ranked:
-- Alignment: by strength of brand-audience match (verbatim brand match + high audience delta first).
-- Misalignment: by clarity of contradiction.
-- Opportunity: by audience signal magnitude (highest delta first).
+The bridge must evaluate brand emphasis against BOTH frameworks, not only Layer 3:
 
-If you generated more than 5 candidates, return top 5 and note in `diagnostic.mapping_bridge_summary` that the section was capped.
+- **Layer 3 tags** (joy modes, functional jobs, tensions, occasions) — most brand language with abstract emotional vocabulary maps here. But Layer 3 tags often have small deltas because nearly any family/social audience indexes high on `relational`, `belonging`, `share_experience`. Don't lean on them alone.
+- **Layer 1 JI behavioral signals above the differentiation floor** — concrete behaviors and categories. A brand emphasizing "wholesome family experiences" must be evaluated against the cohort's actual high-delta behaviors (e.g., spectator sports, celebratory drinking, financial planning). If those behaviors fall OUTSIDE the brand's stated emphasis, they land as Misalignment (when the brand emphasizes the opposite) or Opportunity (when the brand simply doesn't address them). They do NOT silently disappear because the brand language was abstract.
+
+For each qualifying Layer 1 signal in the ranking, classify it:
+- Brand explicitly addresses it (verbatim or strong semantic match in `brand_emphasis`) → Alignment candidate
+- Brand emphasizes the opposite OR ignores a below-corpus dimension → Misalignment candidate
+- Brand ignores a strong above-corpus signal → Opportunity candidate
+
+Failure mode this prevents: the bridge maps "wholesome family experiences" to `relational +4pp` and `share_experience +2pp`, builds Alignment from those low-delta tags, never reaches for the cohort's actual differentiating behaviors (sparkling wine +51 JI, basketball +47 JI), and leaves them stranded in Opportunity. The bridge must reach.
+
+## Cap and floating section length (v5.7)
+
+- **Maximum 5 cards per section** (cap retained for readability).
+- **No minimum. NEVER pad.** A section with only one qualifying signal renders one card. A section with zero qualifying signals renders the no-signal phrasing below, not padded near-zero-delta cards.
+- A signal must clear the differentiation floor (above) to be eligible for ANY section. Sub-floor signals never become cards, regardless of how few cards a section has.
+
+**No-signal phrasing.** When a section yields zero qualifying cards, emit a short honest line in place of the card array. Use these forms:
+
+```
+strong_alignment (0 qualifying):
+  "No strong alignments above the differentiation floor. The brand's
+   emphasis dimensions and the audience's peaks overlap only at
+   low-delta tag-level signals that don't materially differentiate."
+
+misalignment (0 qualifying):
+  "No material misalignments. The brand's emphasis dimensions track
+   the audience's profile within noise."
+
+untapped_opportunity (0 qualifying):
+  "No untapped opportunities above the differentiation floor. Every
+   high-delta audience signal is already addressed by stated brand
+   emphasis."
+```
+
+Ranking within each section, all by differentiation score descending:
+- Alignment: by strength of brand-audience match (verbatim brand match weighted; high-differentiation Layer 1 alignment beats low-delta Layer 3 tag alignment).
+- Misalignment: by clarity of contradiction (negative-delta-on-emphasized > absence-grounded).
+- Opportunity: by audience differentiation magnitude.
+
+If you generated more than 5 candidates above the floor, return top 5 by differentiation score and note in `diagnostic.mapping_bridge_summary` that the section was capped.
+
+## Honest per-item n (v5.7)
+
+Every card's `cohort_n` field MUST equal the per-item count from the Audience Map for that specific signal — the count of cohort members who answered THAT item or contributed a verbatim in THAT framework, NOT the full reverse-engineered cohort size.
+
+The Audience Map's section payloads carry per-item n explicitly:
+- `joy_peaks[*].items[*].cohort_n` — per-item respondent count for that JI item
+- `joy_valleys[*].cohort_n` — same
+- `emotional_signature[*].tags[*].cohort_n` — per-tag verbatim count
+- `decision_context[*].items[*].cohort_n` — per-item respondent count
+
+Use those values directly. Never substitute the full cohort n from the Audience Map header. If the per-item count falls below the floor (n<100 for JI, n<50 for tags), the signal fails the differentiation floor and the card does not render — even if its delta is large. This is the v5.2 / v5.4 n-traceability rule applied at the card-selection gate.
 
 ## Stretch angle line (opportunity cards only)
 
