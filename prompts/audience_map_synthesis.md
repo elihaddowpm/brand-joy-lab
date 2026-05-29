@@ -34,16 +34,23 @@ NEVER aggregate silently. The strategist must be able to trace every weighted-av
 
 Select **4 to 8** parameters (target 5–7) that together define the audience as a cohort drawable from the full corpus. Each parameter is a single, applicable filter clause. The set together should be tight enough to differentiate the audience and loose enough that the resulting cohort has meaningful n.
 
-Parameter types:
+**Universal-dimension constraint (v5.4 Fix 3 — non-negotiable).** Parameters MUST come from dimensions every respondent has regardless of which monthly fielding wave they participated in. The Pass 4 cohort builder enforces this at the SQL layer: any Layer 1 parameter that references a fielding-bound item (not in the wide-longitudinal substrate) is silently dropped. This prevents the cohort-collapse failure mode (theme-park seed → n=47 from a seed of 1,971 because two parameters' fielding windows overlapped in only two months).
 
-- **`layer_1`** — a constraint on a Layer 1 universal-core item. `{type: "layer_1", item_id, criterion: "max_joy"|"top_quartile"|"above_median"}`. Use items where the seed cohort showed a strong divergence (delta ≥ +5 ji-points typically, or ≥ +3 ji-points if the item is highly differentiated).
-- **`layer_3`** — a constraint on a Layer 3 framework tag. `{type: "layer_3", framework, tag, minimum_rate: <float 0-100>}`. Use tags where the seed cohort indexes meaningfully above corpus (delta ≥ +2pp). The minimum_rate is the cohort-side rate threshold a respondent's verbatim tags must reach when aggregated; treat this as "this audience tends to express this pattern".
-- **`demographic`** — a literal demographic constraint. `{type: "demographic", field, values: [...]}`. Use only when the seed cohort's distribution on that field diverges from corpus by ≥ 10pp on the top value, or the seed strategy itself was demographic.
+Eligible parameter types:
+
+- **`layer_1`** — a constraint on a Layer 1 item from the wide-longitudinal substrate (`bjl_items_longitudinal_wide`, ~182 items fielded across 5+ waves). `{type: "layer_1", item_id, criterion: "max_joy"|"top_quartile"|"above_median"}`. Use items where the seed cohort showed a distinctive divergence vs corpus. Fielding-bound items (theme-park trip items, single-wave novelty items) are NOT eligible even if they had high delta in the seed profile — pick a longitudinal item that captures the same construct.
+- **`layer_3`** — a constraint on a Layer 3 framework tag. `{type: "layer_3", framework, tag, minimum_rate: <float 0-100>}`. Layer 3 tags are coded on every verbatim regardless of fielding, so they're universal by construction. Use tags where the seed cohort indexes meaningfully above corpus (delta ≥ +2pp). Treat as "this audience tends to express this pattern."
+- **`demographic`** — a literal demographic constraint. `{type: "demographic", field, values: [...]}`. Always universal. Use when the seed cohort's distribution on that field diverges from corpus by ≥ 10pp on the top value, or the seed strategy itself was demographic.
+
+**Distinctiveness ranking (NOT raw magnitude).** Surface signals by delta vs corpus, not raw cohort score. A theme-park-family cohort over-indexing on store-brand grocery joy or budgeting-tool joy is a discovery — that's the kind of parameter worth picking. The same cohort scoring high on "vacation" or "gifts" is noise because everyone scores high on those, and that parameter wouldn't differentiate the resonance-scored cohort. Always pick the most distinctive cross-category signals over the seed-restating ones.
 
 **Selection criteria:**
-- Each parameter must point at a genuinely differentiating quality of the seed cohort. Don't pick a parameter just because cohort-vs-corpus delta is technically positive; pick parameters that capture the audience's actual character.
+- Each parameter must point at a genuinely differentiating quality of the seed cohort. Don't pick a parameter just because the delta is technically positive; pick parameters that capture the audience's actual character.
 - Across the 4-8 parameters, span both motivational (Layer 3) and behavioral/preference (Layer 1) signals. Don't be all-demographic or all-tag.
+- Cross-category breadth matters. If the seed names a category (theme parks), pick at least 1–2 Layer 1 parameters from CATEGORIES THE USER NEVER MENTIONED (food, grocery, finance, tech, retail, social) when the seed cohort shows distinctive divergence there. This is the cross-category discovery the tool is for.
 - Avoid psychometric tautology: if seed was `brand_entity`, do NOT include the seed item itself as a Layer 1 parameter. The reverse-engineered cohort should be definable without referencing the seed.
+
+**Cohort-level statistical framing — surface explicitly.** The reverse-engineered audience is a cohort-level statistical profile, not an individual dossier. Because BJL fields in monthly modules with fresh samples, no single respondent answered grocery AND banking AND theme-park items. The tool assembles a profile of a TYPE OF PERSON statistically: "people whose Layer 3 signature matches this seed also diverge from baseline in these ways across grocery, finance, and social behavior." The synthesis paragraph should reflect this framing — describe the audience as a type whose pattern is consistent across categories, not as a single person whose individual cross-category behavior was measured.
 
 ### Output B: `sections` — the six rendered sections
 
