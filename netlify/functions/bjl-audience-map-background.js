@@ -266,31 +266,59 @@ function buildSeedCohortSQL(routing) {
 }
 
 /**
- * Build the reverse-engineered cohort SQL from Pass 3's parameters.
- * Each parameter becomes a respondent_id-producing subquery; the cohort
- * is the INTERSECT.
+ * v5.4 Fix 3 — Pass 4 cross-category discovery.
+ *
+ * The previous implementation INTERSECTed the per-parameter respondent sets,
+ * which collapsed the cohort when parameters touched fielding-bound items
+ * (theme-park family seed → n=47 from a seed of n=1,971, defaulting to the
+ * residual high-joy cluster).
+ *
+ * The new implementation:
+ *   1. Restricts Layer 1 parameters to the wide-longitudinal substrate
+ *      (5+ fieldings) so eligibility differences across respondents shrink.
+ *      Layer 3 tags and demographics are universal across all waves.
+ *   2. Computes a per-respondent match count across all parameters
+ *      (UNION ALL of per-parameter matches, COUNT DISTINCT per respondent).
+ *   3. Returns respondents whose match-count meets a threshold that's
+ *      relaxed progressively until the cohort hits n≥100.
+ *
+ * Strict AND collapses on fielding gaps; resonance scoring tolerates them
+ * and surfaces a broader, more representative audience — which is the
+ * promise of reverse-engineering. A cohort of several hundred derived
+ * from the universal signature beats a cohort of 47 derived from a
+ * fielding accident.
+ *
+ * Caller is responsible for filtering parameters to universal-dimension
+ * only before calling this (see filterToUniversalParameters).
  */
-function buildReverseCohortSQL(parameters) {
+function buildResonanceCohortSQL(parameters, options) {
+  const opts = Object.assign({ targetN: 500, matchedAtLeast: null }, options || {});
   if (!Array.isArray(parameters) || parameters.length === 0) return null;
-  const subs = [];
+
+  const matchClauses = [];
   for (const p of parameters) {
     if (p.type === 'layer_1') {
       const itemId = Number(p.item_id);
       const crit = criterionClause(p.criterion);
       if (!Number.isFinite(itemId) || !crit) continue;
-      subs.push(`
-        SELECT DISTINCT r.respondent_id
+      // The JOIN to bjl_items_longitudinal_wide enforces the universal-dimension
+      // restriction at the SQL level: if Pass 3 slipped a fielding-bound item
+      // through, it gets dropped here.
+      matchClauses.push(`
+        SELECT DISTINCT r.respondent_id,
+               'l1:'::text || ${itemId}::text AS pkey
         FROM bjl_responses r
-        WHERE r.item_id = ${itemId}
-          AND ${crit}
+        JOIN bjl_items_longitudinal_wide il ON il.item_id = r.item_id
+        WHERE r.item_id = ${itemId} AND ${crit}
       `);
     } else if (p.type === 'layer_3') {
       const fw = p.framework;
       const tag = p.tag;
       if (!['joy_modes','tensions','functional_jobs','occasions'].includes(fw)) continue;
       if (!tag) continue;
-      subs.push(`
-        SELECT DISTINCT v.respondent_id
+      matchClauses.push(`
+        SELECT DISTINCT v.respondent_id,
+               ${quote('l3:' + fw + ':' + tag)} AS pkey
         FROM bjl_verbatims v
         WHERE ${quote(tag)} = ANY(v.${fw})
       `);
@@ -298,16 +326,73 @@ function buildReverseCohortSQL(parameters) {
       const field = p.field;
       const values = Array.isArray(p.values) ? p.values.filter(Boolean) : [];
       if (!field || values.length === 0) continue;
-      subs.push(`
-        SELECT DISTINCT resp.respondent_id
+      matchClauses.push(`
+        SELECT DISTINCT resp.respondent_id,
+               ${quote('demo:' + field)} AS pkey
         FROM bjl_respondents resp
         WHERE resp.${field} IN (${quoteList(values)})
       `);
     }
   }
-  if (subs.length === 0) return null;
-  if (subs.length === 1) return `(${subs[0]})`;
-  return `(${subs.join('\nINTERSECT\n')})`;
+  if (matchClauses.length === 0) return null;
+
+  const minMatched = opts.matchedAtLeast != null
+    ? opts.matchedAtLeast
+    : Math.max(2, Math.ceil(matchClauses.length * 0.5));
+
+  return `(
+    WITH all_matches AS (
+      ${matchClauses.join('\n      UNION ALL\n')}
+    ),
+    scored AS (
+      SELECT respondent_id, COUNT(DISTINCT pkey) AS matched
+      FROM all_matches
+      GROUP BY respondent_id
+    )
+    SELECT respondent_id
+    FROM scored
+    WHERE matched >= ${minMatched}
+    ORDER BY matched DESC, respondent_id
+    LIMIT ${opts.targetN}
+  )`;
+}
+
+/**
+ * Universal-dimension filter for Pass 3's parameter list. Layer 3 tags and
+ * demographics are always universal. Layer 1 parameters must reference an
+ * item in the wide-longitudinal substrate (5+ fieldings) — fielding-bound
+ * items don't qualify.
+ *
+ * Returns { universal: [...], dropped: [...] } so the caller can record
+ * which parameters were dropped in scratch / diagnostics.
+ */
+async function filterToUniversalParameters(parameters) {
+  const universal = [];
+  const dropped   = [];
+  if (!Array.isArray(parameters)) return { universal, dropped };
+
+  // Load the longitudinal-wide item_id set once
+  const rows = await execSQL(
+    `SELECT item_id FROM bjl_items_longitudinal_wide`,
+    'load longitudinal-wide ids'
+  );
+  const wideIds = new Set(rows.map(r => Number(r.item_id)));
+
+  for (const p of parameters) {
+    if (p.type === 'layer_3' || p.type === 'demographic') {
+      universal.push(p);
+    } else if (p.type === 'layer_1') {
+      const itemId = Number(p.item_id);
+      if (wideIds.has(itemId)) {
+        universal.push(p);
+      } else {
+        dropped.push({ ...p, reason: 'layer_1 item is not in bjl_items_longitudinal_wide (fielding-bound)' });
+      }
+    } else {
+      dropped.push({ ...p, reason: 'unknown parameter type' });
+    }
+  }
+  return { universal, dropped };
 }
 
 // =====================================================================
@@ -315,7 +400,16 @@ function buildReverseCohortSQL(parameters) {
 // =====================================================================
 
 async function profileLayer1UniversalCore(cohortSQL) {
-  // Layer 1 cohort vs corpus on the universal-core items (n_fieldings >= 10).
+  // Layer 1 cohort vs corpus on the wide longitudinal substrate.
+  //
+  // v5.4 Fix 3: switched from bjl_items_longitudinal (10+ fieldings, ~45
+  // items) to bjl_items_longitudinal_wide (5+ fieldings, ~182 items). The
+  // wider substrate spans food / grocery / finance / tech / retail / travel
+  // / social and is the cross-category surface Pass 3 picks parameters from
+  // and Pass 4 resonance-scores against. The trade-off — slightly less
+  // longitudinal strictness per item — is worth the breadth: 45 items can't
+  // surface a grocery / finance / tech discovery for a theme-park-family
+  // seed; 182 items can.
   const sql = `
     WITH cohort AS (
       SELECT i.item_id, i.item_name, q.question_text,
@@ -323,7 +417,7 @@ async function profileLayer1UniversalCore(cohortSQL) {
              COUNT(*) AS cohort_n
       FROM bjl_responses r
       JOIN bjl_items i ON i.item_id = r.item_id
-      JOIN bjl_items_longitudinal il ON il.item_id = i.item_id
+      JOIN bjl_items_longitudinal_wide il ON il.item_id = i.item_id
       JOIN bjl_questions_v2 q ON q.question_id = i.question_id
       WHERE r.respondent_id IN ${cohortSQL}
         AND r.joy_index IS NOT NULL
@@ -334,7 +428,7 @@ async function profileLayer1UniversalCore(cohortSQL) {
              ROUND(AVG(r.joy_index)::numeric, 1) AS corpus_ji,
              COUNT(*) AS corpus_n
       FROM bjl_responses r
-      JOIN bjl_items_longitudinal i ON i.item_id = r.item_id
+      JOIN bjl_items_longitudinal_wide i ON i.item_id = r.item_id
       WHERE r.joy_index IS NOT NULL
       GROUP BY i.item_id
     )
@@ -901,30 +995,79 @@ exports.handler = async (event) => {
     let activeCohortN   = seedCohortN;
 
     if (useReverse) {
-      let reverseCohortSQL = buildReverseCohortSQL(synthesis.parameters);
-      if (!reverseCohortSQL) {
+      // v5.4 Fix 3 — resonance scoring with universal-dimension parameters
+      // and a relaxation ladder. Replaces the strict INTERSECT that caused
+      // cohort collapse (e.g., theme-park family seed → n=47).
+      const { universal: universalParams, dropped: droppedParams } =
+        await filterToUniversalParameters(synthesis.parameters);
+
+      if (universalParams.length === 0) {
         useReverse = false;
-        pass4Note = 'Pass 3 parameters produced no usable cohort SQL; using seed cohort as audience.';
+        pass4Note = 'No universal-dimension parameters survived filtering; using seed cohort as audience.';
       } else {
-        // Hybrid: intersect the reverse cohort with the demographic filter
-        // from Pass 1 so the final cohort respects both the brand/trait
-        // dimensions and the demographic constraint.
-        if (STRATEGIES_THAT_APPLY_DEMO_FILTER_POST.has(routing.strategy)
-            && routing.demographic_filter) {
-          const dc = demographicClauseSQL(routing.demographic_filter, 'resp');
-          if (dc.length > 0) {
-            const demoSQL = `(SELECT DISTINCT resp.respondent_id FROM bjl_respondents resp WHERE ${dc.join(' AND ')})`;
-            reverseCohortSQL = `(${reverseCohortSQL.slice(1,-1)}\nINTERSECT\n${demoSQL.slice(1,-1)})`;
+        // Resonance ladder: start at 70% of params matched, relax to 50%,
+        // then 30%, then any single match. First threshold that yields
+        // n ≥ LOW_N_WARN_THRESHOLD wins. If none do, fall back to the seed.
+        const numParams = universalParams.length;
+        const thresholds = [
+          Math.max(2, Math.ceil(numParams * 0.7)),
+          Math.max(2, Math.ceil(numParams * 0.5)),
+          Math.max(2, Math.ceil(numParams * 0.3)),
+          1,
+        ].filter((v, i, arr) => arr.indexOf(v) === i);
+
+        let chosenSQL = null;
+        let chosenN = 0;
+        let chosenThreshold = null;
+
+        for (const thresh of thresholds) {
+          let candidateSQL = buildResonanceCohortSQL(universalParams, {
+            targetN: 500,
+            matchedAtLeast: thresh,
+          });
+          if (!candidateSQL) continue;
+
+          // Hybrid: intersect resonance cohort with the demographic filter
+          // from Pass 1 (brand/trait dimensions ∩ demographic constraint).
+          if (STRATEGIES_THAT_APPLY_DEMO_FILTER_POST.has(routing.strategy)
+              && routing.demographic_filter) {
+            const dc = demographicClauseSQL(routing.demographic_filter, 'resp');
+            if (dc.length > 0) {
+              const demoSQL = `(SELECT DISTINCT resp.respondent_id FROM bjl_respondents resp WHERE ${dc.join(' AND ')})`;
+              candidateSQL = `(${candidateSQL.slice(1,-1)}\nINTERSECT\n${demoSQL.slice(1,-1)})`;
+            }
+          }
+
+          const n = await cohortCount(candidateSQL);
+          if (n >= LOW_N_WARN_THRESHOLD) {
+            chosenSQL = candidateSQL;
+            chosenN = n;
+            chosenThreshold = thresh;
+            break;
+          }
+          // Track best-effort fallback in case all thresholds underperform
+          if (n > chosenN) {
+            chosenSQL = candidateSQL;
+            chosenN = n;
+            chosenThreshold = thresh;
           }
         }
-        const reverseCohortN = await cohortCount(reverseCohortSQL);
-        if (reverseCohortN < LOW_N_REFUSE_THRESHOLD) {
-          // Fall back to the seed cohort with a transparent note.
+
+        if (chosenN < LOW_N_REFUSE_THRESHOLD || !chosenSQL) {
           useReverse = false;
-          pass4Note = `Reverse-engineered audience too small to use (n=${reverseCohortN}). Showing seed cohort instead.`;
+          pass4Note = `Resonance scoring did not yield a usable cohort (best n=${chosenN}). Showing seed cohort instead.`;
+        } else if (chosenN < LOW_N_WARN_THRESHOLD) {
+          activeCohortSQL = chosenSQL;
+          activeCohortN   = chosenN;
+          pass4Note = `Cross-category discovery cohort: n=${chosenN} (below the n≥100 floor; relaxed to ≥${chosenThreshold} of ${numParams} parameters matched). Read deltas as directional.`;
         } else {
-          activeCohortSQL = reverseCohortSQL;
-          activeCohortN   = reverseCohortN;
+          activeCohortSQL = chosenSQL;
+          activeCohortN   = chosenN;
+          if (droppedParams.length > 0) {
+            pass4Note = `Cross-category discovery cohort: n=${chosenN} (≥${chosenThreshold} of ${numParams} universal parameters matched; ${droppedParams.length} fielding-bound parameter${droppedParams.length === 1 ? '' : 's'} dropped).`;
+          } else {
+            pass4Note = `Cross-category discovery cohort: n=${chosenN} (≥${chosenThreshold} of ${numParams} parameters matched).`;
+          }
         }
       }
     } else {
