@@ -1080,16 +1080,17 @@ const generateOneEmail = async ({
 
     // Haiku polish pass — catches em dashes, is/isn't constructions, and
     // corporate jargon that survive the generation model despite the system
-    // prompt rules. Two steps: (1) regex strip em/en dashes, (2) Haiku call
-    // with a tight rewrite prompt. On any failure or empty response the
-    // pre-polish text ships unchanged.
+    // prompt rules. The model sees the RAW body (em dashes intact) so it can
+    // recognize which sentences need restructuring; punctuation substitution
+    // is explicitly disallowed. A regex pass runs only AFTER Haiku as a final
+    // safety net for any em dash that slipped through.
     let polished = false;
     const stripEmDashesPolish = s => (s || "")
       .replace(/\u2014/g, "-")
       .replace(/\u2013/g, "-");
     const parsedForPolish = parseSubjectBody(finalText);
     const subjectForPolish = parsedForPolish.subject;
-    const bodyForPolish = stripEmDashesPolish(parsedForPolish.body || finalText);
+    const bodyForPolish = parsedForPolish.body || finalText;
     if (bodyForPolish && bodyForPolish.trim()) {
       try {
         const polishCtrl = new AbortController();
@@ -1104,12 +1105,14 @@ const generateOneEmail = async ({
             messages: [{
               role: "user",
               content:
-                "Review this outreach email and make minimal edits only. Fix these specific issues if present:\n" +
-                "1. Remove any em dashes (\u2014) and replace with a comma, period, or reworded phrase\n" +
-                "2. Remove any \"is/isn't\" or \"isn't/is\" constructions - rewrite the sentence without them\n" +
-                "3. Replace corporate jargon (leverage, unlock, actionable, synergies, in today's landscape, drive results) with plain human language\n" +
-                "4. If any sentence reads like it was written by a tool rather than a person, smooth it out\n\n" +
-                "Do not change the content, structure, data points, case study references, article link, or closing ask. Return only the revised email body with no commentary, no labels, no preamble.\n\n" +
+                "You are editing an outreach email. Rewrite sentences where needed to fix the issues below. Substituting punctuation is not a fix; if a sentence contains an em dash, you must restructure the sentence so the em dash is no longer needed (do not swap it for a hyphen, comma, colon, or parenthesis as a shortcut).\n\n" +
+                "Issues to fix:\n" +
+                "1. Em dashes (\u2014) and any hyphen acting as an em dash (e.g. \" - \" between independent clauses). Rewrite the sentence so the dash is gone and the structure reads naturally. Split into two sentences, or recast as a relative clause, or use a period.\n" +
+                "2. \"is/isn't\" and \"isn't/is\" constructions. Rewrite the sentence without them.\n" +
+                "3. Corporate jargon: leverage, unlock, actionable, synergies, in today's landscape, drive results, opportunity to capitalize, value-add, mission-critical. Replace with plain human language and reshape the sentence if needed.\n" +
+                "4. Any sentence that reads like a marketing template rather than something a person would write to a peer. Smooth it out by rewriting, not by trimming.\n\n" +
+                "Preserve: subject matter, the case study reference, the article URL, the data points, the closing ask, paragraph breaks, and the sign-off. Do not invent facts. Do not add greetings or salutations.\n\n" +
+                "Return only the revised email body. No commentary, no labels, no preamble, no surrounding quotes.\n\n" +
                 "EMAIL:\n" + bodyForPolish,
             }],
           }),
