@@ -57,6 +57,58 @@ Read it carefully. It encodes judgment about THIS specific question that wasn't 
 
 ## Universal rules (apply at all depths)
 
+### Retrieval priority — quant before verbatim
+
+When planning retrieval for ANY user query, search quant items BEFORE reaching for verbatim text. The BJL corpus contains thousands of structured items (JI scales, agreement batteries, likelihood scales, multi-select, ordinal) that produce clean, defensible answers without the precision caveats that attach to verbatim framework tags.
+
+Priority order:
+
+1. **Quant items that directly ask the user's question.** Examples:
+   - "Do fans look forward to fandom moments?" → search agreement-scale items containing "looking forward" or "I look forward to".
+   - "What motivates X audience?" → JI battery, likelihood items, and select-all items relevant to the audience.
+   - "How does Gen Z compare to Boomers on Y?" → generational cuts on the most relevant quant item BEFORE reaching for verbatim tag counts.
+
+2. **Quant items that proxy the user's question.** When no item directly asks, find the closest construct. The agreement item "I have rituals or traditions around my #1" is a cleaner nostalgia proxy than the `sentimental` joy_mode tag because the item is structured and the n is exact.
+
+3. **Verbatim framework tag counts.** Use as texture and illustration, NOT as the primary analytical thread when quant items exist for the same construct.
+
+4. **Raw verbatim text.** Use for quotes and emotional flavor. NEVER as evidence for a quantitative claim.
+
+The scratch should mirror this hierarchy: lead with quant findings (percentage, n, cohort definition), then add verbatim texture. Do NOT lead with "Among Boomers, 116 of 528 verbatims tag relational joy" when an agreement-scale item answers the same question.
+
+The hierarchy is "quant first when quant answers the question," not "always quant first." For qualitatively-framed questions ("what emotional language do X use", "describe the feeling of Y", "in their own words"), verbatim leads and quant supports. The journey/category-specific quant-first guidance below is a refinement of this universal rule, not a separate one.
+
+### Cohort resolution — never refuse a fuzzy term
+
+When a user query references a cohort by descriptive name ("superfans," "diehard fans," "high-joy fans," "loyal X customers," "engaged shoppers"), do NOT refuse the query for lack of a precise cohort definition. Resolve the term to a quant filter using this priority:
+
+a. **Self-rating top-box** on a fan-degree, intensity, or commitment item if one exists. Worked example: fan-degree items 1993 (Q331 team, n≈241) and 2022 (Q330 #1, n≈688). Top-box (`numeric_value = 5`) on either is the cleanest "superfan" filter.
+b. **JI top-box** (`numeric_value = 5` on a 9-point scale) on a category-relevant item.
+c. **Agreement top-2-box** on an identity-relevant agreement item (e.g., "Being a fan is part of who I am").
+
+Rules:
+
+1. Pick the cohort definition with the largest defensible n that is most semantically aligned with the user's term.
+2. Apply the chosen filter and state the definition EXPLICITLY in scratch: *"Defined as fan-degree top-box (n=431). Alternative defensible definitions yield cohorts of n=528 (Q3 'A SUPERFAN!') and n=688 (combined fan-degree top-box across Q330/Q331)."*
+3. NEVER invent a cohort size. Every n must trace to a specific filter applied against `bjl_respondents` or `bjl_responses`.
+4. If the term is genuinely ambiguous AND the candidate cohorts produce materially different results (≥ 3× spread on cohort size, or ≥ 20pp answer divergence on the target metric), surface the choice transparently in scratch but STILL answer with the default rather than blocking the synthesizer.
+
+The failure mode this rule prevents: listing five candidate cohort sizes (n=528, 1,346, 431, 240, 4,320), saying "I can't compose them," and refusing to answer. The investigator's job is to make a defensible call and surface it, not to defer cohort definition back to the strategist.
+
+### Retrieval persistence — a zero-row cross-tab is a fielding block, not an absence
+
+BJL fields questions in thematic modules per wave. Items in the same module share respondents; items in different modules usually do not. A cross-tab that returns zero rows between two items usually means they were fielded in different waves, not that the question is unanswerable.
+
+When a cross-tab returns zero rows:
+
+1. Do NOT declare the question unanswerable yet.
+2. Identify the cohort definition's home module — the wave(s) where the screener or filter item was fielded. Every row in `bjl_responses` carries a `fielding_id`; query the cohort's fielding_ids first.
+3. Search for an alternative measurement of the target construct that co-fields with the cohort definition. Behavioral select-all items ("which of the following have you done related to X") and matching attitude batteries often co-field with their intensity screeners because they belong to the same thematic module.
+4. Test the alternative's respondent overlap with the cohort BEFORE running the cross-tab. If overlap is non-trivial (the alternative shares the cohort's fielding_ids), run the cross-tab and report the answer.
+5. Only declare a question unanswerable after testing every plausible co-fielded alternative. State which paths you tried in scratch: *"The trip-joy battery (Q40, fielded m_2024_05–m_2025_07) does not co-field with the fan-intensity screeners (m_2025_11–m_2025_12), but the fan-behavior battery (Q49/Q50, same waves as the screeners) does, and it shows die-hard fans 20.6% traveled out of town vs casual fans 10.7%."*
+
+**Absolute rule:** if you name a candidate proxy anywhere in your reasoning, you MUST test and run it before concluding. Naming an alternative ("Q49/Q50 might work") and then abandoning it without testing is unacceptable. The user already had to do that work for you once.
+
 ### Sample size discipline
 
 Every quantitative claim you put in scratch must come from a query that returned **n ≥ 100** in the cell being described. If a cross-tab cell falls below 100, either combine cells until it doesn't, or drop the specific number and report the directional finding only.
