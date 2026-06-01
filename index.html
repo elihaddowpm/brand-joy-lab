@@ -1510,7 +1510,7 @@ const generateOneEmail = async ({
       let errData; try { errData = await res.json(); } catch { errData = null; }
       const errMsg = errData?.error?.message
         || (res.status === 429 ? "Rate limit hit — increase delay between calls" : "API error " + res.status);
-      return { text: "", error: errMsg, polished: false, sources: { caseStudy: caseStudySources, article: articleSources, bjl: bjlSources } };
+      return { text: "", error: errMsg, polished: false, scorecard: null, revisionHistory: [], humanReviewRequired: false, sources: { caseStudy: caseStudySources, article: articleSources, bjl: bjlSources } };
     }
     const data = await res.json();
     const rawText = data.content?.map(b => b.type === "text" ? b.text : "").filter(Boolean).join("\n") || "";
@@ -1555,6 +1555,66 @@ const generateOneEmail = async ({
       } catch (e) {
         console.warn("Subject fallback failed", e);
       }
+    }
+
+    // Writing OS — eval/revise loop. With the draft validated, sanitized,
+    // and subject ensured, score it against the 8-check rubric. For each
+    // failure, fire a targeted revision and re-evaluate. Max 2 passes; if
+    // checks still fail after that, set humanReviewRequired so the UI can
+    // flag the draft rather than loop indefinitely. Failures inside the
+    // loop (network, parse) are non-fatal — the draft ships as-is.
+    let scorecard = null;
+    let revisionHistory = [];
+    let humanReviewRequired = false;
+    const evalBrief = String(userEmailInstructions || "").trim();
+    try {
+      const parsedForEval = parseSubjectBody(finalText);
+      let curSubject = parsedForEval.subject || "";
+      let curBody = parsedForEval.body || finalText;
+      let evalRes = await evaluateEmail({
+        brief: evalBrief, subject: curSubject, body: curBody,
+      });
+      if (evalRes.ok && evalRes.scorecard) {
+        scorecard = evalRes.scorecard;
+        const MAX_REVISION_PASSES = 2;
+        let pass = 0;
+        while (pass < MAX_REVISION_PASSES) {
+          const failing = Object.entries(scorecard).filter(([, c]) => c && c.pass === false);
+          if (failing.length === 0) break;
+          pass++;
+          console.log("[writing-os] revision pass " + pass + ": " + failing.length + " failure(s):", failing.map(([k]) => k));
+          const revRes = await reviseEmail({
+            brief: evalBrief, subject: curSubject, body: curBody, scorecard,
+          });
+          revisionHistory.push({
+            pass,
+            scorecard,
+            revisions: revRes.revisions || [],
+            errors: revRes.errors || [],
+          });
+          if (revRes.subject) curSubject = revRes.subject;
+          if (revRes.body) curBody = revRes.body;
+          // Re-evaluate so the next loop iteration (or the final shipped
+          // scorecard attached to this email) reflects the post-revision
+          // state of the text.
+          const reEval = await evaluateEmail({
+            brief: evalBrief, subject: curSubject, body: curBody,
+          });
+          if (reEval.ok && reEval.scorecard) scorecard = reEval.scorecard;
+        }
+        const stillFailing = Object.entries(scorecard).filter(([, c]) => c && c.pass === false);
+        if (stillFailing.length > 0) {
+          humanReviewRequired = true;
+          console.warn("[writing-os] still failing after " + pass + " pass(es):", stillFailing.map(([k]) => k));
+        }
+        // Reassemble finalText so the polish pass sees the post-revision
+        // version (parseSubjectBody handles "Subject: ...\n\n<body>").
+        finalText = curSubject ? "Subject: " + curSubject + "\n\n" + curBody : curBody;
+      } else {
+        console.warn("[writing-os] initial evaluation failed; skipping loop:", evalRes.error);
+      }
+    } catch (e) {
+      console.warn("[writing-os] eval/revise loop crashed; shipping draft as-is:", e && e.message);
     }
 
     // Haiku polish pass — sentence-level rewrite, not character
@@ -1619,8 +1679,8 @@ ${rawBody}`,
       }
     }
 
-    return { text: finalText, error: null, polished, sources: { caseStudy: caseStudySources, article: articleSources, bjl: bjlSources } };
-  } catch (e) { return { text: "", error: e.name === "AbortError" ? "Timed out" : e.message, polished: false, sources: { caseStudy: caseStudySources, article: articleSources, bjl: bjlSources } }; }
+    return { text: finalText, error: null, polished, scorecard, revisionHistory, humanReviewRequired, sources: { caseStudy: caseStudySources, article: articleSources, bjl: bjlSources } };
+  } catch (e) { return { text: "", error: e.name === "AbortError" ? "Timed out" : e.message, polished: false, scorecard: null, revisionHistory: [], humanReviewRequired: false, sources: { caseStudy: caseStudySources, article: articleSources, bjl: bjlSources } }; }
 };
 
 const parseSubjectBody = (text) => {
@@ -2607,7 +2667,7 @@ const OutreachMode = ({ setEvidenceRows, strategistContext, setStrategistContext
         "—",
         String(chosen?.sig?.headline || "").slice(0, 80)
       );
-      const { text, error, polished, sources } = await generateOneEmail({
+      const { text, error, polished, sources, scorecard, revisionHistory, humanReviewRequired } = await generateOneEmail({
         contactName: c.name,
         company: account.company || account.name,
         waldoContext: waldoCtxPerContact,
@@ -2620,7 +2680,7 @@ const OutreachMode = ({ setEvidenceRows, strategistContext, setStrategistContext
         priorSameCompany: i > 0,
         bjlInsights: bjlInsight,
       });
-      out.push({ contact: c, text, error, polished, sources });
+      out.push({ contact: c, text, error, polished, sources, scorecard, revisionHistory, humanReviewRequired });
       setResults([...out]);
       setGenProgress(i + 1);
       if (i < selList.length - 1) await new Promise(r => setTimeout(r, 5000));
@@ -3060,7 +3120,7 @@ const BatchMode = ({ strategistContext, setStrategistContext }) => {
           "—",
           String(chosen?.sig?.headline || "").slice(0, 80)
         );
-        const { text, error, polished, sources } = await generateOneEmail({
+        const { text, error, polished, sources, scorecard, revisionHistory, humanReviewRequired } = await generateOneEmail({
           contactName: c.name,
           company: account.company || account.name,
           waldoContext: waldoCtxPerContact,
@@ -3073,7 +3133,7 @@ const BatchMode = ({ strategistContext, setStrategistContext }) => {
           priorSameCompany: j > 0,
           bjlInsights: bjlInsight,
         });
-        out[account.id].push({ contact: c, text, error, polished, sources });
+        out[account.id].push({ contact: c, text, error, polished, sources, scorecard, revisionHistory, humanReviewRequired });
         setResults({ ...out });
         if (j < contacts.length - 1) await new Promise(r => setTimeout(r, 5000));
       }
