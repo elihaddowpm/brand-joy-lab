@@ -458,6 +458,210 @@ if (typeof window !== "undefined") {
 }
 
 /* =========================================================================
+ * Writing OS — Step 2: targeted reviser
+ *
+ * Standalone surgical editor that consumes the scorecard from Step 1 and
+ * fires one targeted revision call per failed check. Each call is given
+ * exactly one instruction; the model is instructed to preserve everything
+ * else verbatim. Calls run sequentially so each reviser sees the prior fix.
+ *
+ * This function is NOT yet wired into generateOneEmail. It's exposed at
+ * window.reviseEmail so the revision behavior can be validated against
+ * real evaluator output in the browser console before pipeline integration
+ * (Step 3 of the Build Order).
+ *
+ * Console usage:
+ *   const evalRes = await window.evaluateEmail({ brief, subject, body });
+ *   const revRes  = await window.reviseEmail({
+ *     brief, subject, body, scorecard: evalRes.scorecard,
+ *   });
+ *   // Re-evaluate to verify the revisions passed:
+ *   const evalAfter = await window.evaluateEmail({
+ *     brief, subject: revRes.subject, body: revRes.body,
+ *   });
+ *
+ * Returns:
+ *   {
+ *     ok: true,            // every requested revision applied
+ *     subject: "...",      // possibly updated
+ *     body: "...",         // possibly updated
+ *     revisions: [{ key, note, applied: true }, ...],
+ *     errors: [],
+ *   }
+ * ========================================================================= */
+
+const EMAIL_REVISION_INSTRUCTIONS = {
+  hook_specific:
+    "The opening sentence of this email is a general industry statement rather than a specific observation about this prospect. Rewrite the opening using the prospect signal from the brief. Keep everything else identical.",
+  no_unsolicited_methodology:
+    "This email contains a sentence that explains why PETERMAYER's approach works in general rather than making a specific observation about this prospect. Remove or rewrite that sentence so it is specific to this prospect's situation. Keep everything else identical.",
+  no_prescription:
+    "This email tells the prospect what they need to do, what their situation requires, or what will happen if they act. Soften or remove that sentence so it observes rather than prescribes. Keep everything else identical.",
+  no_disclaimer:
+    "This email apologizes for the outreach or denies that it is a pitch (e.g. \"I'm not looking to pitch you\", \"this isn't a sales call\"). Remove that sentence entirely. Keep everything else identical.",
+  no_rhetorical_question:
+    "This email poses a rhetorical question to the prospect about their industry or challenge. Rewrite the question as a direct statement or remove it. Keep everything else identical.",
+  subject_clean:
+    "The subject line is not a real subject — it may be wrapped in brackets, a placeholder description, or otherwise unusable. Replace it with a real subject line (no brackets, no placeholder syntax) drawn from the email's specific content. Keep the email body identical.",
+  under_150_words:
+    "The email body is over 150 words. Trim it to under 150 words by cutting the weakest sentence first. Preserve the hook, the offer, the closing ask, and any specific data point, case study reference, or article URL.",
+  collaborative_ask:
+    "The closing ask reads as transactional rather than mutual. Rewrite the ask so it offers something AND invites the prospect's input (e.g. \"Happy to share our thinking and learn what you're seeing\"). Keep everything else identical.",
+};
+
+const EMAIL_REVISER_SYSTEM_PROMPT =
+  "You are a targeted editor for cold outreach emails. Each call gives you one specific failed check from a quality rubric. Apply only the requested edit. Preserve everything else verbatim — the hook (unless that is the check), the data point, the case study reference, the article URL, the closing ask (unless that is the check), and the sign-off. Return the full revised email starting with a \"Subject:\" line, followed by a blank line, followed by the body. No commentary, no labels, no preamble.";
+
+// Parse a reviser response into { subject, body }. The reviser is prompted
+// to emit "Subject: <line>\n\n<body>"; we tolerate missing subject prefix
+// by treating the whole response as body (and the caller falls back to the
+// prior subject in that case).
+const parseRevisionResponse = (text) => {
+  const trimmed = String(text || "").trim();
+  const m = trimmed.match(/^\s*Subject:\s*([^\n]*)\n+([\s\S]*)$/i);
+  if (m) return { subject: m[1].trim(), body: m[2].trim() };
+  return { subject: "", body: trimmed };
+};
+
+const runOneRevisionCall = async ({ brief, subject, body, key, instruction, note }) => {
+  const noteLine = note ? "Evaluator note: " + note : "";
+  const currentEmail =
+    (subject ? "Subject: " + subject + "\n\n" : "") + (body || "");
+  const userMessage = [
+    "You are revising a cold outreach email. Apply ONE targeted edit only.",
+    "",
+    "FAILED CHECK: " + key,
+    noteLine,
+    "",
+    "INSTRUCTION:",
+    instruction,
+    "",
+    "ORIGINAL BRIEF (for context):",
+    String(brief || "(no brief provided)").trim(),
+    "",
+    "CURRENT EMAIL:",
+    currentEmail,
+    "",
+    "Return the full revised email in this exact shape (no commentary, no labels, no preamble):",
+    "Subject: <subject text>",
+    "",
+    "<body text>",
+  ].filter(Boolean).join("\n");
+
+  console.log("[revise] → " + key);
+
+  let res;
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 25000);
+    res = await fetch("/api/claude", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: ctrl.signal,
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 900,
+        system: EMAIL_REVISER_SYSTEM_PROMPT,
+        messages: [{ role: "user", content: userMessage }],
+      }),
+    });
+    clearTimeout(timer);
+  } catch (e) {
+    const error = e.name === "AbortError" ? "timeout" : (e.message || "network_error");
+    console.warn("[revise] ← " + key + " network/abort", error);
+    return { ok: false, error };
+  }
+
+  if (res.status !== 200) {
+    console.warn("[revise] ← " + key + " non-200", res.status);
+    return { ok: false, error: "reviser_" + res.status };
+  }
+
+  let data;
+  try { data = await res.json(); } catch (e) {
+    return { ok: false, error: "response_not_json" };
+  }
+  const raw = (data.content || [])
+    .map(b => b && b.type === "text" ? (b.text || "") : "")
+    .filter(Boolean)
+    .join("")
+    .trim();
+
+  if (!raw) {
+    console.warn("[revise] ← " + key + " empty_response");
+    return { ok: false, error: "empty_response" };
+  }
+
+  const parsed = parseRevisionResponse(raw);
+  console.log("[revise] ← " + key + " ok", {
+    subjLen: (parsed.subject || "").length,
+    bodyLen: (parsed.body || "").length,
+  });
+  // If the reviser dropped the subject prefix, keep the prior subject —
+  // most checks operate on the body and shouldn't touch the subject.
+  return {
+    ok: true,
+    subject: parsed.subject || subject || "",
+    body: parsed.body || body || "",
+  };
+};
+
+const reviseEmail = async ({ brief, subject, body, scorecard } = {}) => {
+  const failures = Object.entries(scorecard || {})
+    .filter(([, c]) => c && c.pass === false)
+    .map(([key, c]) => ({ key, note: (c && c.note) || "" }));
+
+  if (failures.length === 0) {
+    console.log("[revise] no failures — passthrough");
+    return { ok: true, subject: subject || "", body: body || "", revisions: [], errors: [] };
+  }
+
+  console.log("[revise] " + failures.length + " failure(s) to fix:", failures.map(f => f.key));
+
+  let curSubject = subject || "";
+  let curBody = body || "";
+  const revisions = [];
+  const errors = [];
+
+  for (const { key, note } of failures) {
+    const instruction = EMAIL_REVISION_INSTRUCTIONS[key];
+    if (!instruction) {
+      console.warn("[revise] no instruction for check:", key);
+      errors.push({ key, error: "no_instruction" });
+      revisions.push({ key, note, applied: false });
+      continue;
+    }
+    const result = await runOneRevisionCall({
+      brief, subject: curSubject, body: curBody, key, instruction, note,
+    });
+    if (result.ok) {
+      curSubject = result.subject;
+      curBody = result.body;
+      revisions.push({ key, note, applied: true });
+    } else {
+      errors.push({ key, error: result.error });
+      revisions.push({ key, note, applied: false });
+    }
+  }
+
+  return {
+    ok: errors.length === 0,
+    subject: curSubject,
+    body: curBody,
+    revisions,
+    errors,
+  };
+};
+
+// Expose for console-based validation. Step 3 (pipeline wiring) will
+// consume reviseEmail from inside generateOneEmail, looped with
+// evaluateEmail at most twice before flagging the draft for human review.
+if (typeof window !== "undefined") {
+  window.reviseEmail = reviseEmail;
+  window.EMAIL_REVISION_INSTRUCTIONS = EMAIL_REVISION_INSTRUCTIONS;
+}
+
+/* =========================================================================
  * Waldo parsing / context building — ported from V1 frontend (archive/index_v1.html).
  * ========================================================================= */
 
