@@ -2679,6 +2679,12 @@ const OutreachMode = ({ setEvidenceRows, strategistContext, setStrategistContext
         contact: c, text, error, polished, sources, scorecard, revisionHistory, humanReviewRequired,
         brief: emailInstructions,
         dismissed: false,
+        approved: false,
+        approvedAt: null,
+        // Snapshot once. Subsequent Fix / edit actions update `text`;
+        // originalGenerated stays as the raw pipeline output for diff /
+        // corpus capture purposes.
+        originalGenerated: text,
       });
       setResults([...out]);
       setGenProgress(i + 1);
@@ -2879,11 +2885,12 @@ const EmailSources = ({
     : [];
   const canInteract = typeof onUpdate === "function" && !dismissed && hasScorecard;
   const isBusy = fixingAll || fixingCheck !== null;
-  // Render if any provenance, the polish pass ran, or the scorecard is
-  // available. The polished / needs-review indicators sit next to the
-  // Sources toggle as tiny pills so the user can see status at a glance
-  // without expanding.
-  if (!hasArticle && !hasBjl && !hasCs && !polished && !hasScorecard) return null;
+  // Render if any provenance is available, the polish pass ran, or the
+  // draft needs review. Clean drafts that pass the rubric don't surface
+  // the scorecard — only Sources content (article / bjl / case study)
+  // is expandable; the polished pill stays as a tiny info indicator.
+  const showEvaluationSection = hasScorecard && humanReviewRequired && !dismissed;
+  if (!hasArticle && !hasBjl && !hasCs && !polished && !showEvaluationSection && !dismissed) return null;
   const sectionStyle = { marginBottom: 12 };
   const headerStyle = { fontWeight: 600, fontSize: 11, letterSpacing: "0.04em", marginBottom: 4, color: "var(--grey-1)" };
   const pillStyle = {
@@ -2907,7 +2914,7 @@ const EmailSources = ({
   const fixBtnDisabledStyle = {
     ...fixBtnStyle, cursor: "not-allowed", opacity: 0.5,
   };
-  const hasAnyExpandable = hasArticle || hasBjl || hasCs || hasScorecard;
+  const hasAnyExpandable = hasArticle || hasBjl || hasCs || showEvaluationSection;
   const showReviewBadge = humanReviewRequired && !dismissed;
 
   // Helpers — call out to the existing evaluator + reviser. The Fix path
@@ -3069,15 +3076,13 @@ const EmailSources = ({
               ) : null}
             </div>
           )}
-          {hasScorecard && (
+          {showEvaluationSection && (
             <div>
               <div style={{ ...headerStyle, display: "flex", alignItems: "center", gap: 8 }}>
                 <span>EVALUATION</span>
-                {showReviewBadge ? (
-                  <span style={{ fontSize: 10, color: "#8a6500", fontWeight: 600, textTransform: "none", letterSpacing: 0 }}>
-                    Needs review
-                  </span>
-                ) : null}
+                <span style={{ fontSize: 10, color: "#8a6500", fontWeight: 600, textTransform: "none", letterSpacing: 0 }}>
+                  Needs review
+                </span>
               </div>
               {Object.entries(scorecard).map(([key, check]) => {
                 const tried = attemptedChecks.has(key);
@@ -3156,11 +3161,80 @@ const EmailSources = ({
 };
 
 const OutreachEmailCard = ({ result, index, onUpdate }) => {
-  const { contact, text, error, sources, polished, scorecard, revisionHistory, humanReviewRequired, brief, dismissed } = result;
+  const { contact, text, error, sources, polished, scorecard, revisionHistory, humanReviewRequired, brief, dismissed, approved } = result;
   const { subject, body } = parseSubjectBody(text || "");
+  const [editSubject, setEditSubject] = useState(subject);
+  const [editBody, setEditBody] = useState(body);
+  const bodyRef = useRef(null);
+
+  // Sync local edit state whenever the underlying result.text changes —
+  // e.g. when a Fix action upstream rewrites the email.
+  useEffect(() => {
+    setEditSubject(subject);
+    setEditBody(body);
+  }, [text]);
+
+  // Auto-resize body textarea to its content.
+  useEffect(() => {
+    if (bodyRef.current) {
+      bodyRef.current.style.height = "auto";
+      bodyRef.current.style.height = bodyRef.current.scrollHeight + "px";
+    }
+  }, [editBody]);
+
+  const hasEdits = editSubject !== subject || editBody !== body;
   const initials = (contact.name || "?").split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase();
+
+  const composeText = () => editSubject
+    ? "Subject: " + editSubject + "\n\n" + editBody
+    : editBody;
+
+  const handleSaveApprove = () => {
+    if (typeof onUpdate !== "function") return;
+    const newText = composeText();
+    onUpdate(prev => ({
+      ...prev,
+      text: newText,
+      approved: true,
+      approvedAt: new Date().toISOString(),
+      originalGenerated: prev.originalGenerated || prev.text,
+      userEdited: newText !== (prev.originalGenerated || prev.text),
+    }));
+  };
+
+  const handleDiscardEdits = () => {
+    setEditSubject(subject);
+    setEditBody(body);
+  };
+
+  const copyText = () => navigator.clipboard.writeText(composeText());
+
+  const subjInputStyle = {
+    flex: 1, border: "none", background: "transparent",
+    font: "inherit", color: "inherit", outline: "none",
+    padding: 0,
+  };
+  const bodyTextareaStyle = {
+    width: "100%", border: "none", background: "transparent",
+    font: "inherit", color: "inherit", outline: "none",
+    padding: 0, margin: 0, resize: "none", overflow: "hidden",
+    whiteSpace: "pre-wrap", lineHeight: 1.55,
+  };
+  const btnStyle = {
+    fontSize: 12, padding: "4px 10px",
+    border: "1px solid var(--grey-4, #d5d5d5)", borderRadius: 3,
+    background: "white", color: "var(--grey-1)", cursor: "pointer",
+    fontFamily: "inherit",
+  };
+  const primaryBtnStyle = {
+    ...btnStyle,
+    background: approved && !hasEdits ? "#e8f5e9" : "var(--grey-1, #222)",
+    color: approved && !hasEdits ? "#2a7a2a" : "white",
+    borderColor: approved && !hasEdits ? "#bcd9bc" : "var(--grey-1, #222)",
+  };
+
   return (
-    <div className="email-card">
+    <div className="email-card" style={approved ? { borderLeft: "3px solid #4caf50" } : undefined}>
       <div className="ec-head">
         <div className="ec-avatar">{initials}</div>
         <div className="ec-to">
@@ -3168,8 +3242,7 @@ const OutreachEmailCard = ({ result, index, onUpdate }) => {
           <div className="role">{[contact.role, contact.email].filter(Boolean).join(" · ")}</div>
         </div>
         <div className="ec-actions">
-          <button className="icon-btn" title="Copy"
-            onClick={() => navigator.clipboard.writeText(text || "")}>
+          <button className="icon-btn" title="Copy" onClick={copyText}>
             <Icon name="copy" />
           </button>
         </div>
@@ -3179,8 +3252,43 @@ const OutreachEmailCard = ({ result, index, onUpdate }) => {
           <div style={{color: "var(--red)", fontSize: 13}}>Failed: {error}</div>
         ) : (
           <>
-            <div className="ec-subject"><span className="label">Subject</span>{subject || "(no subject)"}</div>
-            {body.split(/\n{2,}/).map((p, i) => <p key={i}>{p}</p>)}
+            <div className="ec-subject" style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
+              <span className="label">Subject</span>
+              <input
+                type="text"
+                value={editSubject}
+                onChange={e => setEditSubject(e.target.value)}
+                placeholder="(no subject)"
+                style={subjInputStyle}
+              />
+            </div>
+            <textarea
+              ref={bodyRef}
+              value={editBody}
+              onChange={e => setEditBody(e.target.value)}
+              style={bodyTextareaStyle}
+            />
+            <div style={{ display: "flex", gap: 8, marginTop: 10, alignItems: "center" }}>
+              <button
+                type="button"
+                style={primaryBtnStyle}
+                onClick={handleSaveApprove}
+                disabled={approved && !hasEdits}
+                title={approved && !hasEdits ? "Already approved" : (hasEdits ? "Save your edits and approve this email" : "Approve this email as the example")}
+              >
+                {approved && !hasEdits ? "✓ Approved" : (hasEdits ? "Save edits & approve" : "Approve")}
+              </button>
+              {hasEdits ? (
+                <button type="button" style={btnStyle} onClick={handleDiscardEdits} title="Revert your edits">
+                  Discard edits
+                </button>
+              ) : null}
+              {approved && hasEdits ? (
+                <span style={{ fontSize: 11, color: "var(--grey-2)" }}>
+                  unsaved edits since last approval
+                </span>
+              ) : null}
+            </div>
             <EmailSources
               sources={sources}
               polished={polished}
@@ -3363,6 +3471,9 @@ const BatchMode = ({ strategistContext, setStrategistContext }) => {
           contact: c, text, error, polished, sources, scorecard, revisionHistory, humanReviewRequired,
           brief: instructions,
           dismissed: false,
+          approved: false,
+          approvedAt: null,
+          originalGenerated: text,
         });
         setResults({ ...out });
         setGenPhase("");
@@ -3553,22 +3664,94 @@ const BatchRow = ({ account, index, open, onToggle, results, bjlStatus, onUpdate
 };
 
 const BatchEmailRow = ({ result, onUpdate }) => {
-  const [expanded, setExpanded] = useState(false);
-  const { contact, text, error, sources, polished, scorecard, revisionHistory, humanReviewRequired, brief, dismissed } = result;
+  const { contact, text, error, sources, polished, scorecard, revisionHistory, humanReviewRequired, brief, dismissed, approved } = result;
   const { subject, body } = parseSubjectBody(text || "");
+  const [editSubject, setEditSubject] = useState(subject);
+  const [editBody, setEditBody] = useState(body);
+  const bodyRef = useRef(null);
+
+  useEffect(() => {
+    setEditSubject(subject);
+    setEditBody(body);
+  }, [text]);
+
+  useEffect(() => {
+    if (bodyRef.current) {
+      bodyRef.current.style.height = "auto";
+      bodyRef.current.style.height = bodyRef.current.scrollHeight + "px";
+    }
+  }, [editBody]);
+
+  const hasEdits = editSubject !== subject || editBody !== body;
+
+  const composeText = () => editSubject
+    ? "Subject: " + editSubject + "\n\n" + editBody
+    : editBody;
+
+  const handleSaveApprove = () => {
+    if (typeof onUpdate !== "function") return;
+    const newText = composeText();
+    onUpdate(prev => ({
+      ...prev,
+      text: newText,
+      approved: true,
+      approvedAt: new Date().toISOString(),
+      originalGenerated: prev.originalGenerated || prev.text,
+      userEdited: newText !== (prev.originalGenerated || prev.text),
+    }));
+  };
+
+  const handleDiscardEdits = () => {
+    setEditSubject(subject);
+    setEditBody(body);
+  };
+
+  const copyText = () => navigator.clipboard.writeText(composeText());
+
+  const subjInputStyle = {
+    flex: 1, border: "none", background: "transparent",
+    font: "inherit", color: "inherit", outline: "none", padding: 0,
+  };
+  const bodyTextareaStyle = {
+    width: "100%", border: "none", background: "transparent",
+    font: "inherit", color: "inherit", outline: "none",
+    padding: 0, margin: 0, resize: "none", overflow: "hidden",
+    whiteSpace: "pre-wrap", lineHeight: 1.55,
+  };
+  const btnStyle = {
+    fontSize: 12, padding: "4px 10px",
+    border: "1px solid var(--grey-4, #d5d5d5)", borderRadius: 3,
+    background: "white", color: "var(--grey-1)", cursor: "pointer",
+    fontFamily: "inherit",
+  };
+  const primaryBtnStyle = {
+    ...btnStyle,
+    background: approved && !hasEdits ? "#e8f5e9" : "var(--grey-1, #222)",
+    color: approved && !hasEdits ? "#2a7a2a" : "white",
+    borderColor: approved && !hasEdits ? "#bcd9bc" : "var(--grey-1, #222)",
+  };
+
   return (
-    <div className={`row-email v2 ${expanded ? "expanded" : ""}`}>
+    <div className="row-email v2 expanded" style={approved ? { borderLeft: "3px solid #4caf50" } : undefined}>
       <div className="re-head">
         <div>
           <div className="re-to">{contact.name}</div>
           <div className="re-role">{[contact.role, contact.email].filter(Boolean).join(" · ")}</div>
         </div>
-        <div className="re-subj">
-          <span className="sub-label">Subj</span>{subject || "(no subject)"}
+        <div className="re-subj" style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
+          <span className="sub-label">Subj</span>
+          <input
+            type="text"
+            value={editSubject}
+            onChange={e => setEditSubject(e.target.value)}
+            placeholder="(no subject)"
+            disabled={!!error}
+            style={subjInputStyle}
+          />
         </div>
         <div className="re-actions">
           {!error && (
-            <button className="icon-btn" title="Copy" onClick={() => navigator.clipboard.writeText(text || "")}>
+            <button className="icon-btn" title="Copy" onClick={copyText}>
               <Icon name="copy" />
             </button>
           )}
@@ -3578,7 +3761,33 @@ const BatchEmailRow = ({ result, onUpdate }) => {
         <div className="re-error">Failed: {error}</div>
       ) : (
         <>
-          <div className="re-body">{body}</div>
+          <textarea
+            ref={bodyRef}
+            value={editBody}
+            onChange={e => setEditBody(e.target.value)}
+            style={bodyTextareaStyle}
+          />
+          <div style={{ display: "flex", gap: 8, marginTop: 10, alignItems: "center" }}>
+            <button
+              type="button"
+              style={primaryBtnStyle}
+              onClick={handleSaveApprove}
+              disabled={approved && !hasEdits}
+              title={approved && !hasEdits ? "Already approved" : (hasEdits ? "Save your edits and approve this email" : "Approve this email as the example")}
+            >
+              {approved && !hasEdits ? "✓ Approved" : (hasEdits ? "Save edits & approve" : "Approve")}
+            </button>
+            {hasEdits ? (
+              <button type="button" style={btnStyle} onClick={handleDiscardEdits} title="Revert your edits">
+                Discard edits
+              </button>
+            ) : null}
+            {approved && hasEdits ? (
+              <span style={{ fontSize: 11, color: "var(--grey-2)" }}>
+                unsaved edits since last approval
+              </span>
+            ) : null}
+          </div>
           <EmailSources
             sources={sources}
             polished={polished}
@@ -3590,9 +3799,6 @@ const BatchEmailRow = ({ result, onUpdate }) => {
             dismissed={dismissed}
             onUpdate={onUpdate}
           />
-          <button className="re-expand" onClick={() => setExpanded(!expanded)}>
-            {expanded ? "Collapse" : "Expand full body"}
-          </button>
         </>
       )}
     </div>
