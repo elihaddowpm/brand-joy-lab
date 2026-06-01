@@ -310,18 +310,110 @@ const parseWaldoJSON = (text) => {
   return { pilot: raw.pilot || raw.company || 'Waldo Intelligence', accounts };
 };
 
-const buildWaldoSystemContext = (account) => {
+/* Signal scoring + role-based rotation.
+ *
+ * Fix 1: Waldo extraction sometimes assigns a secondary signal type (a new
+ * hire, an org change) as `top_signal` even when a higher-value signal type
+ * (an executive public quote) exists in deep_signals. We rescore all
+ * signals by signal_type priority — with a small bonus for direct quotes —
+ * and use the highest as the primary hook.
+ *
+ * Fix 2: In batch mode, multiple contacts at the same account were all
+ * seeing the same hook. We now pick a role-affinity-matched signal per
+ * contact and track used origins across the per-account loop so two
+ * contacts don't open with the same sentence.
+ */
+const SIGNAL_PRIORITY = {
+  executive_public_statement: 5,
+  executive_mandate: 4,
+  organizational_change: 3,
+  campaign_or_activation: 2,
+  general_context: 1,
+};
+
+const ROLE_SIGNAL_AFFINITY = [
+  { keywords: ['ceo', 'president', 'chief executive'],   prefer: 'executive_mandate' },
+  { keywords: ['cmo', 'chief marketing', 'marketing'],   prefer: 'executive_public_statement' },
+  { keywords: ['cso', 'chief strategy', 'strategy'],     prefer: 'executive_mandate' },
+  { keywords: ['sales', 'revenue', 'partnerships'],      prefer: 'organizational_change' },
+  { keywords: ['director', 'vp', 'vice president'],      prefer: 'campaign_or_activation' },
+];
+
+const scoreSignal = (s) => {
+  if (!s) return -1;
+  const base = SIGNAL_PRIORITY[s.signal_type] || 0;
+  const quoteBonus = (s.exact_quote && String(s.exact_quote).trim()) ? 0.5 : 0;
+  return base + quoteBonus;
+};
+
+// Returns [{ sig, origin }, ...] sorted high-to-low. `origin` is a stable
+// identifier so the per-account batch loop can track which signals have
+// already been assigned to earlier contacts.
+const allSignalsForAccount = (account) => {
+  if (!account) return [];
+  const arr = [];
+  if (account.top_signal) arr.push({ sig: account.top_signal, origin: 'top' });
+  (account.deep_signals || []).forEach((s, i) => arr.push({ sig: s, origin: 'deep_' + i }));
+  return arr.slice().sort((a, b) => scoreSignal(b.sig) - scoreSignal(a.sig));
+};
+
+const preferredTypeForRole = (role) => {
+  const r = String(role || '').toLowerCase();
+  const m = ROLE_SIGNAL_AFFINITY.find(rsa => rsa.keywords.some(k => r.includes(k)));
+  return m ? m.prefer : null;
+};
+
+const pickPrimarySignal = (account) => {
+  const sorted = allSignalsForAccount(account);
+  return sorted.length ? sorted[0] : null;
+};
+
+// Pick a signal for this specific contact. Role-affinity match wins if a
+// signal of the preferred type exists AND hasn't been used by an earlier
+// contact at the same account. Otherwise fall back to the highest-priority
+// unused signal. Last resort: the global top (may repeat).
+const pickSignalForContact = (account, contactRole, usedOrigins) => {
+  const sorted = allSignalsForAccount(account);
+  if (sorted.length === 0) return null;
+  const used = usedOrigins || new Set();
+  const preferred = preferredTypeForRole(contactRole);
+  if (preferred) {
+    const prefMatch = sorted.find(s => s.sig.signal_type === preferred && !used.has(s.origin));
+    if (prefMatch) return prefMatch;
+  }
+  const anyUnused = sorted.find(s => !used.has(s.origin));
+  if (anyUnused) return anyUnused;
+  return sorted[0];
+};
+
+// Rebuild an account object with `chosen.sig` as top_signal and every other
+// signal demoted to deep_signals. Lets buildWaldoSystemContext stay
+// signal-agnostic — it just formats whatever account it's handed.
+const accountWithPrimarySignal = (account, chosen) => {
+  if (!account || !chosen || !chosen.sig) return account;
+  const allSigs = allSignalsForAccount(account);
+  const others = allSigs.filter(s => s.origin !== chosen.origin).map(s => s.sig);
+  return { ...account, top_signal: chosen.sig, deep_signals: others };
+};
+
+const buildWaldoSystemContext = (account, opts) => {
   if (!account) return '';
+  // Fix 1: rescore signals so the highest-priority by signal_type wins
+  // the primary slot. Callers can pass opts.primarySignal to override
+  // (used for per-contact rotation in batch mode).
+  const chosen = (opts && opts.primarySignal) || pickPrimarySignal(account);
+  const effective = chosen ? accountWithPrimarySignal(account, chosen) : account;
+
   const lines = [];
   lines.push('=== WALDO PROSPECT INTELLIGENCE ===');
   lines.push('');
-  const tension = account.creative_tension || account.top_signal?.why_it_matters || '';
+  const tension = effective.creative_tension || effective.top_signal?.why_it_matters || '';
   if (tension) {
     lines.push('STRATEGIC TENSION (primary brief — the problem BJL data must speak to):');
     lines.push(tension);
     lines.push('');
   }
-  const urgency = account.top_signal?.urgency || 'Building';
+  const urgency = effective.top_signal?.urgency || 'Building';
   const urgencyGuidance = {
     'Now': 'The email should feel timely and anchored to something happening right now. Reference the top signal directly if it strengthens the outreach.',
     'Seasonal': 'Anchor the frame to the current moment without over-indexing on urgency.',
@@ -329,28 +421,28 @@ const buildWaldoSystemContext = (account) => {
   };
   lines.push('URGENCY: ' + urgency + ' — ' + (urgencyGuidance[urgency] || ''));
   lines.push('');
-  if (account.top_signal) {
-    lines.push('PRIMARY SIGNAL: ' + (account.top_signal.headline || ''));
-    if (account.top_signal.detail) lines.push('Detail: ' + account.top_signal.detail);
-    if (account.top_signal.exact_quote) {
-      lines.push('EXACT QUOTE FROM THEIR LEADERSHIP: \"' + account.top_signal.exact_quote + '\"');
+  if (effective.top_signal) {
+    lines.push('PRIMARY SIGNAL: ' + (effective.top_signal.headline || ''));
+    if (effective.top_signal.detail) lines.push('Detail: ' + effective.top_signal.detail);
+    if (effective.top_signal.exact_quote) {
+      lines.push('EXACT QUOTE FROM THEIR LEADERSHIP: \"' + effective.top_signal.exact_quote + '\"');
       lines.push('(If you use this quote, use it verbatim — these are their own words.)');
     }
-    if (account.top_signal.why_it_matters) lines.push('Why it matters: ' + account.top_signal.why_it_matters);
+    if (effective.top_signal.why_it_matters) lines.push('Why it matters: ' + effective.top_signal.why_it_matters);
   }
   lines.push('');
-  const hook = account.sharpened_hook || account.suggested_hook || '';
+  const hook = effective.sharpened_hook || effective.suggested_hook || '';
   if (hook) {
     lines.push('SHARPENED HOOK (directional — find your own expression grounded in BJL data):');
     lines.push(hook);
     lines.push('');
   }
-  if (account.petermayer_relevance) {
+  if (effective.petermayer_relevance) {
     lines.push('PETERMAYER POSITIONING FOR THIS ACCOUNT:');
-    lines.push(account.petermayer_relevance);
+    lines.push(effective.petermayer_relevance);
     lines.push('');
   }
-  const deepSignals = account.deep_signals || [];
+  const deepSignals = effective.deep_signals || [];
   if (deepSignals.length) {
     lines.push('DEEP SIGNALS (background intelligence — use to inform which BJL findings are most relevant):');
     deepSignals.forEach(s => {
@@ -2064,7 +2156,8 @@ const OutreachMode = ({ setEvidenceRows, strategistContext, setStrategistContext
     setGenerating(true);
     setResults([]);
     setGenProgress(0);
-    const waldoCtx = buildWaldoSystemContext(account);
+    // Waldo context is built per contact below so the primary hook can vary
+    // by role and avoid repeats across the batch.
 
     // Brief-signal check (must mirror the regex in generateOneEmail) — if
     // the brief asks for BJL data, pre-pull one corpus-wide finding via
@@ -2108,12 +2201,25 @@ const OutreachMode = ({ setEvidenceRows, strategistContext, setStrategistContext
 
     const out = [];
     const selList = contacts.filter(c => selected.has(contactKey(c)));
+    const usedSignals = new Set();
     for (let i = 0; i < selList.length; i++) {
       const c = selList[i];
+      const chosen = pickSignalForContact(account, c.role, usedSignals);
+      if (chosen) usedSignals.add(chosen.origin);
+      const waldoCtxPerContact = buildWaldoSystemContext(account, { primarySignal: chosen });
+      console.log(
+        "[waldo-rotation]",
+        (account.company || account.name) + " →",
+        c.name + " (" + (c.role || "no role") + ")",
+        "signal:",
+        chosen?.sig?.signal_type || "none",
+        "—",
+        String(chosen?.sig?.headline || "").slice(0, 80)
+      );
       const { text, error, polished, sources } = await generateOneEmail({
         contactName: c.name,
         company: account.company || account.name,
-        waldoContext: waldoCtx,
+        waldoContext: waldoCtxPerContact,
         userStrategistContext: strategistContext,
         userEmailInstructions: emailInstructions,
         audienceModeValue: "external",
@@ -2530,7 +2636,6 @@ const BatchMode = ({ strategistContext, setStrategistContext }) => {
     // round-tripping between account iterations.
     const insightLocal = { ...accountInsights };
     for (const account of accounts) {
-      const waldoCtx = buildWaldoSystemContext(account);
       const contacts = (account.contacts || []).map(normalizeContact).filter(Boolean);
       out[account.id] = [];
       setResults({ ...out });
@@ -2549,12 +2654,25 @@ const BatchMode = ({ strategistContext, setStrategistContext }) => {
         }
       }
 
+      const usedSignals = new Set();
       for (let j = 0; j < contacts.length; j++) {
         const c = contacts[j];
+        const chosen = pickSignalForContact(account, c.role, usedSignals);
+        if (chosen) usedSignals.add(chosen.origin);
+        const waldoCtxPerContact = buildWaldoSystemContext(account, { primarySignal: chosen });
+        console.log(
+          "[waldo-rotation]",
+          (account.company || account.name) + " →",
+          c.name + " (" + (c.role || "no role") + ")",
+          "signal:",
+          chosen?.sig?.signal_type || "none",
+          "—",
+          String(chosen?.sig?.headline || "").slice(0, 80)
+        );
         const { text, error, polished, sources } = await generateOneEmail({
           contactName: c.name,
           company: account.company || account.name,
-          waldoContext: waldoCtx,
+          waldoContext: waldoCtxPerContact,
           userStrategistContext: strategistContext,
           userEmailInstructions: instructions,
           audienceModeValue: "external",
