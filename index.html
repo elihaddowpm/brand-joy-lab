@@ -1337,7 +1337,12 @@ const generateOneEmail = async ({
   // (email_mode=true). Cached per account by the caller, so multiple
   // contacts at the same account reuse the same finding.
   bjlInsights = "",
+  // onPhase: optional callback the parent UI uses to surface multi-step
+  // loading states. Fires with one of "drafting" | "evaluating" |
+  // "refining" | "polishing" as the pipeline advances.
+  onPhase,
 }) => {
+  const emit = typeof onPhase === "function" ? onPhase : () => {};
   // Brief-first orchestration: parse the brief for content signals before
   // fetching anything. Nothing injects unless the brief earns it.
   const briefLower     = (userEmailInstructions || "").toLowerCase();
@@ -1493,6 +1498,7 @@ const generateOneEmail = async ({
     "Write the outreach email for " + contactName + " at " + company + ".",
   ].filter(Boolean).join("\n\n");
   try {
+    emit("drafting");
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 28000);
     const res = await fetch("/api/claude", {
@@ -1568,6 +1574,7 @@ const generateOneEmail = async ({
     let humanReviewRequired = false;
     const evalBrief = String(userEmailInstructions || "").trim();
     try {
+      emit("evaluating");
       const parsedForEval = parseSubjectBody(finalText);
       let curSubject = parsedForEval.subject || "";
       let curBody = parsedForEval.body || finalText;
@@ -1582,6 +1589,7 @@ const generateOneEmail = async ({
           const failing = Object.entries(scorecard).filter(([, c]) => c && c.pass === false);
           if (failing.length === 0) break;
           pass++;
+          if (pass === 1) emit("refining");
           console.log("[writing-os] revision pass " + pass + ": " + failing.length + " failure(s):", failing.map(([k]) => k));
           const revRes = await reviseEmail({
             brief: evalBrief, subject: curSubject, body: curBody, scorecard,
@@ -1630,6 +1638,7 @@ const generateOneEmail = async ({
     const rawBody = parsedForPolish.body || finalText;
     if (rawBody && rawBody.trim()) {
       try {
+        emit("polishing");
         const polishCtrl = new AbortController();
         const polishTimer = setTimeout(() => polishCtrl.abort(), 20000);
         const polishRes = await fetch("/api/claude", {
@@ -2567,6 +2576,7 @@ const OutreachMode = ({ setEvidenceRows, strategistContext, setStrategistContext
   const [selected, setSelected] = useState(new Set());
   const [emailInstructions, setEmailInstructions] = useState("");
   const [generating, setGenerating] = useState(false);
+  const [genPhase, setGenPhase] = useState("");
   const [results, setResults] = useState([]); // { contact, text, error }
   const [genProgress, setGenProgress] = useState(0);
   const [bjlPullStatus, setBjlPullStatus] = useState("idle"); // idle | loading | ready | error
@@ -2679,12 +2689,15 @@ const OutreachMode = ({ setEvidenceRows, strategistContext, setStrategistContext
         batchIndex: i,
         priorSameCompany: i > 0,
         bjlInsights: bjlInsight,
+        onPhase: (p) => setGenPhase(p),
       });
       out.push({ contact: c, text, error, polished, sources, scorecard, revisionHistory, humanReviewRequired });
       setResults([...out]);
       setGenProgress(i + 1);
+      setGenPhase("");
       if (i < selList.length - 1) await new Promise(r => setTimeout(r, 5000));
     }
+    setGenPhase("");
     setGenerating(false);
   };
 
@@ -2807,7 +2820,9 @@ const OutreachMode = ({ setEvidenceRows, strategistContext, setStrategistContext
                 <button className="btn primary" onClick={generate}
                   disabled={selected.size === 0 || generating}>
                   <Icon name="sparkle" size={12} />
-                  {generating ? `Generating ${genProgress}/${selected.size}…` : `Generate ${selected.size} emails`}
+                  {generating
+                    ? `Generating ${genProgress}/${selected.size}${genPhase ? ` (${genPhase.charAt(0).toUpperCase() + genPhase.slice(1)}…)` : "…"}`
+                    : `Generate ${selected.size} emails`}
                 </button>
                 {generating && bjlPullStatus === "loading" && (
                   <span style={{fontSize: 12, color: "var(--grey-2)"}}>
@@ -2843,7 +2858,7 @@ const OutreachMode = ({ setEvidenceRows, strategistContext, setStrategistContext
 // strategist spot-check what /api/bjl-content actually pulled before
 // sending. Not a validation gate; collapsed by default. Only renders
 // sections for the content types that fired and returned data.
-const EmailSources = ({ sources, polished = false }) => {
+const EmailSources = ({ sources, polished = false, scorecard = null, revisionHistory = [], humanReviewRequired = false }) => {
   const [open, setOpen] = useState(false);
   const article = sources && sources.article;
   const bjl = sources && sources.bjl;
@@ -2851,17 +2866,25 @@ const EmailSources = ({ sources, polished = false }) => {
   const hasArticle = article && (article.title || (article.tags_matched || []).length);
   const hasBjl = bjl && bjl.observation;
   const hasCs = cs && cs.identifier;
-  // Render if any provenance OR if the polish pass ran. The polished
-  // indicator sits next to the Sources toggle label as a tiny pill so
-  // the user knows the Haiku rewrite shipped without having to expand.
-  if (!hasArticle && !hasBjl && !hasCs && !polished) return null;
+  const hasScorecard = scorecard && Object.keys(scorecard).length > 0;
+  const hasRevisions = Array.isArray(revisionHistory) && revisionHistory.length > 0;
+  // Render if any provenance, the polish pass ran, or the scorecard is
+  // available. The polished / needs-review indicators sit next to the
+  // Sources toggle as tiny pills so the user can see status at a glance
+  // without expanding.
+  if (!hasArticle && !hasBjl && !hasCs && !polished && !hasScorecard) return null;
   const sectionStyle = { marginBottom: 12 };
   const headerStyle = { fontWeight: 600, fontSize: 11, letterSpacing: "0.04em", marginBottom: 4, color: "var(--grey-1)" };
-  const hasAnySources = hasArticle || hasBjl || hasCs;
+  const pillStyle = {
+    display: "inline-flex", alignItems: "center", gap: 4,
+    fontSize: 11,
+    padding: "2px 6px", border: "1px solid var(--grey-4, #e5e5e5)", borderRadius: 3,
+  };
+  const hasAnyExpandable = hasArticle || hasBjl || hasCs || hasScorecard;
   return (
     <div style={{ marginTop: 8 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        {hasAnySources ? (
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        {hasAnyExpandable ? (
           <button
             type="button"
             onClick={() => setOpen(!open)}
@@ -2882,12 +2905,17 @@ const EmailSources = ({ sources, polished = false }) => {
           </button>
         ) : null}
         {polished ? (
-          <span title="Haiku polish pass ran on this draft" style={{
-            display: "inline-flex", alignItems: "center", gap: 4,
-            fontSize: 11, color: "var(--grey-2)",
-            padding: "2px 6px", border: "1px solid var(--grey-4, #e5e5e5)", borderRadius: 3,
-          }}>
+          <span title="Haiku polish pass ran on this draft" style={{ ...pillStyle, color: "var(--grey-2)" }}>
             polished
+          </span>
+        ) : null}
+        {humanReviewRequired ? (
+          <span title="One or more quality checks still fail after 2 revision passes" style={{
+            ...pillStyle,
+            color: "var(--red, #c33)",
+            borderColor: "var(--red, #c33)",
+          }}>
+            ⚠ needs review
           </span>
         ) : null}
       </div>
@@ -2927,11 +2955,47 @@ const EmailSources = ({ sources, polished = false }) => {
             </div>
           )}
           {hasCs && (
-            <div>
+            <div style={sectionStyle}>
               <div style={headerStyle}>CASE STUDY</div>
               <div>Identifier: {cs.identifier}</div>
               {(cs.tags_matched || []).length > 0 ? (
                 <div>Tags matched: {cs.tags_matched.join(", ")}</div>
+              ) : null}
+            </div>
+          )}
+          {hasScorecard && (
+            <div>
+              <div style={{ ...headerStyle, display: "flex", alignItems: "center", gap: 8 }}>
+                <span>EVALUATION</span>
+                {humanReviewRequired ? (
+                  <span style={{ fontSize: 10, color: "var(--red, #c33)", fontWeight: 500, textTransform: "none", letterSpacing: 0 }}>
+                    needs review
+                  </span>
+                ) : null}
+              </div>
+              {Object.entries(scorecard).map(([key, check]) => (
+                <div key={key} style={{ display: "flex", gap: 6, marginTop: 2 }}>
+                  <span style={{
+                    color: check.pass ? "var(--green, #2a8)" : "var(--red, #c33)",
+                    fontWeight: 600, minWidth: 12,
+                  }}>
+                    {check.pass ? "✓" : "✗"}
+                  </span>
+                  <span>
+                    {key}
+                    {!check.pass && check.note ? (
+                      <span style={{ color: "var(--grey-2)", fontStyle: "italic" }}> — {check.note}</span>
+                    ) : null}
+                  </span>
+                </div>
+              ))}
+              {hasRevisions ? (
+                <div style={{ marginTop: 6, fontSize: 11, color: "var(--grey-2)" }}>
+                  {revisionHistory.length} revision pass{revisionHistory.length === 1 ? "" : "es"} applied
+                  {revisionHistory.length > 0 ? (
+                    <span> — fixed: {Array.from(new Set(revisionHistory.flatMap(p => (p.revisions || []).filter(r => r.applied).map(r => r.key)))).join(", ") || "(no successful fixes)"}</span>
+                  ) : null}
+                </div>
               ) : null}
             </div>
           )}
@@ -2942,7 +3006,7 @@ const EmailSources = ({ sources, polished = false }) => {
 };
 
 const OutreachEmailCard = ({ result, index }) => {
-  const { contact, text, error, sources, polished } = result;
+  const { contact, text, error, sources, polished, scorecard, revisionHistory, humanReviewRequired } = result;
   const { subject, body } = parseSubjectBody(text || "");
   const initials = (contact.name || "?").split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase();
   return (
@@ -2967,7 +3031,13 @@ const OutreachEmailCard = ({ result, index }) => {
           <>
             <div className="ec-subject"><span className="label">Subject</span>{subject || "(no subject)"}</div>
             {body.split(/\n{2,}/).map((p, i) => <p key={i}>{p}</p>)}
-            <EmailSources sources={sources} polished={polished} />
+            <EmailSources
+              sources={sources}
+              polished={polished}
+              scorecard={scorecard}
+              revisionHistory={revisionHistory}
+              humanReviewRequired={humanReviewRequired}
+            />
           </>
         )}
       </div>
@@ -2990,6 +3060,7 @@ const BatchMode = ({ strategistContext, setStrategistContext }) => {
   const [instructions, setInstructions] = useState("");
   const [expanded, setExpanded] = useState(new Set());
   const [generating, setGenerating] = useState(false);
+  const [genPhase, setGenPhase] = useState("");
   const [results, setResults] = useState({}); // { [accountId]: [{contact, text, error}] }
   const [uploadError, setUploadError] = useState(null);
   const fileInputRef = useRef(null);
@@ -3132,13 +3203,16 @@ const BatchMode = ({ strategistContext, setStrategistContext }) => {
           batchIndex: j,
           priorSameCompany: j > 0,
           bjlInsights: bjlInsight,
+          onPhase: (p) => setGenPhase(p),
         });
         out[account.id].push({ contact: c, text, error, polished, sources, scorecard, revisionHistory, humanReviewRequired });
         setResults({ ...out });
+        setGenPhase("");
         if (j < contacts.length - 1) await new Promise(r => setTimeout(r, 5000));
       }
       await new Promise(r => setTimeout(r, 3000));
     }
+    setGenPhase("");
     setGenerating(false);
   };
 
@@ -3194,7 +3268,9 @@ const BatchMode = ({ strategistContext, setStrategistContext }) => {
             onChange={(e) => e.target.files?.[0] && loadFile(e.target.files[0])} />
           <button className="btn primary" onClick={runGenerate} disabled={eligibleContacts === 0 || generating}>
             <Icon name="sparkle" size={12} />
-            {generating ? `Generating…` : `Generate all · ${eligibleContacts} emails`}
+            {generating
+              ? `Generating${genPhase ? ` (${genPhase.charAt(0).toUpperCase() + genPhase.slice(1)}…)` : "…"}`
+              : `Generate all · ${eligibleContacts} emails`}
           </button>
           {totalDrafts > 0 && (
             <button className="btn ghost" onClick={exportCSV}><Icon name="download" size={12} /> Export CSV</button>
@@ -3307,7 +3383,7 @@ const BatchRow = ({ account, index, open, onToggle, results, bjlStatus }) => {
 
 const BatchEmailRow = ({ result }) => {
   const [expanded, setExpanded] = useState(false);
-  const { contact, text, error, sources, polished } = result;
+  const { contact, text, error, sources, polished, scorecard, revisionHistory, humanReviewRequired } = result;
   const { subject, body } = parseSubjectBody(text || "");
   return (
     <div className={`row-email v2 ${expanded ? "expanded" : ""}`}>
@@ -3332,7 +3408,13 @@ const BatchEmailRow = ({ result }) => {
       ) : (
         <>
           <div className="re-body">{body}</div>
-          <EmailSources sources={sources} polished={polished} />
+          <EmailSources
+            sources={sources}
+            polished={polished}
+            scorecard={scorecard}
+            revisionHistory={revisionHistory}
+            humanReviewRequired={humanReviewRequired}
+          />
           <button className="re-expand" onClick={() => setExpanded(!expanded)}>
             {expanded ? "Collapse" : "Expand full body"}
           </button>
