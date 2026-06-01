@@ -2675,7 +2675,11 @@ const OutreachMode = ({ setEvidenceRows, strategistContext, setStrategistContext
         bjlInsights: bjlInsight,
         onPhase: (p) => setGenPhase(p),
       });
-      out.push({ contact: c, text, error, polished, sources, scorecard, revisionHistory, humanReviewRequired });
+      out.push({
+        contact: c, text, error, polished, sources, scorecard, revisionHistory, humanReviewRequired,
+        brief: emailInstructions,
+        dismissed: false,
+      });
       setResults([...out]);
       setGenProgress(i + 1);
       setGenPhase("");
@@ -2683,6 +2687,12 @@ const OutreachMode = ({ setEvidenceRows, strategistContext, setStrategistContext
     }
     setGenPhase("");
     setGenerating(false);
+  };
+
+  // Interactive review: callback the EmailSources panel uses to commit
+  // edits (Fix one / Fix all / Dismiss) back into results state.
+  const updateResult = (index, updater) => {
+    setResults(prev => prev.map((r, i) => (i === index ? updater(r) : r)));
   };
 
   const exportCSV = () => {
@@ -2827,7 +2837,12 @@ const OutreachMode = ({ setEvidenceRows, strategistContext, setStrategistContext
 
               {results.length > 0 && (
                 <div className="stagger">
-                  {results.map((r, i) => <OutreachEmailCard key={i} result={r} index={i} />)}
+                  {results.map((r, i) => <OutreachEmailCard
+                    key={i}
+                    result={r}
+                    index={i}
+                    onUpdate={(updater) => updateResult(i, updater)}
+                  />)}
                 </div>
               )}
             </>
@@ -2842,8 +2857,15 @@ const OutreachMode = ({ setEvidenceRows, strategistContext, setStrategistContext
 // strategist spot-check what /api/bjl-content actually pulled before
 // sending. Not a validation gate; collapsed by default. Only renders
 // sections for the content types that fired and returned data.
-const EmailSources = ({ sources, polished = false, scorecard = null, revisionHistory = [], humanReviewRequired = false }) => {
+const EmailSources = ({
+  sources, polished = false,
+  scorecard = null, revisionHistory = [], humanReviewRequired = false,
+  brief = "", text = "", dismissed = false, onUpdate,
+}) => {
   const [open, setOpen] = useState(false);
+  const [fixingCheck, setFixingCheck] = useState(null);
+  const [fixingAll, setFixingAll] = useState(false);
+  const [attemptedChecks, setAttemptedChecks] = useState(() => new Set());
   const article = sources && sources.article;
   const bjl = sources && sources.bjl;
   const cs = sources && sources.caseStudy;
@@ -2852,6 +2874,11 @@ const EmailSources = ({ sources, polished = false, scorecard = null, revisionHis
   const hasCs = cs && cs.identifier;
   const hasScorecard = scorecard && Object.keys(scorecard).length > 0;
   const hasRevisions = Array.isArray(revisionHistory) && revisionHistory.length > 0;
+  const failingEntries = hasScorecard
+    ? Object.entries(scorecard).filter(([, c]) => c && c.pass === false)
+    : [];
+  const canInteract = typeof onUpdate === "function" && !dismissed && hasScorecard;
+  const isBusy = fixingAll || fixingCheck !== null;
   // Render if any provenance, the polish pass ran, or the scorecard is
   // available. The polished / needs-review indicators sit next to the
   // Sources toggle as tiny pills so the user can see status at a glance
@@ -2864,7 +2891,101 @@ const EmailSources = ({ sources, polished = false, scorecard = null, revisionHis
     fontSize: 11,
     padding: "2px 6px", border: "1px solid var(--grey-4, #e5e5e5)", borderRadius: 3,
   };
+  const yellowPillStyle = {
+    ...pillStyle,
+    color: "#8a6500",
+    backgroundColor: "#fff4d4",
+    borderColor: "#e6c560",
+    fontWeight: 600,
+  };
+  const fixBtnStyle = {
+    fontSize: 11, padding: "2px 8px", marginLeft: 6,
+    border: "1px solid var(--grey-4, #d5d5d5)", borderRadius: 3,
+    background: "white", color: "var(--grey-1)", cursor: "pointer",
+    fontFamily: "inherit",
+  };
+  const fixBtnDisabledStyle = {
+    ...fixBtnStyle, cursor: "not-allowed", opacity: 0.5,
+  };
   const hasAnyExpandable = hasArticle || hasBjl || hasCs || hasScorecard;
+  const showReviewBadge = humanReviewRequired && !dismissed;
+
+  // Helpers — call out to the existing evaluator + reviser. The Fix path
+  // re-evaluates after the targeted revision so the scorecard reflects
+  // the new state and the badge clears if the check passes.
+  const buildOneFailScorecard = (key) => {
+    const note = (scorecard && scorecard[key] && scorecard[key].note) || "";
+    return { [key]: { pass: false, note } };
+  };
+  const applyRevision = async (oneFailKey /* string or null for "fix all" */) => {
+    if (!canInteract) return;
+    const parsed = parseSubjectBody(text || "");
+    const scForRevise = oneFailKey
+      ? buildOneFailScorecard(oneFailKey)
+      : scorecard;
+    const revRes = await reviseEmail({
+      brief, subject: parsed.subject, body: parsed.body, scorecard: scForRevise,
+    });
+    // Always re-evaluate so the scorecard reflects the new text.
+    const reEval = await evaluateEmail({
+      brief, subject: revRes.subject, body: revRes.body,
+    });
+    const newScorecard = (reEval.ok && reEval.scorecard) ? reEval.scorecard : scorecard;
+    const stillFailing = Object.values(newScorecard).some(c => c && c.pass === false);
+    const newText = revRes.subject
+      ? "Subject: " + revRes.subject + "\n\n" + (revRes.body || "")
+      : (revRes.body || "");
+    onUpdate(prev => ({
+      ...prev,
+      text: newText,
+      scorecard: newScorecard,
+      humanReviewRequired: stillFailing,
+      revisionHistory: [
+        ...(prev.revisionHistory || []),
+        {
+          pass: (prev.revisionHistory || []).length + 1,
+          scorecard,
+          revisions: revRes.revisions || [],
+          errors: revRes.errors || [],
+          source: oneFailKey ? "manual_fix:" + oneFailKey : "manual_fix_all",
+        },
+      ],
+    }));
+  };
+  const handleFixOne = async (key) => {
+    setFixingCheck(key);
+    try {
+      await applyRevision(key);
+    } catch (e) {
+      console.warn("[review] fix one failed:", key, e && e.message);
+    }
+    setAttemptedChecks(prev => {
+      const next = new Set(prev);
+      next.add(key);
+      return next;
+    });
+    setFixingCheck(null);
+  };
+  const handleFixAll = async () => {
+    setFixingAll(true);
+    try {
+      await applyRevision(null);
+      // Mark every previously-failing key as attempted.
+      setAttemptedChecks(prev => {
+        const next = new Set(prev);
+        failingEntries.forEach(([k]) => next.add(k));
+        return next;
+      });
+    } catch (e) {
+      console.warn("[review] fix all failed:", e && e.message);
+    }
+    setFixingAll(false);
+  };
+  const handleDismiss = () => {
+    if (typeof onUpdate !== "function") return;
+    onUpdate(prev => ({ ...prev, dismissed: true }));
+  };
+
   return (
     <div style={{ marginTop: 8 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -2893,13 +3014,14 @@ const EmailSources = ({ sources, polished = false, scorecard = null, revisionHis
             polished
           </span>
         ) : null}
-        {humanReviewRequired ? (
-          <span title="One or more quality checks still fail after 2 revision passes" style={{
-            ...pillStyle,
-            color: "var(--red, #c33)",
-            borderColor: "var(--red, #c33)",
-          }}>
-            ⚠ needs review
+        {showReviewBadge ? (
+          <span title="One or more quality checks still fail after 2 automatic revision passes" style={yellowPillStyle}>
+            Needs review
+          </span>
+        ) : null}
+        {dismissed ? (
+          <span title="Marked approved by the user despite remaining check failures" style={{ ...pillStyle, color: "var(--grey-2)" }}>
+            dismissed
           </span>
         ) : null}
       </div>
@@ -2951,34 +3073,78 @@ const EmailSources = ({ sources, polished = false, scorecard = null, revisionHis
             <div>
               <div style={{ ...headerStyle, display: "flex", alignItems: "center", gap: 8 }}>
                 <span>EVALUATION</span>
-                {humanReviewRequired ? (
-                  <span style={{ fontSize: 10, color: "var(--red, #c33)", fontWeight: 500, textTransform: "none", letterSpacing: 0 }}>
-                    needs review
+                {showReviewBadge ? (
+                  <span style={{ fontSize: 10, color: "#8a6500", fontWeight: 600, textTransform: "none", letterSpacing: 0 }}>
+                    Needs review
                   </span>
                 ) : null}
               </div>
-              {Object.entries(scorecard).map(([key, check]) => (
-                <div key={key} style={{ display: "flex", gap: 6, marginTop: 2 }}>
-                  <span style={{
-                    color: check.pass ? "var(--green, #2a8)" : "var(--red, #c33)",
-                    fontWeight: 600, minWidth: 12,
-                  }}>
-                    {check.pass ? "✓" : "✗"}
-                  </span>
-                  <span>
-                    {key}
-                    {!check.pass && check.note ? (
-                      <span style={{ color: "var(--grey-2)", fontStyle: "italic" }}> — {check.note}</span>
+              {Object.entries(scorecard).map(([key, check]) => {
+                const tried = attemptedChecks.has(key);
+                const showFixBtn = canInteract && !check.pass;
+                const fixDisabled = isBusy;
+                const inFlightThis = fixingCheck === key;
+                return (
+                  <div key={key} style={{ display: "flex", gap: 6, marginTop: 2, alignItems: "flex-start" }}>
+                    <span style={{
+                      color: check.pass ? "var(--green, #2a8)" : "var(--red, #c33)",
+                      fontWeight: 600, minWidth: 12,
+                    }}>
+                      {check.pass ? "✓" : "✗"}
+                    </span>
+                    <span style={{ flex: 1 }}>
+                      {key}
+                      {!check.pass && check.note ? (
+                        <span style={{ color: "var(--grey-2)", fontStyle: "italic" }}> — {check.note}</span>
+                      ) : null}
+                      {!check.pass && tried ? (
+                        <span style={{ marginLeft: 6, fontSize: 10, color: "var(--grey-2)" }}>
+                          (fix attempted — edit manually)
+                        </span>
+                      ) : null}
+                    </span>
+                    {showFixBtn ? (
+                      <button
+                        type="button"
+                        disabled={fixDisabled}
+                        onClick={() => handleFixOne(key)}
+                        style={fixDisabled ? fixBtnDisabledStyle : fixBtnStyle}
+                        title="Fire one targeted revision call for this check"
+                      >
+                        {inFlightThis ? "Fixing…" : "Fix"}
+                      </button>
                     ) : null}
-                  </span>
-                </div>
-              ))}
+                  </div>
+                );
+              })}
               {hasRevisions ? (
                 <div style={{ marginTop: 6, fontSize: 11, color: "var(--grey-2)" }}>
                   {revisionHistory.length} revision pass{revisionHistory.length === 1 ? "" : "es"} applied
                   {revisionHistory.length > 0 ? (
                     <span> — fixed: {Array.from(new Set(revisionHistory.flatMap(p => (p.revisions || []).filter(r => r.applied).map(r => r.key)))).join(", ") || "(no successful fixes)"}</span>
                   ) : null}
+                </div>
+              ) : null}
+              {canInteract && failingEntries.length > 0 ? (
+                <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
+                  <button
+                    type="button"
+                    disabled={isBusy}
+                    onClick={handleFixAll}
+                    style={isBusy ? fixBtnDisabledStyle : fixBtnStyle}
+                    title="Run a targeted revision call for every failing check, then re-evaluate"
+                  >
+                    {fixingAll ? "Fixing all…" : "Fix all"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isBusy}
+                    onClick={handleDismiss}
+                    style={isBusy ? fixBtnDisabledStyle : fixBtnStyle}
+                    title="Approve this email regardless of remaining check failures"
+                  >
+                    Dismiss
+                  </button>
                 </div>
               ) : null}
             </div>
@@ -2989,8 +3155,8 @@ const EmailSources = ({ sources, polished = false, scorecard = null, revisionHis
   );
 };
 
-const OutreachEmailCard = ({ result, index }) => {
-  const { contact, text, error, sources, polished, scorecard, revisionHistory, humanReviewRequired } = result;
+const OutreachEmailCard = ({ result, index, onUpdate }) => {
+  const { contact, text, error, sources, polished, scorecard, revisionHistory, humanReviewRequired, brief, dismissed } = result;
   const { subject, body } = parseSubjectBody(text || "");
   const initials = (contact.name || "?").split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase();
   return (
@@ -3021,6 +3187,10 @@ const OutreachEmailCard = ({ result, index }) => {
               scorecard={scorecard}
               revisionHistory={revisionHistory}
               humanReviewRequired={humanReviewRequired}
+              brief={brief}
+              text={text}
+              dismissed={dismissed}
+              onUpdate={onUpdate}
             />
           </>
         )}
@@ -3189,7 +3359,11 @@ const BatchMode = ({ strategistContext, setStrategistContext }) => {
           bjlInsights: bjlInsight,
           onPhase: (p) => setGenPhase(p),
         });
-        out[account.id].push({ contact: c, text, error, polished, sources, scorecard, revisionHistory, humanReviewRequired });
+        out[account.id].push({
+          contact: c, text, error, polished, sources, scorecard, revisionHistory, humanReviewRequired,
+          brief: instructions,
+          dismissed: false,
+        });
         setResults({ ...out });
         setGenPhase("");
         if (j < contacts.length - 1) await new Promise(r => setTimeout(r, 5000));
@@ -3198,6 +3372,14 @@ const BatchMode = ({ strategistContext, setStrategistContext }) => {
     }
     setGenPhase("");
     setGenerating(false);
+  };
+
+  // Interactive review: callback for EmailSources Fix / Dismiss actions.
+  const updateResult = (accountId, index, updater) => {
+    setResults(prev => ({
+      ...prev,
+      [accountId]: (prev[accountId] || []).map((r, i) => (i === index ? updater(r) : r)),
+    }));
   };
 
   const exportCSV = () => {
@@ -3298,7 +3480,8 @@ const BatchMode = ({ strategistContext, setStrategistContext }) => {
               account={a} index={i}
               open={open} onToggle={() => toggleExpand(a.id)}
               results={accResults}
-              bjlStatus={accountStatus[a.id]} />
+              bjlStatus={accountStatus[a.id]}
+              onUpdateResult={(j, updater) => updateResult(a.id, j, updater)} />
           );
         })}
       </div>
@@ -3306,7 +3489,7 @@ const BatchMode = ({ strategistContext, setStrategistContext }) => {
   );
 };
 
-const BatchRow = ({ account, index, open, onToggle, results, bjlStatus }) => {
+const BatchRow = ({ account, index, open, onToggle, results, bjlStatus, onUpdateResult }) => {
   const contactCount = (account.contacts || []).length;
   const draftCount = results.length;
   return (
@@ -3355,7 +3538,11 @@ const BatchRow = ({ account, index, open, onToggle, results, bjlStatus }) => {
               </div>
             ) : (
               <div className="row-emails">
-                {results.map((r, j) => <BatchEmailRow key={j} result={r} />)}
+                {results.map((r, j) => <BatchEmailRow
+                  key={j}
+                  result={r}
+                  onUpdate={(updater) => onUpdateResult && onUpdateResult(j, updater)}
+                />)}
               </div>
             )}
           </div>
@@ -3365,9 +3552,9 @@ const BatchRow = ({ account, index, open, onToggle, results, bjlStatus }) => {
   );
 };
 
-const BatchEmailRow = ({ result }) => {
+const BatchEmailRow = ({ result, onUpdate }) => {
   const [expanded, setExpanded] = useState(false);
-  const { contact, text, error, sources, polished, scorecard, revisionHistory, humanReviewRequired } = result;
+  const { contact, text, error, sources, polished, scorecard, revisionHistory, humanReviewRequired, brief, dismissed } = result;
   const { subject, body } = parseSubjectBody(text || "");
   return (
     <div className={`row-email v2 ${expanded ? "expanded" : ""}`}>
@@ -3398,6 +3585,10 @@ const BatchEmailRow = ({ result }) => {
             scorecard={scorecard}
             revisionHistory={revisionHistory}
             humanReviewRequired={humanReviewRequired}
+            brief={brief}
+            text={text}
+            dismissed={dismissed}
+            onUpdate={onUpdate}
           />
           <button className="re-expand" onClick={() => setExpanded(!expanded)}>
             {expanded ? "Collapse" : "Expand full body"}
