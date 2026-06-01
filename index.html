@@ -1170,20 +1170,18 @@ const generateOneEmail = async ({
       }
     }
 
-    // Haiku polish pass — catches em dashes, is/isn't constructions, and
-    // corporate jargon that survive the generation model despite the system
-    // prompt rules. The model sees the RAW body (em dashes intact) so it can
-    // recognize which sentences need restructuring; punctuation substitution
-    // is explicitly disallowed. A regex pass runs only AFTER Haiku as a final
-    // safety net for any em dash that slipped through.
+    // Haiku polish pass — sentence-level rewrite, not character
+    // substitution. The model evaluates whether each sentence is doing
+    // real work and rewrites weak constructions (em-dash bridges,
+    // is/isn't pairs, overreaching claims, corporate jargon, impressive
+    // sounding sentences that say nothing). No regex strip before or
+    // after — the measure is whether every remaining sentence makes a
+    // direct claim worth reading.
     let polished = false;
-    const stripEmDashesPolish = s => (s || "")
-      .replace(/\u2014/g, "-")
-      .replace(/\u2013/g, "-");
     const parsedForPolish = parseSubjectBody(finalText);
     const subjectForPolish = parsedForPolish.subject;
-    const bodyForPolish = parsedForPolish.body || finalText;
-    if (bodyForPolish && bodyForPolish.trim()) {
+    const rawBody = parsedForPolish.body || finalText;
+    if (rawBody && rawBody.trim()) {
       try {
         const polishCtrl = new AbortController();
         const polishTimer = setTimeout(() => polishCtrl.abort(), 20000);
@@ -1197,23 +1195,29 @@ const generateOneEmail = async ({
             messages: [{
               role: "user",
               content:
-                "You are editing an outreach email. Rewrite sentences where needed to fix the issues below. Substituting punctuation is not a fix; if a sentence contains an em dash, you must restructure the sentence so the em dash is no longer needed (do not swap it for a hyphen, comma, colon, or parenthesis as a shortcut).\n\n" +
-                "Issues to fix:\n" +
-                "1. Em dashes (\u2014) and any hyphen acting as an em dash (e.g. \" - \" between independent clauses). Rewrite the sentence so the dash is gone and the structure reads naturally. Split into two sentences, or recast as a relative clause, or use a period.\n" +
-                "2. \"is/isn't\" and \"isn't/is\" constructions. Rewrite the sentence without them.\n" +
-                "3. Corporate jargon: leverage, unlock, actionable, synergies, in today's landscape, drive results, opportunity to capitalize, value-add, mission-critical. Replace with plain human language and reshape the sentence if needed.\n" +
-                "4. Any sentence that reads like a marketing template rather than something a person would write to a peer. Smooth it out by rewriting, not by trimming.\n\n" +
-                "Preserve: subject matter, the case study reference, the article URL, the data points, the closing ask, paragraph breaks, and the sign-off. Do not invent facts. Do not add greetings or salutations.\n\n" +
-                "Return only the revised email body. No commentary, no labels, no preamble, no surrounding quotes.\n\n" +
-                "EMAIL:\n" + bodyForPolish,
+`Review this outreach email and rewrite any weak sentences. Specifically:
+
+1. Em dashes: when you find an em dash, evaluate whether the sentence is doing real work. An em dash bridging two vague halves ("The product is there \u2014 the story hasn't been found yet") is a weak construction. Rewrite it as a single direct claim or cut it. Do not replace the dash with a comma \u2014 fix the sentence.
+
+2. Is/isn't constructions: rewrite as direct positive statements. "This isn't just about messaging" becomes "This is about finding the single idea that everything else builds from." The claim should stand on its own.
+
+3. Overreaching statements: remove or soften any sentence that tells the prospect what they need, what they should do, or what will happen if they act. Examples: "You just need X", "Destinations that do this tend to break through", "That's a challenge worth solving." Reframe as curiosity or remove entirely.
+
+4. Corporate jargon: replace leverage, unlock, actionable, synergies, in today's landscape, drive results with plain language.
+
+5. Impressive-sounding sentences that communicate nothing specific: cut them.
+
+Do not change the content, structure, data points, article link, case study references, or closing ask. Return only the revised email body with no commentary, no labels, no preamble.
+
+EMAIL:
+${rawBody}`,
             }],
           }),
         });
         clearTimeout(polishTimer);
         if (polishRes.status === 200) {
           const polishData = await polishRes.json();
-          const cleanRaw = polishData.content?.map(b => b.type === "text" ? b.text : "").filter(Boolean).join("\n") || "";
-          const cleanBody = stripEmDashesPolish(cleanRaw.trim());
+          const cleanBody = (polishData.content?.map(b => b.type === "text" ? b.text : "").filter(Boolean).join("\n") || "").trim();
           if (cleanBody) {
             finalText = subjectForPolish
               ? "Subject: " + subjectForPolish + "\n\n" + cleanBody
