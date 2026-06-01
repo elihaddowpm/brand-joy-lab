@@ -303,6 +303,161 @@ const buildEmailSystem = () => {
 };
 
 /* =========================================================================
+ * Writing OS — Step 1: evaluator
+ *
+ * Standalone quality reviewer for draft emails. Takes a brief, subject, and
+ * body and returns a structured scorecard. The judge model is Haiku 4.5 —
+ * fast and cheap enough to run after every draft without blocking the user.
+ *
+ * This function is NOT yet wired into generateOneEmail (per the Writing OS
+ * Build Order). It's exposed at window.evaluateEmail so the rubric can be
+ * validated independently against real emails before pipeline integration.
+ *
+ * Console usage:
+ *   await window.evaluateEmail({
+ *     brief: "Short intro email with a case study reference",
+ *     subject: "Building Birmingham's brand",
+ *     body: "Dear Jessica, ..."
+ *   })
+ *
+ * Returns:
+ *   { ok: true,  scorecard: { hook_specific: { pass, note }, ... } }
+ *   { ok: false, error: "timeout" | "parse_failed" | "evaluator_429" | ... }
+ * ========================================================================= */
+
+const EMAIL_EVALUATION_RUBRIC = {
+  hook_specific:              "Does the opening reference something specific and observed about this prospect — not a general industry statement or compliment?",
+  no_unsolicited_methodology: "Does the email avoid generic marketing theory sentences that were not called for in the brief? If the brief requested a BJL finding, case study reference, or article share, those elements are appropriate and should pass. Only flag sentences that describe general marketing principles unprompted — e.g. 'brands that win understand narrative momentum', 'destinations with clear emotional territory generate more earned attention.'",
+  no_prescription:            "Does the email avoid telling the prospect what they need to do, what their situation requires, or what will happen if they act? Referencing a BJL finding, case study outcome, or article insight is not prescription — flag only sentences that tell the prospect their strategy must change or what they should do next.",
+  no_disclaimer:              "Does the email avoid apologizing for the outreach or denying that it is a pitch?",
+  no_rhetorical_question:     "Does the email avoid posing a rhetorical question to the prospect about their industry or challenge?",
+  subject_clean:              "Is the subject line a real subject line — not wrapped in brackets, not a placeholder description?",
+  under_150_words:            "Is the email body under 150 words?",
+  collaborative_ask:          "Does the closing ask feel mutual — offering something AND inviting their input — rather than just requesting a meeting slot?",
+};
+
+const EVALUATOR_SYSTEM_PROMPT =
+  "You are a quality reviewer for cold outreach emails. You will receive the original brief, the subject line, and the email body. Read all three and return a JSON scorecard only — no commentary, no preamble. For each check, return true if the email passes and false if it fails. If false, add a one-sentence note. When evaluating no_unsolicited_methodology and no_prescription, use the brief to determine whether research findings, case study references, or article references were requested — if so, those elements are appropriate and should pass.";
+
+const evaluateEmail = async ({ brief, subject, body } = {}) => {
+  const rubricText = Object.entries(EMAIL_EVALUATION_RUBRIC)
+    .map(([key, desc]) => "- " + key + ": " + desc)
+    .join("\n");
+
+  const exampleShape =
+    "{\n" +
+    Object.keys(EMAIL_EVALUATION_RUBRIC)
+      .map(k => '  "' + k + '": { "pass": true, "note": "" }')
+      .join(",\n") +
+    "\n}";
+
+  const userMessage = [
+    "BRIEF:",
+    String(brief || "(no brief provided)").trim(),
+    "",
+    "SUBJECT:",
+    String(subject || "(no subject)").trim(),
+    "",
+    "EMAIL BODY:",
+    String(body || "(no body)").trim(),
+    "",
+    "RUBRIC:",
+    rubricText,
+    "",
+    "Return ONLY a JSON object of this exact shape (no markdown, no code fences, no commentary):",
+    exampleShape,
+  ].join("\n");
+
+  console.log("[evaluate] → request", {
+    briefLen: (brief || "").length,
+    subjLen:  (subject || "").length,
+    bodyLen:  (body || "").length,
+  });
+
+  let res;
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 20000);
+    res = await fetch("/api/claude", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: ctrl.signal,
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 900,
+        system: EVALUATOR_SYSTEM_PROMPT,
+        messages: [{ role: "user", content: userMessage }],
+      }),
+    });
+    clearTimeout(timer);
+  } catch (e) {
+    const error = e.name === "AbortError" ? "timeout" : (e.message || "network_error");
+    console.warn("[evaluate] ← network/abort", error);
+    return { ok: false, error, scorecard: null };
+  }
+
+  if (res.status !== 200) {
+    console.warn("[evaluate] ← non-200", res.status);
+    return { ok: false, error: "evaluator_" + res.status, scorecard: null };
+  }
+
+  let data;
+  try { data = await res.json(); } catch (e) {
+    return { ok: false, error: "response_not_json", scorecard: null };
+  }
+  const raw = (data.content || [])
+    .map(b => b && b.type === "text" ? (b.text || "") : "")
+    .filter(Boolean)
+    .join("")
+    .trim();
+
+  // Strip markdown code fences if the model wrapped its JSON despite
+  // being asked not to.
+  const cleaned = raw
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/```\s*$/i, "")
+    .trim();
+
+  let parsed = null;
+  try { parsed = JSON.parse(cleaned); } catch (e) {
+    console.warn("[evaluate] ← JSON parse failed:", cleaned.slice(0, 200));
+    return { ok: false, error: "parse_failed", scorecard: null, raw: cleaned };
+  }
+
+  // Normalize each check to { pass: boolean, note: string }. The model may
+  // emit boolean shortcuts or omit notes on passes; coerce so downstream
+  // consumers (Step 2 reviser, Step 3 scorecard UI) can rely on the shape.
+  const scorecard = {};
+  Object.keys(EMAIL_EVALUATION_RUBRIC).forEach(k => {
+    const v = parsed[k];
+    if (v && typeof v === "object") {
+      scorecard[k] = {
+        pass: v.pass === true,
+        note: typeof v.note === "string" ? v.note : "",
+      };
+    } else if (typeof v === "boolean") {
+      scorecard[k] = { pass: v, note: "" };
+    } else {
+      scorecard[k] = { pass: false, note: "missing in response" };
+    }
+  });
+
+  const passCount = Object.values(scorecard).filter(c => c.pass).length;
+  const failCount = Object.keys(scorecard).length - passCount;
+  console.log("[evaluate] ← scorecard", { pass: passCount, fail: failCount, scorecard });
+
+  return { ok: true, error: null, scorecard };
+};
+
+// Expose for console-based rubric validation. Step 2 (reviser) will consume
+// this function from inside generateOneEmail once the pipeline is wired
+// (Step 3 of the Build Order).
+if (typeof window !== "undefined") {
+  window.evaluateEmail = evaluateEmail;
+  window.EMAIL_EVALUATION_RUBRIC = EMAIL_EVALUATION_RUBRIC;
+}
+
+/* =========================================================================
  * Waldo parsing / context building — ported from V1 frontend (archive/index_v1.html).
  * ========================================================================= */
 
