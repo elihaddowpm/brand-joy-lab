@@ -959,6 +959,35 @@ const authedFetchInit = (extraInit = {}) => {
   return { ...extraInit, headers };
 };
 
+// Fire-and-forget write to the approved-email corpus. Callers gate on the
+// draft having been edited (userEdited) — edited drafts are the high-signal
+// teaching examples (model output vs. what the strategist actually wanted).
+// Failures are logged only; a corpus write must never block approving. The
+// embedding column is left null server-side; a later phase backfills it.
+const postApprovedEmail = (result, { subject, body, finalText }) => {
+  const pc = result.prospectContext || {};
+  fetch("/api/bjl-approve-email", authedFetchInit({
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contact_name: (result.contact && result.contact.name) || null,
+      company: result.company || (result.contact && result.contact.company) || null,
+      brief: result.brief || "",
+      category: pc.category || "",
+      pain_keywords: pc.pain_keywords || [],
+      waldo_signal_type: result.waldoSignalType || "",
+      audience_mode: result.audienceMode || "external",
+      subject: subject || "",
+      body: body || "",
+      final_text: finalText,
+      original_generated: result.originalGenerated || result.text || "",
+    }),
+  })).then(
+    (res) => { if (!res.ok) console.warn("[corpus] approve-email write failed:", res.status); },
+    (e) => console.warn("[corpus] approve-email write error:", e)
+  );
+};
+
 // Detect auth-related responses on the bjl-query path so the AuthGate can
 // kick the user back to the login screen (401 = session expired) or to a
 // rejected screen (403 not_whitelisted). Called from the queryBJL /
@@ -1672,8 +1701,8 @@ ${rawBody}`,
       }
     }
 
-    return { text: finalText, error: null, polished, scorecard, revisionHistory, humanReviewRequired, sources: { caseStudy: caseStudySources, article: articleSources, bjl: bjlSources } };
-  } catch (e) { return { text: "", error: e.name === "AbortError" ? "Timed out" : e.message, polished: false, scorecard: null, revisionHistory: [], humanReviewRequired: false, sources: { caseStudy: caseStudySources, article: articleSources, bjl: bjlSources } }; }
+    return { text: finalText, error: null, polished, scorecard, revisionHistory, humanReviewRequired, prospectContext, sources: { caseStudy: caseStudySources, article: articleSources, bjl: bjlSources } };
+  } catch (e) { return { text: "", error: e.name === "AbortError" ? "Timed out" : e.message, polished: false, scorecard: null, revisionHistory: [], humanReviewRequired: false, prospectContext, sources: { caseStudy: caseStudySources, article: articleSources, bjl: bjlSources } }; }
 };
 
 const parseSubjectBody = (text) => {
@@ -2661,7 +2690,7 @@ const OutreachMode = ({ setEvidenceRows, strategistContext, setStrategistContext
         "—",
         String(chosen?.sig?.headline || "").slice(0, 80)
       );
-      const { text, error, polished, sources, scorecard, revisionHistory, humanReviewRequired } = await generateOneEmail({
+      const { text, error, polished, sources, scorecard, revisionHistory, humanReviewRequired, prospectContext } = await generateOneEmail({
         contactName: c.name,
         company: account.company || account.name,
         waldoContext: waldoCtxPerContact,
@@ -2678,6 +2707,11 @@ const OutreachMode = ({ setEvidenceRows, strategistContext, setStrategistContext
       out.push({
         contact: c, text, error, polished, sources, scorecard, revisionHistory, humanReviewRequired,
         brief: emailInstructions,
+        // Retrieval signal captured for the approved-email corpus write.
+        prospectContext,
+        company: account.company || account.name,
+        audienceMode: "external",
+        waldoSignalType: chosen?.sig?.signal_type || null,
         dismissed: false,
         approved: false,
         approvedAt: null,
@@ -3192,6 +3226,11 @@ const OutreachEmailCard = ({ result, index, onUpdate }) => {
   const handleSaveApprove = () => {
     if (typeof onUpdate !== "function") return;
     const newText = composeText();
+    // Only edited drafts feed the corpus — they're the high-signal examples.
+    const wasEdited = newText !== (result.originalGenerated || result.text);
+    if (wasEdited) {
+      postApprovedEmail(result, { subject: editSubject, body: editBody, finalText: newText });
+    }
     onUpdate(prev => ({
       ...prev,
       text: newText,
@@ -3453,7 +3492,7 @@ const BatchMode = ({ strategistContext, setStrategistContext }) => {
           "—",
           String(chosen?.sig?.headline || "").slice(0, 80)
         );
-        const { text, error, polished, sources, scorecard, revisionHistory, humanReviewRequired } = await generateOneEmail({
+        const { text, error, polished, sources, scorecard, revisionHistory, humanReviewRequired, prospectContext } = await generateOneEmail({
           contactName: c.name,
           company: account.company || account.name,
           waldoContext: waldoCtxPerContact,
@@ -3470,6 +3509,11 @@ const BatchMode = ({ strategistContext, setStrategistContext }) => {
         out[account.id].push({
           contact: c, text, error, polished, sources, scorecard, revisionHistory, humanReviewRequired,
           brief: instructions,
+          // Retrieval signal captured for the approved-email corpus write.
+          prospectContext,
+          company: account.company || account.name,
+          audienceMode: "external",
+          waldoSignalType: chosen?.sig?.signal_type || null,
           dismissed: false,
           approved: false,
           approvedAt: null,
@@ -3691,6 +3735,11 @@ const BatchEmailRow = ({ result, onUpdate }) => {
   const handleSaveApprove = () => {
     if (typeof onUpdate !== "function") return;
     const newText = composeText();
+    // Only edited drafts feed the corpus — they're the high-signal examples.
+    const wasEdited = newText !== (result.originalGenerated || result.text);
+    if (wasEdited) {
+      postApprovedEmail(result, { subject: editSubject, body: editBody, finalText: newText });
+    }
     onUpdate(prev => ({
       ...prev,
       text: newText,
