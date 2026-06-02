@@ -58,7 +58,12 @@ const TITLE_MATCH_LEN = 25;
 // via /api/bjl-query with email_mode: true and injects the cached one-sentence
 // observation directly into generateOneEmail. Keeping case_study and article
 // here; both are stable.
-const VALID_TYPES = ['case_study', 'article'];
+const VALID_TYPES = ['case_study', 'article', 'approved_email'];
+
+// Max approved-email examples injected per draft. Two is enough to anchor
+// voice/structure without crowding the prompt or letting the model copy.
+const APPROVED_EMAIL_LIMIT = 2;
+const APPROVED_EMAIL_RETURN = ['subject', 'body', 'final_text', 'company', 'brief'];
 
 // Loose mapping from prospect categories (which come from Waldo account
 // data, ad-hoc strings like "destination_marketing" or "attractions_entertainment")
@@ -298,6 +303,36 @@ exports.handler = async (event) => {
             tags_matched: overlapTags(chosen.tags, painKeywords, category),
           },
         }),
+      };
+    }
+
+    if (body.type === 'approved_email') {
+      // Tag-retrieval over the approved-email corpus. Phase 1 = category +
+      // pain_keyword overlap (same scoreRow used for case studies/articles).
+      // The embedding column exists for a later semantic phase but is unused
+      // here. Cap the candidate scan; the corpus is expected to stay modest.
+      const { data, error } = await supabase
+        .from('bjl_approved_emails')
+        .select('subject, body, final_text, company, brief, category, pain_keywords')
+        .order('approved_at', { ascending: false })
+        .limit(500);
+      if (error) {
+        console.error('[bjl-content] approved_emails query error:', error);
+        return { statusCode: 500, body: JSON.stringify({ error: 'Lookup failed', detail: error.message }) };
+      }
+      const rows = data || [];
+      const ranked = rows
+        .map(r => ({ row: r, score: scoreRow(r.pain_keywords, painKeywords, category) }))
+        .filter(x => x.score > 0)
+        .sort((a, b) => b.score - a.score);
+      if (ranked.length === 0) {
+        return { statusCode: 200, body: JSON.stringify({ found: false, type: 'approved_email' }) };
+      }
+      const top = ranked.slice(0, APPROVED_EMAIL_LIMIT).map(x => pick(x.row, APPROVED_EMAIL_RETURN));
+      return {
+        statusCode: 200,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ found: true, type: 'approved_email', data: top }),
       };
     }
 

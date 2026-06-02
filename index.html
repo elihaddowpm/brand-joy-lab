@@ -1377,6 +1377,7 @@ const generateOneEmail = async ({
   let caseStudySources = null;
   let articleSources = null;
   let bjlSources = null;
+  let exampleSources = null;
 
   // Conditional case study fetch. Server picks the row whose use_for_tags
   // overlap best with prospectContext.pain_keywords + category, then
@@ -1481,6 +1482,43 @@ const generateOneEmail = async ({
     console.log("[bjl-orch] cached bjl_finding used for", contactName, "@", company);
   }
 
+  // Approved-email corpus: retrieve up to a couple of previously approved
+  // emails from similar situations (category + pain_keyword overlap) and
+  // inject them as voice/structure anchors. This is the growing base of
+  // knowledge, so unlike the blocks above it is NOT gated by brief signals —
+  // it always runs and simply injects nothing until the corpus has relevant
+  // matches. Fail-open: any error leaves examplesBlock empty.
+  let examplesBlock = "";
+  try {
+    const exPayload = {
+      type: "approved_email",
+      category: prospectContext.category || "",
+      pain_keywords: prospectContext.pain_keywords || [],
+    };
+    const exRes = await fetch("/api/bjl-content", authedFetchInit({
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(exPayload),
+    }));
+    const exResult = await exRes.json();
+    console.log("[bjl-orch] <- approved_email response", { status: exRes.status, found: exResult.found, n: Array.isArray(exResult.data) ? exResult.data.length : 0 });
+    if (exResult.found && Array.isArray(exResult.data) && exResult.data.length) {
+      const items = exResult.data.map((ex, n) => {
+        const subj = ex.subject ? "Subject: " + ex.subject + "\n" : "";
+        const bodyText = ex.body || ex.final_text || "";
+        return "Example " + (n + 1) + (ex.company ? " (" + ex.company + ")" : "") + ":\n" + subj + bodyText;
+      });
+      examplesBlock = [
+        "[APPROVED EXAMPLES - emails we have actually sent and approved in similar situations. Match this voice, rhythm, and structure. Do not copy their phrasing or reuse their specifics.]",
+        items.join("\n\n"),
+        "[END APPROVED EXAMPLES]",
+      ].join("\n");
+      exampleSources = { count: exResult.data.length, companies: exResult.data.map(e => e.company).filter(Boolean) };
+    }
+  } catch (e) {
+    console.warn("Approved examples fetch failed", e);
+  }
+
   // Em dashes get stripped from brief, case study, article, and BJL block.
   // The waldoContext pipeline handles its own formatting.
   const stripEmDashes = s => (s || "").replace(/\u2014/g, "-").replace(/\u2013/g, "-");
@@ -1488,6 +1526,7 @@ const generateOneEmail = async ({
   if (caseStudyBlock) caseStudyBlock = stripEmDashes(caseStudyBlock);
   if (articleBlock)   articleBlock   = stripEmDashes(articleBlock);
   if (bjlBlock)       bjlBlock       = stripEmDashes(bjlBlock);
+  if (examplesBlock)  examplesBlock  = stripEmDashes(examplesBlock);
 
   // Same-company differentiation: when a prior contact at this same company
   // is already in the batch, append a note so the model varies its hook.
@@ -1502,6 +1541,7 @@ const generateOneEmail = async ({
   // userMsg assembly: only the blocks the brief earned.
   const userMsg = [
     cleanBrief ? "[BRIEF]\n" + cleanBrief + "\n[END BRIEF]" : "",
+    examplesBlock,
     waldoContext ? "[WALDO INTELLIGENCE]\n" + waldoContext + "\n[END WALDO INTELLIGENCE]" : "",
     caseStudyBlock,
     articleBlock,
@@ -1529,7 +1569,7 @@ const generateOneEmail = async ({
       let errData; try { errData = await res.json(); } catch { errData = null; }
       const errMsg = errData?.error?.message
         || (res.status === 429 ? "Rate limit hit — increase delay between calls" : "API error " + res.status);
-      return { text: "", error: errMsg, polished: false, scorecard: null, revisionHistory: [], humanReviewRequired: false, sources: { caseStudy: caseStudySources, article: articleSources, bjl: bjlSources } };
+      return { text: "", error: errMsg, polished: false, scorecard: null, revisionHistory: [], humanReviewRequired: false, sources: { caseStudy: caseStudySources, article: articleSources, bjl: bjlSources, examples: exampleSources } };
     }
     const data = await res.json();
     const rawText = data.content?.map(b => b.type === "text" ? b.text : "").filter(Boolean).join("\n") || "";
@@ -1701,8 +1741,8 @@ ${rawBody}`,
       }
     }
 
-    return { text: finalText, error: null, polished, scorecard, revisionHistory, humanReviewRequired, prospectContext, sources: { caseStudy: caseStudySources, article: articleSources, bjl: bjlSources } };
-  } catch (e) { return { text: "", error: e.name === "AbortError" ? "Timed out" : e.message, polished: false, scorecard: null, revisionHistory: [], humanReviewRequired: false, prospectContext, sources: { caseStudy: caseStudySources, article: articleSources, bjl: bjlSources } }; }
+    return { text: finalText, error: null, polished, scorecard, revisionHistory, humanReviewRequired, prospectContext, sources: { caseStudy: caseStudySources, article: articleSources, bjl: bjlSources, examples: exampleSources } };
+  } catch (e) { return { text: "", error: e.name === "AbortError" ? "Timed out" : e.message, polished: false, scorecard: null, revisionHistory: [], humanReviewRequired: false, prospectContext, sources: { caseStudy: caseStudySources, article: articleSources, bjl: bjlSources, examples: exampleSources } }; }
 };
 
 const parseSubjectBody = (text) => {
