@@ -48,3 +48,8 @@
   from = "/api/bjl-content"
   to = "/.netlify/functions/bjl-content"
   status = 200
+
+[[redirects]]
+  from = "/api/bjl-approve-email"
+  to = "/.netlify/functions/bjl-approve-email"
+  status = 200
