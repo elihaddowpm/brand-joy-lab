@@ -1975,9 +1975,10 @@ const Icon = ({ name, size = 16 }) => {
  * ========================================================================= */
 const Rail = ({ mode, setMode }) => {
   const items = [
-    { k: "intelligence", label: "Intelligence", num: "01" },
-    { k: "outreach",     label: "Outreach",     num: "02" },
-    { k: "joy_map",      label: "Joy Map",      num: "03" },
+    { k: "intelligence",  label: "Intelligence",  num: "01" },
+    { k: "outreach",      label: "Outreach",      num: "02" },
+    { k: "joy_map",       label: "Joy Map",       num: "03" },
+    { k: "public_corpus", label: "Public Corpus", num: "04" },
   ];
   return (
     <aside className="rail">
@@ -4076,9 +4077,25 @@ const FRAMEWORK_LABEL = {
   occasions: "Occasions",
 };
 
-const AudienceMapSynthesis = ({ paragraph }) => paragraph ? (
+const AudienceMapSynthesis = ({ paragraph, finding }) => paragraph ? (
   <div className="audience-map-synthesis">
-    <div className="audience-map-section-title">Synthesis</div>
+    <div className="audience-map-synthesis-head">
+      <div className="audience-map-section-title">Synthesis</div>
+      {finding && (
+        <PromoteToPublicButton defaults={{
+          title:           '',  // strategist writes the argument-winning headline
+          insight:         paragraph,
+          stat:            '',
+          category:        '',
+          topic_tags:      [],
+          question_framings: [],
+          confidence:      Number(finding.reverse_engineered_cohort_n || 0) >= 100 ? 'high' : 'medium',
+          source_n:        finding.reverse_engineered_cohort_n || null,
+          source_note:     (finding.routing && finding.routing.routing_notice) || '',
+          created_from:    `audience_map:${finding.description || ''}`.slice(0, 200),
+        }} />
+      )}
+    </div>
     <p className="audience-map-synthesis-text">{paragraph}</p>
   </div>
 ) : null;
@@ -4258,7 +4275,7 @@ const AudienceMapResults = ({ finding }) => {
           </div>
         )}
       </div>
-      <AudienceMapSynthesis paragraph={s.synthesis_paragraph} />
+      <AudienceMapSynthesis paragraph={s.synthesis_paragraph} finding={finding} />
       <AudienceMapJoyPeaks peaks={s.joy_peaks} />
       <AudienceMapJoyValleys valleys={s.joy_valleys} />
       <AudienceMapEmotionalSignature signature={s.emotional_signature} />
@@ -4494,6 +4511,335 @@ const JoyMapMode = () => {
   );
 };
 
+/* =========================================================================
+ * 12c. PublicCorpusMode — review queue for Public Joy Lab Chat (v6).
+ *      Staged insights (published=false) get reviewed, edited, and
+ *      flipped live here. Captured visitor questions
+ *      (bjl_public_questions) sit alongside as the lead-handling queue.
+ * ========================================================================= */
+
+const PublicCorpusMode = () => {
+  const [tab, setTab] = useState('insights');  // 'insights' | 'questions'
+  const [insights, setInsights] = useState([]);
+  const [questions, setQuestions] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [editingId, setEditingId] = useState(null);
+  const [busyId, setBusyId] = useState(null);
+
+  const reload = async () => {
+    setLoading(true); setError(null);
+    try {
+      const r = await fetch('/.netlify/functions/bjl-public-corpus?action=list_all', authedFetchInit());
+      if (!r.ok) throw new Error(`load failed (${r.status})`);
+      const j = await r.json();
+      setInsights(j.insights || []);
+      setQuestions(j.questions || []);
+    } catch (err) { setError(String(err.message || err)); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { reload(); }, []);
+
+  const stagedCount = insights.filter(i => !i.published).length;
+  const liveCount   = insights.filter(i =>  i.published).length;
+  const newCount    = questions.filter(q => q.status === 'new').length;
+
+  const patchInsight = async (id, patch) => {
+    setBusyId(id);
+    try {
+      const r = await fetch('/.netlify/functions/bjl-public-corpus', authedFetchInit({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'update_insight', id, ...patch }),
+      }));
+      if (!r.ok) throw new Error(`update failed (${r.status})`);
+      const j = await r.json();
+      setInsights(prev => prev.map(i => i.id === id ? j.insight : i));
+      setEditingId(null);
+    } catch (err) { setError(String(err.message || err)); }
+    finally { setBusyId(null); }
+  };
+
+  const deleteInsight = async (id) => {
+    if (!window.confirm('Delete this insight permanently? This cannot be undone.')) return;
+    setBusyId(id);
+    try {
+      const r = await fetch('/.netlify/functions/bjl-public-corpus', authedFetchInit({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'delete_insight', id }),
+      }));
+      if (!r.ok) throw new Error(`delete failed (${r.status})`);
+      setInsights(prev => prev.filter(i => i.id !== id));
+    } catch (err) { setError(String(err.message || err)); }
+    finally { setBusyId(null); }
+  };
+
+  const setQuestionStatus = async (id, status) => {
+    setBusyId(id);
+    try {
+      const r = await fetch('/.netlify/functions/bjl-public-corpus', authedFetchInit({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'update_question', id, status }),
+      }));
+      if (!r.ok) throw new Error(`update failed (${r.status})`);
+      const j = await r.json();
+      setQuestions(prev => prev.map(q => q.id === id ? j.question : q));
+    } catch (err) { setError(String(err.message || err)); }
+    finally { setBusyId(null); }
+  };
+
+  return (
+    <div className="public-corpus-mode">
+      <div className="public-corpus-tabs">
+        <button className={`btn ${tab === 'insights' ? 'primary' : 'ghost'}`} onClick={() => setTab('insights')}>
+          Insights · {stagedCount} staged / {liveCount} live
+        </button>
+        <button className={`btn ${tab === 'questions' ? 'primary' : 'ghost'}`} onClick={() => setTab('questions')}>
+          Captured questions · {newCount} new
+        </button>
+        <button className="btn ghost" onClick={reload} disabled={loading}>{loading ? 'Loading…' : 'Refresh'}</button>
+        {tab === 'insights' && (
+          <PromoteToPublicButton defaults={{
+            title: '', insight: '', stat: '', category: '',
+            topic_tags: [], question_framings: [],
+            confidence: 'high', created_from: 'manual_stage',
+          }} />
+        )}
+      </div>
+
+      {error && <div className="joy-map-error">Error: {error}</div>}
+
+      {tab === 'insights' && (
+        <div className="public-corpus-insights">
+          {insights.length === 0 && !loading && (
+            <div className="public-corpus-empty">
+              No insights yet. Stage one from a finding via the "Publish to public" button on a Joy Map or Intelligence result.
+            </div>
+          )}
+          {insights.map(ins => (
+            <PublicInsightCard
+              key={ins.id}
+              insight={ins}
+              editing={editingId === ins.id}
+              busy={busyId === ins.id}
+              onEdit={() => setEditingId(ins.id)}
+              onCancelEdit={() => setEditingId(null)}
+              onSave={(patch) => patchInsight(ins.id, patch)}
+              onTogglePublish={() => patchInsight(ins.id, { published: !ins.published })}
+              onDelete={() => deleteInsight(ins.id)}
+            />
+          ))}
+        </div>
+      )}
+
+      {tab === 'questions' && (
+        <div className="public-corpus-questions">
+          {questions.length === 0 && !loading && (
+            <div className="public-corpus-empty">No captured questions yet.</div>
+          )}
+          {questions.map(q => (
+            <div key={q.id} className={`public-question-card status-${q.status}`}>
+              <div className="public-question-head">
+                <span className={`public-question-status status-${q.status}`}>{q.status}</span>
+                <span className="public-question-when">{new Date(q.created_at).toLocaleString()}</span>
+                {q.category_guess && <span className="public-question-category">{q.category_guess}</span>}
+              </div>
+              <div className="public-question-body">"{q.question}"</div>
+              {q.email && <div className="public-question-email">↳ {q.email}</div>}
+              {Array.isArray(q.matched_insight_slugs) && q.matched_insight_slugs.length > 0 && (
+                <div className="public-question-closest">
+                  Closest offered: {q.matched_insight_slugs.join(', ')}
+                </div>
+              )}
+              <div className="public-question-actions">
+                {q.status !== 'reviewing' && <button className="btn ghost" disabled={busyId === q.id} onClick={() => setQuestionStatus(q.id, 'reviewing')}>Mark reviewing</button>}
+                {q.status !== 'answered'  && <button className="btn ghost" disabled={busyId === q.id} onClick={() => setQuestionStatus(q.id, 'answered')}>Mark answered</button>}
+                {q.status !== 'closed'    && <button className="btn ghost" disabled={busyId === q.id} onClick={() => setQuestionStatus(q.id, 'closed')}>Close</button>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const PublicInsightCard = ({ insight, editing, busy, onEdit, onCancelEdit, onSave, onTogglePublish, onDelete }) => {
+  const [draft, setDraft] = useState(insight);
+  useEffect(() => { setDraft(insight); }, [insight]);
+
+  if (!editing) {
+    return (
+      <div className={`public-insight-card ${insight.published ? 'live' : 'staged'}`}>
+        <div className="public-insight-head">
+          <span className={`public-insight-status ${insight.published ? 'live' : 'staged'}`}>
+            {insight.published ? 'LIVE' : 'STAGED'}
+          </span>
+          <span className="public-insight-category">{insight.category}</span>
+          <span className="public-insight-confidence">{insight.confidence || 'high'}</span>
+          {insight.source_n && <span className="public-insight-n">n={insight.source_n}</span>}
+        </div>
+        <div className="public-insight-title">{insight.title}</div>
+        <div className="public-insight-body">{insight.insight}</div>
+        {insight.stat && <div className="public-insight-stat">{insight.stat}</div>}
+        {insight.supporting_quote && <div className="public-insight-quote">"{insight.supporting_quote}"</div>}
+        <div className="public-insight-meta">
+          <div><strong>Slug:</strong> {insight.slug}</div>
+          {insight.source_note && <div><strong>Source:</strong> {insight.source_note}</div>}
+          {Array.isArray(insight.topic_tags) && insight.topic_tags.length > 0 && (
+            <div><strong>Tags:</strong> {insight.topic_tags.join(', ')}</div>
+          )}
+          {Array.isArray(insight.question_framings) && insight.question_framings.length > 0 && (
+            <div><strong>Framings:</strong> {insight.question_framings.map((q, i) => <div key={i} className="public-insight-framing">"{q}"</div>)}</div>
+          )}
+        </div>
+        <div className="public-insight-actions">
+          <button className="btn" disabled={busy} onClick={onTogglePublish}>
+            {insight.published ? 'Unpublish' : 'Publish'}
+          </button>
+          <button className="btn ghost" disabled={busy} onClick={onEdit}>Edit</button>
+          <button className="btn ghost public-insight-delete" disabled={busy} onClick={onDelete}>Delete</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="public-insight-card editing">
+      <label>Title <input type="text" value={draft.title || ''} onChange={(e) => setDraft({ ...draft, title: e.target.value })} /></label>
+      <label>Insight <textarea rows={4} value={draft.insight || ''} onChange={(e) => setDraft({ ...draft, insight: e.target.value })} /></label>
+      <label>Stat <textarea rows={2} value={draft.stat || ''} onChange={(e) => setDraft({ ...draft, stat: e.target.value })} /></label>
+      <div className="public-insight-edit-row">
+        <label>Category <input type="text" value={draft.category || ''} onChange={(e) => setDraft({ ...draft, category: e.target.value })} /></label>
+        <label>Confidence
+          <select value={draft.confidence || 'high'} onChange={(e) => setDraft({ ...draft, confidence: e.target.value })}>
+            <option value="high">high</option><option value="medium">medium</option>
+          </select>
+        </label>
+        <label>n <input type="number" value={draft.source_n || ''} onChange={(e) => setDraft({ ...draft, source_n: e.target.value ? Number(e.target.value) : null })} /></label>
+      </div>
+      <label>Topic tags (comma-separated)
+        <input type="text" value={(draft.topic_tags || []).join(', ')} onChange={(e) => setDraft({ ...draft, topic_tags: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })} />
+      </label>
+      <label>Question framings (one per line)
+        <textarea rows={3} value={(draft.question_framings || []).join('\n')} onChange={(e) => setDraft({ ...draft, question_framings: e.target.value.split('\n').map(s => s.trim()).filter(Boolean) })} />
+      </label>
+      <label>Supporting quote
+        <textarea rows={2} value={draft.supporting_quote || ''} onChange={(e) => setDraft({ ...draft, supporting_quote: e.target.value })} />
+      </label>
+      <label>Source note
+        <textarea rows={2} value={draft.source_note || ''} onChange={(e) => setDraft({ ...draft, source_note: e.target.value })} />
+      </label>
+      <div className="public-insight-actions">
+        <button className="btn primary" disabled={busy} onClick={() => onSave({
+          title: draft.title, insight: draft.insight, stat: draft.stat,
+          category: draft.category, topic_tags: draft.topic_tags,
+          question_framings: draft.question_framings,
+          supporting_quote: draft.supporting_quote, confidence: draft.confidence,
+          source_n: draft.source_n, source_note: draft.source_note,
+        })}>Save</button>
+        <button className="btn ghost" disabled={busy} onClick={onCancelEdit}>Cancel</button>
+      </div>
+    </div>
+  );
+};
+
+// Reusable inline action on Joy Map / Audience Map / Intelligence-pane
+// finding cards. Renders a small "Publish to public" link; opens a modal
+// that pre-fills from the finding and posts to bjl-public-promote.
+const PromoteToPublicButton = ({ defaults }) => {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState(defaults || {});
+  const [submitting, setSubmitting] = useState(false);
+  const [done, setDone] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => { if (open) setDraft(defaults || {}); }, [open, defaults]);
+
+  const submit = async () => {
+    setSubmitting(true); setError(null);
+    try {
+      const r = await fetch('/.netlify/functions/bjl-public-promote', authedFetchInit({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(draft),
+      }));
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || `promote failed (${r.status})`);
+      setDone(j);
+    } catch (err) { setError(String(err.message || err)); }
+    finally { setSubmitting(false); }
+  };
+
+  return (
+    <>
+      <button className="btn ghost public-promote-trigger" onClick={() => { setOpen(true); setDone(null); }} title="Stage as a public insight (review before going live)">
+        Publish to public
+      </button>
+      {open && (
+        <div className="public-promote-overlay" onClick={() => setOpen(false)}>
+          <div className="public-promote-modal" onClick={(e) => e.stopPropagation()}>
+            {done ? (
+              <>
+                <h3>Staged</h3>
+                <p>
+                  {done.already_existed
+                    ? <>A staged insight with slug <code>{done.slug}</code> already existed. Edit it in the Public Corpus pane before publishing.</>
+                    : <>Insight staged with slug <code>{done.slug}</code>. Review it in the Public Corpus pane and flip Publish when ready.</>}
+                </p>
+                <div className="public-promote-actions">
+                  <button className="btn primary" onClick={() => setOpen(false)}>Close</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <h3>Publish to public</h3>
+                <p className="public-promote-help">Stage this finding as a public insight. It will land at <code>published=false</code> and won't appear in the public chat until you flip it live in the Public Corpus pane.</p>
+                <label>Title (the argument-winning headline)
+                  <input type="text" value={draft.title || ''} onChange={(e) => setDraft({ ...draft, title: e.target.value })} />
+                </label>
+                <label>Insight (plain-English finding)
+                  <textarea rows={4} value={draft.insight || ''} onChange={(e) => setDraft({ ...draft, insight: e.target.value })} />
+                </label>
+                <label>Stat (supporting number)
+                  <textarea rows={2} value={draft.stat || ''} onChange={(e) => setDraft({ ...draft, stat: e.target.value })} />
+                </label>
+                <div className="public-insight-edit-row">
+                  <label>Category <input type="text" value={draft.category || ''} onChange={(e) => setDraft({ ...draft, category: e.target.value })} /></label>
+                  <label>Confidence
+                    <select value={draft.confidence || 'high'} onChange={(e) => setDraft({ ...draft, confidence: e.target.value })}>
+                      <option value="high">high</option><option value="medium">medium</option>
+                    </select>
+                  </label>
+                  <label>n <input type="number" value={draft.source_n || ''} onChange={(e) => setDraft({ ...draft, source_n: e.target.value ? Number(e.target.value) : null })} /></label>
+                </div>
+                <label>Topic tags (comma-separated)
+                  <input type="text" value={(draft.topic_tags || []).join(', ')} onChange={(e) => setDraft({ ...draft, topic_tags: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })} />
+                </label>
+                <label>Question framings (one per line — used for retrieval matching)
+                  <textarea rows={3} value={(draft.question_framings || []).join('\n')} onChange={(e) => setDraft({ ...draft, question_framings: e.target.value.split('\n').map(s => s.trim()).filter(Boolean) })} />
+                </label>
+                <label>Source note
+                  <textarea rows={2} value={draft.source_note || ''} onChange={(e) => setDraft({ ...draft, source_note: e.target.value })} />
+                </label>
+                {error && <div className="joy-map-error">Error: {error}</div>}
+                <div className="public-promote-actions">
+                  <button className="btn primary" disabled={submitting || !draft.title || !draft.insight || !draft.category} onClick={submit}>
+                    {submitting ? 'Staging…' : 'Stage this insight'}
+                  </button>
+                  <button className="btn ghost" onClick={() => setOpen(false)}>Cancel</button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+    </>
+  );
+};
+
 
 /* =========================================================================
  * 13. App root — shell + mode switching + shared state.
@@ -4548,12 +4894,13 @@ const App = ({ authedUser = null, onSignOut = null } = {}) => {
   }, []);
 
   const crumbs = {
-    intelligence: ["Workbench", "Intelligence engine", "Ask the Lab"],
-    outreach:     ["Workbench", "Outreach", "Accounts"],
-    joy_map:      ["Workbench", "Joy Map"],
+    intelligence:  ["Workbench", "Intelligence engine", "Ask the Lab"],
+    outreach:      ["Workbench", "Outreach", "Accounts"],
+    joy_map:       ["Workbench", "Joy Map"],
+    public_corpus: ["Workbench", "Public Corpus"],
   }[mode] || ["Workbench"];
 
-  const showDrawer = drawerOpen && mode !== "outreach" && mode !== "joy_map";
+  const showDrawer = drawerOpen && mode !== "outreach" && mode !== "joy_map" && mode !== "public_corpus";
 
   return (
     <div className="app" data-screen-label={`BJL · ${mode}`}>
@@ -4599,6 +4946,8 @@ const App = ({ authedUser = null, onSignOut = null } = {}) => {
               setStrategistContext={setStrategistContext} />}
             {mode === "joy_map" && <JoyMapMode
               key={`joymap-${sessionKey}`} />}
+            {mode === "public_corpus" && <PublicCorpusMode
+              key={`pubcorp-${sessionKey}`} />}
           </div>
           {showDrawer && <EvidenceDrawer rows={evidenceRows} filter={drawerFilter} onFilter={setDrawerFilter} />}
         </div>
