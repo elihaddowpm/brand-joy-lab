@@ -60,10 +60,20 @@ const TITLE_MATCH_LEN = 25;
 // here; both are stable.
 const VALID_TYPES = ['case_study', 'article', 'approved_email'];
 
-// Max approved-email examples injected per draft. Two is enough to anchor
-// voice/structure without crowding the prompt or letting the model copy.
-const APPROVED_EMAIL_LIMIT = 2;
+// Approved-email retrieval limits. One query PER requested content type
+// (PER_TYPE each) so a sparse pool — e.g. a single bjl_insight example among
+// 25+ case studies — is guaranteed representation rather than being crowded
+// out by a shared limit that fills with the dominant type. FALLBACK is used
+// when the brief signals no content type; CAP bounds the combined,
+// deduplicated set passed to the model so context stays lean as the catalog
+// grows.
+const APPROVED_EMAIL_PER_TYPE = 2;
+const APPROVED_EMAIL_FALLBACK = 3;
+const APPROVED_EMAIL_CAP = 5;
+// Content types queried, in signal-priority order (bjl > case study > article).
+const APPROVED_EMAIL_CONTENT_TYPES = ['bjl_insight', 'case_study', 'article_share'];
 const APPROVED_EMAIL_RETURN = ['subject', 'body', 'final_text', 'company', 'brief'];
+const APPROVED_EMAIL_SELECT = 'id, subject, body, final_text, company, brief, content_types, cadence_position';
 
 // Loose mapping from prospect categories (which come from Waldo account
 // data, ad-hoc strings like "destination_marketing" or "attractions_entertainment")
@@ -307,46 +317,63 @@ exports.handler = async (event) => {
     }
 
     if (body.type === 'approved_email') {
-      // Tag-retrieval over the approved-email corpus. Phase 1 = category +
-      // pain_keyword overlap (same scoreRow used for case studies/articles).
-      // The embedding column exists for a later semantic phase but is unused
-      // here. Cap the candidate scan; the corpus is expected to stay modest.
+      // Retrieval over the approved-email corpus. One query PER requested
+      // content type, each with its own limit, so a sparse pool (e.g. a single
+      // bjl_insight example among 25+ case studies) is guaranteed
+      // representation instead of being crowded out — a shared limit fills
+      // with the dominant type before it ever reaches the rare one. Results
+      // are combined, deduplicated by id, and capped. The embedding column
+      // exists for a later semantic phase but is unused here.
       const contentTypes = Array.isArray(body.content_types)
         ? body.content_types.filter(t => typeof t === 'string' && t)
         : [];
 
-      let q = supabase
-        .from('bjl_approved_emails')
-        .select('subject, body, final_text, company, brief, category, pain_keywords, content_types, cadence_position')
-        .not('body', 'is', null)
-        .order('approved_at', { ascending: false })
-        .limit(500);
-      // When the brief signals specific content (BJL finding / case study /
-      // article), restrict examples to approved emails that actually contain
-      // that content type. Without this the model only ever sees whatever is
-      // most common in the corpus (today: case studies) regardless of what the
-      // brief asked for, so BJL-requesting briefs never got a BJL example.
-      if (contentTypes.length > 0) {
-        q = q.overlaps('content_types', contentTypes);
+      const examplesByType = [];
+      // Query each requested type in signal-priority order. Skip types the
+      // brief didn't ask for.
+      for (const ct of APPROVED_EMAIL_CONTENT_TYPES) {
+        if (!contentTypes.includes(ct)) continue;
+        const { data, error } = await supabase
+          .from('bjl_approved_emails')
+          .select(APPROVED_EMAIL_SELECT)
+          .contains('content_types', [ct])
+          .not('body', 'is', null)
+          .order('approved_at', { ascending: false })
+          .limit(APPROVED_EMAIL_PER_TYPE);
+        if (error) {
+          console.error('[bjl-content] approved_emails query error:', error);
+          return { statusCode: 500, body: JSON.stringify({ error: 'Lookup failed', detail: error.message }) };
+        }
+        if (data) examplesByType.push(...data);
       }
-      const { data, error } = await q;
-      if (error) {
-        console.error('[bjl-content] approved_emails query error:', error);
-        return { statusCode: 500, body: JSON.stringify({ error: 'Lookup failed', detail: error.message }) };
+
+      // No content signal fired (or none matched): fall back to a few recent
+      // general examples so drafting still has voice/structure anchors.
+      if (examplesByType.length === 0) {
+        const { data, error } = await supabase
+          .from('bjl_approved_emails')
+          .select(APPROVED_EMAIL_SELECT)
+          .not('body', 'is', null)
+          .order('approved_at', { ascending: false })
+          .limit(APPROVED_EMAIL_FALLBACK);
+        if (error) {
+          console.error('[bjl-content] approved_emails fallback query error:', error);
+          return { statusCode: 500, body: JSON.stringify({ error: 'Lookup failed', detail: error.message }) };
+        }
+        if (data) examplesByType.push(...data);
       }
-      const rows = data || [];
-      // Rank by pain_keyword/category overlap for ordering. When a content-type
-      // filter is active the overlap match is itself the relevance gate, so we
-      // keep zero-overlap rows; when no filter fired, require some overlap so
-      // unrelated examples don't get injected.
-      const scored = rows
-        .map(r => ({ row: r, score: scoreRow(r.pain_keywords, painKeywords, category) }))
-        .sort((a, b) => b.score - a.score);
-      const ranked = contentTypes.length > 0 ? scored : scored.filter(x => x.score > 0);
-      if (ranked.length === 0) {
+
+      // Deduplicate by id (a multi-type email can match more than one query),
+      // then cap the total passed to the model.
+      const seen = new Set();
+      const deduped = examplesByType
+        .filter(e => { if (seen.has(e.id)) return false; seen.add(e.id); return true; })
+        .slice(0, APPROVED_EMAIL_CAP);
+
+      if (deduped.length === 0) {
         return { statusCode: 200, body: JSON.stringify({ found: false, type: 'approved_email' }) };
       }
-      const top = ranked.slice(0, APPROVED_EMAIL_LIMIT).map(x => pick(x.row, APPROVED_EMAIL_RETURN));
+      const top = deduped.map(x => pick(x, APPROVED_EMAIL_RETURN));
       return {
         statusCode: 200,
         headers: { 'Content-Type': 'application/json' },
