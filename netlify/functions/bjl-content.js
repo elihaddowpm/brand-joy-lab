@@ -311,20 +311,38 @@ exports.handler = async (event) => {
       // pain_keyword overlap (same scoreRow used for case studies/articles).
       // The embedding column exists for a later semantic phase but is unused
       // here. Cap the candidate scan; the corpus is expected to stay modest.
-      const { data, error } = await supabase
+      const contentTypes = Array.isArray(body.content_types)
+        ? body.content_types.filter(t => typeof t === 'string' && t)
+        : [];
+
+      let q = supabase
         .from('bjl_approved_emails')
-        .select('subject, body, final_text, company, brief, category, pain_keywords')
+        .select('subject, body, final_text, company, brief, category, pain_keywords, content_types, cadence_position')
+        .not('body', 'is', null)
         .order('approved_at', { ascending: false })
         .limit(500);
+      // When the brief signals specific content (BJL finding / case study /
+      // article), restrict examples to approved emails that actually contain
+      // that content type. Without this the model only ever sees whatever is
+      // most common in the corpus (today: case studies) regardless of what the
+      // brief asked for, so BJL-requesting briefs never got a BJL example.
+      if (contentTypes.length > 0) {
+        q = q.overlaps('content_types', contentTypes);
+      }
+      const { data, error } = await q;
       if (error) {
         console.error('[bjl-content] approved_emails query error:', error);
         return { statusCode: 500, body: JSON.stringify({ error: 'Lookup failed', detail: error.message }) };
       }
       const rows = data || [];
-      const ranked = rows
+      // Rank by pain_keyword/category overlap for ordering. When a content-type
+      // filter is active the overlap match is itself the relevance gate, so we
+      // keep zero-overlap rows; when no filter fired, require some overlap so
+      // unrelated examples don't get injected.
+      const scored = rows
         .map(r => ({ row: r, score: scoreRow(r.pain_keywords, painKeywords, category) }))
-        .filter(x => x.score > 0)
         .sort((a, b) => b.score - a.score);
+      const ranked = contentTypes.length > 0 ? scored : scored.filter(x => x.score > 0);
       if (ranked.length === 0) {
         return { statusCode: 200, body: JSON.stringify({ found: false, type: 'approved_email' }) };
       }
