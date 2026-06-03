@@ -26,6 +26,7 @@ const SOURCES = {
   joyMapAudienceParse: 'prompts/joy_map_audience_parse.md',
   audienceMapRouting: 'prompts/audience_map_routing.md',
   audienceMapSynthesis: 'prompts/audience_map_synthesis.md',
+  publicChatSynthesis: 'prompts/public_chat_synthesis.md',
   schemaDoc: 'docs/schema_doc.md',
 };
 
