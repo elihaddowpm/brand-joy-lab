@@ -1511,16 +1511,27 @@ const generateOneEmail = async ({
     const exResult = await exRes.json();
     console.log("[bjl-orch] <- approved_email response", { status: exRes.status, found: exResult.found, n: Array.isArray(exResult.data) ? exResult.data.length : 0 });
     if (exResult.found && Array.isArray(exResult.data) && exResult.data.length) {
+      // Sanitize before injection: strip URLs so the model learns how an
+      // article/case study is *framed* without being handed a specific link
+      // to copy verbatim. (Batch 51: the Cedar Fair fandom URL leaked into
+      // emails whose brief never asked for an article.) The company label is
+      // also dropped from the visible example so a client name isn't dangled
+      // as copyable text — provenance still flows to exampleSources.
+      const sanitizeExample = (s) => (s || "")
+        .replace(/https?:\/\/[^\s]+/g, "[link redacted]")
+        .replace(/www\.[^\s]+/g, "[link redacted]");
       const items = exResult.data.map((ex, n) => {
-        const subj = ex.subject ? "Subject: " + ex.subject + "\n" : "";
-        const bodyText = ex.body || ex.final_text || "";
-        return "Example " + (n + 1) + (ex.company ? " (" + ex.company + ")" : "") + ":\n" + subj + bodyText;
+        const subj = ex.subject ? "Subject: " + sanitizeExample(ex.subject) + "\n" : "";
+        const bodyText = sanitizeExample(ex.body || ex.final_text || "");
+        return "Example " + (n + 1) + ":\n" + subj + bodyText;
       });
       examplesBlock = [
-        "[APPROVED EXAMPLES - emails we have actually sent and approved in similar situations. Match this voice, rhythm, and structure. Do not copy their phrasing or reuse their specifics.]",
+        "[APPROVED EXAMPLES]",
+        "These approved emails demonstrate the right voice and register for PETERMAYER outreach. Match the tone and register only. Do not replicate their specific content, article links, case study references, or structural sequence unless your brief explicitly calls for them.",
         items.join("\n\n"),
         "[END APPROVED EXAMPLES]",
       ].join("\n");
+      console.log("[bjl-orch] approved examples (sanitized) injected:", items);
       exampleSources = { count: exResult.data.length, companies: exResult.data.map(e => e.company).filter(Boolean) };
     }
   } catch (e) {
