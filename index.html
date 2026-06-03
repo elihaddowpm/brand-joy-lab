@@ -1490,10 +1490,18 @@ const generateOneEmail = async ({
   // matches. Fail-open: any error leaves examplesBlock empty.
   let examplesBlock = "";
   try {
+    // Mirror the brief signals into corpus content types so the example we
+    // inject actually contains the kind of content the brief is asking for
+    // (a BJL-requesting brief should see a BJL example, not a case study).
+    const requestedTypes = [];
+    if (wantsBJL) requestedTypes.push("bjl_insight");
+    if (wantsCaseStudy) requestedTypes.push("case_study");
+    if (wantsArticle) requestedTypes.push("article_share");
     const exPayload = {
       type: "approved_email",
       category: prospectContext.category || "",
       pain_keywords: prospectContext.pain_keywords || [],
+      content_types: requestedTypes,
     };
     const exRes = await fetch("/api/bjl-content", authedFetchInit({
       method: "POST",
