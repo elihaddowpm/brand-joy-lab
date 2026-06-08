@@ -3567,3 +3567,108 @@ textarea { font-family: var(--font-text); }
   justify-content: flex-end;
   margin-top: .5rem;
 }
+
+/* ====================================================================
+   v6.1 — Public Corpus candidate-insight panel
+   Renders beneath each completed Intelligence-pane turn when the Haiku
+   extractor surfaces 1–3 publishable findings from the response.
+   ==================================================================== */
+
+.public-candidates-panel {
+  margin-top: 1rem;
+  padding: .85rem 1rem;
+  background: rgba(13, 148, 136, .04);
+  border: 1px solid rgba(13, 148, 136, .25);
+  border-radius: 8px;
+}
+.public-candidates-head {
+  display: flex;
+  align-items: baseline;
+  gap: .5rem;
+  margin-bottom: .6rem;
+}
+.public-candidates-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: #0d9488;
+  font-weight: 500;
+}
+.public-candidates-count {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: #0d9488;
+  color: white;
+  font-weight: 500;
+}
+.public-candidates-list {
+  display: flex;
+  flex-direction: column;
+  gap: .55rem;
+}
+
+.public-candidate-card {
+  background: #fff;
+  padding: .75rem .9rem;
+  border-radius: 6px;
+  border: 1px solid var(--iron, #e2e2dc);
+  display: flex;
+  flex-direction: column;
+  gap: .4rem;
+}
+.public-candidate-meta {
+  display: flex;
+  gap: .4rem;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--iron-darker, #5a5a55);
+  flex-wrap: wrap;
+}
+.public-candidate-category {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--paper-2, #f4f3ed);
+  font-weight: 500;
+}
+.public-candidate-confidence,
+.public-candidate-n {
+  color: var(--iron-dark, #8a8a82);
+}
+.public-candidate-title {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--ink, #1a1a17);
+  line-height: 1.4;
+}
+.public-candidate-stat {
+  font-size: 12.5px;
+  color: var(--ink, #1a1a17);
+  padding: .35rem .55rem;
+  background: var(--paper-2, #f4f3ed);
+  border-radius: 5px;
+}
+.public-candidate-rationale {
+  font-size: 11.5px;
+  color: var(--iron-darker, #5a5a55);
+  font-style: italic;
+  line-height: 1.4;
+}
+.public-candidate-rationale-label {
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  font-style: normal;
+  font-size: 10px;
+  color: var(--iron-dark, #8a8a82);
+}
+.public-candidate-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: .35rem;
+  margin-top: .15rem;
+}
+.public-candidate-actions .public-promote-trigger {
+  padding: .3rem .65rem;
+  font-size: 12px;
+}
