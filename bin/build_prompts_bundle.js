@@ -27,6 +27,7 @@ const SOURCES = {
   audienceMapRouting: 'prompts/audience_map_routing.md',
   audienceMapSynthesis: 'prompts/audience_map_synthesis.md',
   publicChatSynthesis: 'prompts/public_chat_synthesis.md',
+  publicCandidateExtractor: 'prompts/public_candidate_extractor.md',
   schemaDoc: 'docs/schema_doc.md',
 };
 

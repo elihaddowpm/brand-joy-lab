@@ -2313,6 +2313,58 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
     setEvidenceRows([]);
   }, [setEvidenceRows]);
 
+  // v6.1 — Auto-extract publishable candidates from each completed turn.
+  // Runs as Haiku in the background after a turn lands; never blocks the
+  // response flow. Skips clarification turns and any turn that already
+  // has candidates set. Stores them on the turn as
+  // turn.publicCandidates (array; empty array means "ran but nothing
+  // qualified", null/undefined means "not yet attempted").
+  useEffect(() => {
+    if (running) return;
+    if (turns.length === 0) return;
+    const lastIdx = turns.length - 1;
+    const lastTurn = turns[lastIdx];
+    if (!lastTurn) return;
+    if (lastTurn.isClarification) return;
+    if (lastTurn.publicCandidates !== undefined) return;
+    if (!lastTurn.response || lastTurn.response.trim().length < 200) return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch('/.netlify/functions/bjl-extract-public-candidates', authedFetchInit({
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            original_question: lastTurn.prompt || '',
+            response_text:     lastTurn.response || '',
+            turn_id:           `t${lastIdx}-${Date.now()}`,
+          }),
+        }));
+        if (!r.ok || cancelled) {
+          if (!cancelled) {
+            setTurns(prev => prev.map((t, i) =>
+              i === lastIdx ? { ...t, publicCandidates: [] } : t
+            ));
+          }
+          return;
+        }
+        const j = await r.json();
+        if (cancelled) return;
+        setTurns(prev => prev.map((t, i) =>
+          i === lastIdx ? { ...t, publicCandidates: Array.isArray(j.candidates) ? j.candidates : [] } : t
+        ));
+      } catch (_err) {
+        if (!cancelled) {
+          setTurns(prev => prev.map((t, i) =>
+            i === lastIdx ? { ...t, publicCandidates: [] } : t
+          ));
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [turns, running]);
+
   const copyConversation = useCallback(() => {
     const all = turns.map((t, i) =>
       `Q${i + 1}${t.isFollowup ? " (follow-up)" : ""}: ${t.prompt}\n\n${t.response.trim()}`
@@ -2460,6 +2512,12 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
                   <div className="stream-doc">
                     {renderMarkdown(t.response)}
                   </div>
+                  {/* v6.1 — Public Corpus candidate insights, auto-extracted
+                      from this turn. Empty array means the extractor ran and
+                      found nothing publishable. */}
+                  {Array.isArray(t.publicCandidates) && t.publicCandidates.length > 0 && (
+                    <PublicCandidatesPanel candidates={t.publicCandidates} sourceTurnPrompt={t.prompt} />
+                  )}
                   {/* Triage-provided followup chips. Only on the last turn so the
                       conversation feed stays clean. Clicking a chip submits it
                       as the next follow-up question. */}
@@ -4741,6 +4799,59 @@ const PublicInsightCard = ({ insight, editing, busy, onEdit, onCancelEdit, onSav
           source_n: draft.source_n, source_note: draft.source_note,
         })}>Save</button>
         <button className="btn ghost" disabled={busy} onClick={onCancelEdit}>Cancel</button>
+      </div>
+    </div>
+  );
+};
+
+// v6.1 — Beneath each completed Intelligence turn, render the auto-
+// extracted publishable candidates (small Haiku pass identifies cross-
+// category surprises and durable findings in the response). Each card
+// is a preview + a one-line rationale; clicking opens the existing
+// PromoteToPublicButton modal with everything pre-filled.
+const PublicCandidatesPanel = ({ candidates, sourceTurnPrompt }) => {
+  if (!Array.isArray(candidates) || candidates.length === 0) return null;
+  return (
+    <div className="public-candidates-panel">
+      <div className="public-candidates-head">
+        <span className="public-candidates-label">Publishable from this finding</span>
+        <span className="public-candidates-count">{candidates.length}</span>
+      </div>
+      <div className="public-candidates-list">
+        {candidates.map((c, i) => (
+          <div key={i} className="public-candidate-card">
+            <div className="public-candidate-meta">
+              <span className="public-candidate-category">{c.category}</span>
+              <span className="public-candidate-confidence">{c.confidence}</span>
+              {typeof c.source_n === 'number' && (
+                <span className="public-candidate-n">n={c.source_n.toLocaleString()}</span>
+              )}
+            </div>
+            <div className="public-candidate-title">{c.title}</div>
+            {c.stat && <div className="public-candidate-stat">{c.stat}</div>}
+            {c.rationale && (
+              <div className="public-candidate-rationale">
+                <span className="public-candidate-rationale-label">Why this surfaced:</span> {c.rationale}
+              </div>
+            )}
+            <div className="public-candidate-actions">
+              <PromoteToPublicButton defaults={{
+                title:             c.title,
+                insight:           c.insight,
+                stat:              c.stat,
+                category:          c.category,
+                topic_tags:        c.topic_tags || [],
+                question_framings: c.question_framings || [],
+                confidence:        c.confidence,
+                source_n:          c.source_n,
+                source_note:       sourceTurnPrompt
+                                     ? `Intelligence pane response to: "${String(sourceTurnPrompt).slice(0, 240)}"`
+                                     : '',
+                created_from:      'intelligence_candidate_extractor',
+              }} />
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
