@@ -31,8 +31,11 @@ SELECT
   i.item_id,
   i.question_id,
   q.primary_topic,
-  COALESCE(NULLIF(q.short_label, ''), LEFT(q.question_text, 90)),
-  i.item_name,
+  -- v6.5: wrap question_label in clean_mojibake() per Eli's data-layer note.
+  -- The public tables were cleaned but the source bjl_items / bjl_questions_v2
+  -- still hold a few mojibake duplicate rows, so we sanitize on read.
+  clean_mojibake(COALESCE(NULLIF(q.short_label, ''), LEFT(q.question_text, 90))),
+  clean_mojibake(i.item_name),
   ROUND(AVG(r.joy_index)::numeric, 1),
   COUNT(*),
   q.question_type,
@@ -40,6 +43,11 @@ SELECT
 FROM bjl_responses r
 JOIN bjl_items i        ON i.item_id     = r.item_id
 JOIN bjl_questions_v2 q ON q.question_id = i.question_id
+-- joy_index = numeric_value * 20 on the -3 to +5 scale, range -60 to +100.
+-- A score of 100 is a legitimate maximum-joy answer. The BETWEEN range below
+-- is inclusive; do NOT add any joy_index-below-100 exclusion. The brief
+-- explicitly forbids it; the old "always filter under 100" rule was
+-- depressing every number by 15 to 25 points.
 WHERE r.joy_index IS NOT NULL
   AND r.joy_index BETWEEN -60 AND 100
 GROUP BY
@@ -49,9 +57,10 @@ HAVING COUNT(*) >= 30
 ON CONFLICT (item_id) DO UPDATE SET
   joy_index      = EXCLUDED.joy_index,
   n              = EXCLUDED.n,
-  question_label = EXCLUDED.question_label,
+  question_label = EXCLUDED.question_label,   -- already mojibake-cleaned by the SELECT
   category       = EXCLUDED.category,
-  question_type  = EXCLUDED.question_type
+  question_type  = EXCLUDED.question_type,
+  item_name      = EXCLUDED.item_name         -- v6.5: also rewrite item_name so prior dirty rows get cleaned on refresh
 -- public_safe intentionally NOT updated — preserves curation
 RETURNING item_id
 `;
