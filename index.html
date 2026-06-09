@@ -2529,6 +2529,28 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
                   {Array.isArray(t.publicCandidates) && t.publicCandidates.length > 0 && (
                     <PublicCandidatesPanel candidates={t.publicCandidates} sourceTurnPrompt={t.prompt} />
                   )}
+                  {/* v6.2 — Backup "Add to public corpus" entry point on every
+                      completed Intelligence turn. The extractor surfaces 0-3
+                      candidate cards above when it finds publishable findings,
+                      but the strategist may notice a publishable insight the
+                      extractor missed. This button opens the staging modal with
+                      the full turn response pre-filled so the strategist can
+                      trim it down to the publishable finding by hand. */}
+                  {!t.isClarification && (
+                    <div className="turn-actions">
+                      <PromoteToPublicButton
+                        label="Add to public corpus"
+                        defaults={{
+                          title:        '',
+                          insight:      t.response || '',
+                          stat:         '',
+                          category:     '',
+                          confidence:   'medium',
+                          source_note:  t.prompt ? `Intelligence pane response to: "${String(t.prompt).slice(0, 240)}"` : '',
+                          created_from: 'promoted',
+                        }} />
+                    </div>
+                  )}
                   {/* Triage-provided followup chips. Only on the last turn so the
                       conversation feed stays clean. Clicking a chip submits it
                       as the next follow-up question. */}
@@ -4781,10 +4803,17 @@ const PublicInsightCard = ({ insight, editing, busy, onEdit, onCancelEdit, onSav
       <label>Insight <textarea rows={4} value={draft.insight || ''} onChange={(e) => setDraft({ ...draft, insight: e.target.value })} /></label>
       <label>Stat <textarea rows={2} value={draft.stat || ''} onChange={(e) => setDraft({ ...draft, stat: e.target.value })} /></label>
       <div className="public-insight-edit-row">
-        <label>Category <input type="text" value={draft.category || ''} onChange={(e) => setDraft({ ...draft, category: e.target.value })} /></label>
+        <label>Category
+          <select value={draft.category || ''} onChange={(e) => setDraft({ ...draft, category: e.target.value })}>
+            <option value="">— select —</option>
+            {PUBLIC_CORPUS_CATEGORIES.map(c => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+        </label>
         <label>Confidence
           <select value={draft.confidence || 'high'} onChange={(e) => setDraft({ ...draft, confidence: e.target.value })}>
-            <option value="high">high</option><option value="medium">medium</option>
+            <option value="high">high</option><option value="medium">medium</option><option value="low">low</option>
           </select>
         </label>
         <label>n <input type="number" value={draft.source_n || ''} onChange={(e) => setDraft({ ...draft, source_n: e.target.value ? Number(e.target.value) : null })} /></label>
@@ -4868,10 +4897,28 @@ const PublicCandidatesPanel = ({ candidates, sourceTurnPrompt }) => {
   );
 };
 
+// v6.2 — Public Corpus taxonomy. Categories MUST match the live corpus
+// vocabulary. Order is the dropdown order in the staging modal; "general"
+// is the fallback for findings that don't fit elsewhere.
+const PUBLIC_CORPUS_CATEGORIES = [
+  'personal_state',
+  'travel',
+  'food_beverage',
+  'home_life',
+  'occasions_seasonal',
+  'kids_family',
+  'financial_services',
+  'retail',
+  'telecommunications',
+  'entertainment',
+  'brand_dynamics',
+  'general',
+];
+
 // Reusable inline action on Joy Map / Audience Map / Intelligence-pane
-// finding cards. Renders a small "Publish to public" link; opens a modal
-// that pre-fills from the finding and posts to bjl-public-promote.
-const PromoteToPublicButton = ({ defaults }) => {
+// finding cards. Renders a small "Add to public corpus" link; opens a
+// modal that pre-fills from the finding and posts to bjl-public-promote.
+const PromoteToPublicButton = ({ defaults, label }) => {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(defaults || {});
   const [submitting, setSubmitting] = useState(false);
@@ -4898,7 +4945,7 @@ const PromoteToPublicButton = ({ defaults }) => {
   return (
     <>
       <button className="btn ghost public-promote-trigger" onClick={() => { setOpen(true); setDone(null); }} title="Stage as a public insight (review before going live)">
-        Publish to public
+        {label || 'Add to public corpus'}
       </button>
       {open && (
         <div className="public-promote-overlay" onClick={() => setOpen(false)}>
