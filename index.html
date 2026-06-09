@@ -1377,7 +1377,6 @@ const generateOneEmail = async ({
   let caseStudySources = null;
   let articleSources = null;
   let bjlSources = null;
-  let exampleSources = null;
 
   // Conditional case study fetch. Server picks the row whose use_for_tags
   // overlap best with prospectContext.pain_keywords + category, then
@@ -1482,61 +1481,13 @@ const generateOneEmail = async ({
     console.log("[bjl-orch] cached bjl_finding used for", contactName, "@", company);
   }
 
-  // Approved-email corpus: retrieve up to a couple of previously approved
-  // emails from similar situations (category + pain_keyword overlap) and
-  // inject them as voice/structure anchors. This is the growing base of
-  // knowledge, so unlike the blocks above it is NOT gated by brief signals —
-  // it always runs and simply injects nothing until the corpus has relevant
-  // matches. Fail-open: any error leaves examplesBlock empty.
-  let examplesBlock = "";
-  try {
-    // Mirror the brief signals into corpus content types so the example we
-    // inject actually contains the kind of content the brief is asking for
-    // (a BJL-requesting brief should see a BJL example, not a case study).
-    const requestedTypes = [];
-    if (wantsBJL) requestedTypes.push("bjl_insight");
-    if (wantsCaseStudy) requestedTypes.push("case_study");
-    if (wantsArticle) requestedTypes.push("article_share");
-    const exPayload = {
-      type: "approved_email",
-      category: prospectContext.category || "",
-      pain_keywords: prospectContext.pain_keywords || [],
-      content_types: requestedTypes,
-    };
-    const exRes = await fetch("/api/bjl-content", authedFetchInit({
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(exPayload),
-    }));
-    const exResult = await exRes.json();
-    console.log("[bjl-orch] <- approved_email response", { status: exRes.status, found: exResult.found, n: Array.isArray(exResult.data) ? exResult.data.length : 0 });
-    if (exResult.found && Array.isArray(exResult.data) && exResult.data.length) {
-      // Sanitize before injection: strip URLs so the model learns how an
-      // article/case study is *framed* without being handed a specific link
-      // to copy verbatim. (Batch 51: the Cedar Fair fandom URL leaked into
-      // emails whose brief never asked for an article.) The company label is
-      // also dropped from the visible example so a client name isn't dangled
-      // as copyable text — provenance still flows to exampleSources.
-      const sanitizeExample = (s) => (s || "")
-        .replace(/https?:\/\/[^\s]+/g, "[link redacted]")
-        .replace(/www\.[^\s]+/g, "[link redacted]");
-      const items = exResult.data.map((ex, n) => {
-        const subj = ex.subject ? "Subject: " + sanitizeExample(ex.subject) + "\n" : "";
-        const bodyText = sanitizeExample(ex.body || ex.final_text || "");
-        return "Example " + (n + 1) + ":\n" + subj + bodyText;
-      });
-      examplesBlock = [
-        "[APPROVED EXAMPLES]",
-        "These approved emails demonstrate the right voice and register for PETERMAYER outreach. Match the tone and register only. Do not replicate their specific content, article links, case study references, or structural sequence unless your brief explicitly calls for them.",
-        items.join("\n\n"),
-        "[END APPROVED EXAMPLES]",
-      ].join("\n");
-      console.log("[bjl-orch] approved examples (sanitized) injected:", items);
-      exampleSources = { count: exResult.data.length, companies: exResult.data.map(e => e.company).filter(Boolean) };
-    }
-  } catch (e) {
-    console.warn("Approved examples fetch failed", e);
-  }
+  // The approved-email corpus (bjl_approved_emails) is intentionally NOT
+  // injected here. Feeding approved emails into the generation context made
+  // the model mimic their structure over following the brief (e.g. copying
+  // article URLs into emails that never asked for an article). Voice/register
+  // is established by the handwritten examples in buildEmailSystem(); the
+  // brief and resource blocks supply everything else. The corpus is reserved
+  // for the writing-OS evaluator, which uses it to define good output.
 
   // Em dashes get stripped from brief, case study, article, and BJL block.
   // The waldoContext pipeline handles its own formatting.
@@ -1545,7 +1496,6 @@ const generateOneEmail = async ({
   if (caseStudyBlock) caseStudyBlock = stripEmDashes(caseStudyBlock);
   if (articleBlock)   articleBlock   = stripEmDashes(articleBlock);
   if (bjlBlock)       bjlBlock       = stripEmDashes(bjlBlock);
-  if (examplesBlock)  examplesBlock  = stripEmDashes(examplesBlock);
 
   // Same-company differentiation: when a prior contact at this same company
   // is already in the batch, append a note so the model varies its hook.
@@ -1560,7 +1510,6 @@ const generateOneEmail = async ({
   // userMsg assembly: only the blocks the brief earned.
   const userMsg = [
     cleanBrief ? "[BRIEF]\n" + cleanBrief + "\n[END BRIEF]" : "",
-    examplesBlock,
     waldoContext ? "[WALDO INTELLIGENCE]\n" + waldoContext + "\n[END WALDO INTELLIGENCE]" : "",
     caseStudyBlock,
     articleBlock,
@@ -1588,7 +1537,7 @@ const generateOneEmail = async ({
       let errData; try { errData = await res.json(); } catch { errData = null; }
       const errMsg = errData?.error?.message
         || (res.status === 429 ? "Rate limit hit — increase delay between calls" : "API error " + res.status);
-      return { text: "", error: errMsg, polished: false, scorecard: null, revisionHistory: [], humanReviewRequired: false, sources: { caseStudy: caseStudySources, article: articleSources, bjl: bjlSources, examples: exampleSources } };
+      return { text: "", error: errMsg, polished: false, scorecard: null, revisionHistory: [], humanReviewRequired: false, sources: { caseStudy: caseStudySources, article: articleSources, bjl: bjlSources } };
     }
     const data = await res.json();
     const rawText = data.content?.map(b => b.type === "text" ? b.text : "").filter(Boolean).join("\n") || "";
@@ -1760,8 +1709,8 @@ ${rawBody}`,
       }
     }
 
-    return { text: finalText, error: null, polished, scorecard, revisionHistory, humanReviewRequired, prospectContext, sources: { caseStudy: caseStudySources, article: articleSources, bjl: bjlSources, examples: exampleSources } };
-  } catch (e) { return { text: "", error: e.name === "AbortError" ? "Timed out" : e.message, polished: false, scorecard: null, revisionHistory: [], humanReviewRequired: false, prospectContext, sources: { caseStudy: caseStudySources, article: articleSources, bjl: bjlSources, examples: exampleSources } }; }
+    return { text: finalText, error: null, polished, scorecard, revisionHistory, humanReviewRequired, prospectContext, sources: { caseStudy: caseStudySources, article: articleSources, bjl: bjlSources } };
+  } catch (e) { return { text: "", error: e.name === "AbortError" ? "Timed out" : e.message, polished: false, scorecard: null, revisionHistory: [], humanReviewRequired: false, prospectContext, sources: { caseStudy: caseStudySources, article: articleSources, bjl: bjlSources } }; }
 };
 
 const parseSubjectBody = (text) => {
