@@ -58,11 +58,13 @@ const CLOSEST_OFFER_DISTANCE      = 0.75;  // surface as "closest" even if below
 const STRUCTURED_MIN_HITS         = 1;     // a structured row needs at least 1 token hit
 
 const PER_LAYER_LIMITS = {
-  scores: 5,
-  ordinal: 3,
-  laws: 3,
-  insights: 3,
-  truths: 2,
+  scores:        5,
+  ordinal:       3,
+  agreement:     4,   // v6.4 — agreement-battery % shares (X% strongly agree, X% net agree)
+  distributions: 4,   // v6.4 — frequency / describe-grid polarity-summed shares
+  laws:          3,
+  insights:      3,
+  truths:        2,
 };
 
 const DEFAULT_ALLOWED_ORIGINS = [
@@ -210,19 +212,21 @@ async function retrieveOrdinal(question) {
   const tokens = tokenize(question);
   if (tokens.length === 0) return [];
 
-  // bjl_public_ordinal carries question_label + battery_type. We search
-  // both for token hits.
+  // v6.4: also search item_name + category, matching the surface used by
+  // retrieveScores / retrieveAgreement / retrieveDistributions per the
+  // brief's "item_name and question_label across the four quant tables".
   const conds = tokens.map(t => {
     const tEsc = sqlEscape(t);
-    return `(question_label ILIKE '%${tEsc}%' OR battery_type ILIKE '%${tEsc}%')`;
+    return `(item_name ILIKE '%${tEsc}%' OR question_label ILIKE '%${tEsc}%' OR battery_type ILIKE '%${tEsc}%' OR category ILIKE '%${tEsc}%')`;
   });
   const scoreExpr = tokens.map(t => {
     const tEsc = sqlEscape(t);
-    return `(CASE WHEN (question_label ILIKE '%${tEsc}%' OR battery_type ILIKE '%${tEsc}%') THEN 1 ELSE 0 END)`;
+    return `(CASE WHEN (item_name ILIKE '%${tEsc}%' OR question_label ILIKE '%${tEsc}%' OR battery_type ILIKE '%${tEsc}%' OR category ILIKE '%${tEsc}%') THEN 1 ELSE 0 END)`;
   }).join(' + ');
 
   const sql = `
-    SELECT item_id, question_label, battery_type, mean_value, scale_min, scale_max, n,
+    SELECT item_id, item_name, question_label, battery_type, category,
+           mean_value, scale_min, scale_max, n,
            (${scoreExpr})::int AS hit_count
     FROM bjl_public_ordinal
     WHERE public_safe = true
@@ -233,6 +237,91 @@ async function retrieveOrdinal(question) {
   const { data, error } = await supabase.rpc('execute_read_sql', { query_text: sql });
   if (error) {
     console.error('[bjl-public-chat] retrieveOrdinal error:', error.message);
+    return [];
+  }
+  return (data || []).filter(r => r.hit_count >= STRUCTURED_MIN_HITS);
+}
+
+// v6.4 — bjl_public_agreement: 54 live agreement-battery items.
+// One row per item with the % shares: strongly_agree_pct, net_agree_pct,
+// neutral_pct, net_disagree_pct. The "X% agree" answers — including the
+// fandom grids the brief calls out. Token-match on item_name +
+// question_label + category, return top N by hit count then by n.
+async function retrieveAgreement(question) {
+  const tokens = tokenize(question);
+  if (tokens.length === 0) return [];
+
+  const conds = tokens.map(t => {
+    const tEsc = sqlEscape(t);
+    return `(item_name ILIKE '%${tEsc}%' OR question_label ILIKE '%${tEsc}%' OR category ILIKE '%${tEsc}%')`;
+  });
+  const scoreExpr = tokens.map(t => {
+    const tEsc = sqlEscape(t);
+    return `(CASE WHEN (item_name ILIKE '%${tEsc}%' OR question_label ILIKE '%${tEsc}%' OR category ILIKE '%${tEsc}%') THEN 1 ELSE 0 END)`;
+  }).join(' + ');
+
+  const sql = `
+    SELECT item_id, item_name, question_label, category, n,
+           strongly_agree_pct, net_agree_pct, neutral_pct, net_disagree_pct,
+           (${scoreExpr})::int AS hit_count
+    FROM bjl_public_agreement
+    WHERE public_safe = true
+      AND (${conds.join(' OR ')})
+    ORDER BY hit_count DESC, n DESC NULLS LAST
+    LIMIT ${PER_LAYER_LIMITS.agreement}
+  `;
+  const { data, error } = await supabase.rpc('execute_read_sql', { query_text: sql });
+  if (error) {
+    console.error('[bjl-public-chat] retrieveAgreement error:', error.message);
+    return [];
+  }
+  return (data || []).filter(r => r.hit_count >= STRUCTURED_MIN_HITS);
+}
+
+// v6.4 — bjl_public_distributions: 348 live items, with many rows per
+// item (one per response_label). Per the brief: the "X% feel this often"
+// or "X% very much so" answers are computed as the sum of pct where
+// polarity = 'top'. We aggregate at the SQL layer (GROUP BY item_id)
+// and surface one row per item with top_pct, mid_pct, bottom_pct, and
+// the label set so the synthesizer can quote a specific phrase.
+async function retrieveDistributions(question) {
+  const tokens = tokenize(question);
+  if (tokens.length === 0) return [];
+
+  const conds = tokens.map(t => {
+    const tEsc = sqlEscape(t);
+    return `(item_name ILIKE '%${tEsc}%' OR question_label ILIKE '%${tEsc}%' OR battery_type ILIKE '%${tEsc}%' OR category ILIKE '%${tEsc}%')`;
+  });
+  const scoreExpr = tokens.map(t => {
+    const tEsc = sqlEscape(t);
+    return `(CASE WHEN (item_name ILIKE '%${tEsc}%' OR question_label ILIKE '%${tEsc}%' OR battery_type ILIKE '%${tEsc}%' OR category ILIKE '%${tEsc}%') THEN 1 ELSE 0 END)`;
+  }).join(' + ');
+
+  const sql = `
+    SELECT item_id,
+           MAX(item_name)      AS item_name,
+           MAX(question_label) AS question_label,
+           MAX(battery_type)   AS battery_type,
+           MAX(category)       AS category,
+           MAX(n_total)        AS n_total,
+           ROUND(COALESCE(SUM(pct) FILTER (WHERE polarity = 'top'),    0)::numeric, 1) AS top_pct,
+           ROUND(COALESCE(SUM(pct) FILTER (WHERE polarity = 'mid'),    0)::numeric, 1) AS mid_pct,
+           ROUND(COALESCE(SUM(pct) FILTER (WHERE polarity = 'bottom'), 0)::numeric, 1) AS bottom_pct,
+           STRING_AGG(response_label, ' | ' ORDER BY pct DESC NULLS LAST)
+             FILTER (WHERE polarity = 'top')  AS top_labels,
+           (MAX(${scoreExpr}))::int AS hit_count
+    FROM bjl_public_distributions
+    WHERE public_safe = true
+      AND (${conds.join(' OR ')})
+    GROUP BY item_id
+    HAVING SUM(pct) FILTER (WHERE polarity = 'top') IS NOT NULL
+       AND SUM(pct) FILTER (WHERE polarity = 'top') > 0
+    ORDER BY hit_count DESC, MAX(n_total) DESC NULLS LAST
+    LIMIT ${PER_LAYER_LIMITS.distributions}
+  `;
+  const { data, error } = await supabase.rpc('execute_read_sql', { query_text: sql });
+  if (error) {
+    console.error('[bjl-public-chat] retrieveDistributions error:', error.message);
     return [];
   }
   return (data || []).filter(r => r.hit_count >= STRUCTURED_MIN_HITS);
@@ -348,6 +437,8 @@ async function retrieve(question) {
   const structuredPromises = [
     retrieveScores(question),
     retrieveOrdinal(question),
+    retrieveAgreement(question),       // v6.4
+    retrieveDistributions(question),   // v6.4
   ];
 
   let semanticPromises;
@@ -368,7 +459,7 @@ async function retrieve(question) {
     ];
   }
 
-  const [scores, ordinal, laws, insights, truths] = await Promise.all([
+  const [scores, ordinal, agreement, distributions, laws, insights, truths] = await Promise.all([
     ...structuredPromises,
     ...semanticPromises,
   ]);
@@ -381,10 +472,11 @@ async function retrieve(question) {
     Infinity,
   );
   const hasStrongSemantic = bestSemanticDistance <= SEMANTIC_DISTANCE_THRESHOLD;
-  const hasStrongStructured = (scores.length + ordinal.length) > 0;
+  const hasStrongStructured =
+    (scores.length + ordinal.length + agreement.length + distributions.length) > 0;
 
   return {
-    scores, ordinal, laws, insights, truths,
+    scores, ordinal, agreement, distributions, laws, insights, truths,
     semantic_available: semanticAvailable,
     best_semantic_distance: Number.isFinite(bestSemanticDistance) ? bestSemanticDistance : null,
     threshold_cleared: hasStrongSemantic || hasStrongStructured,
@@ -408,12 +500,37 @@ function buildRetrievedPayloadForLLM(retrieved) {
     })),
     ordinal: retrieved.ordinal.map(r => ({
       item_id: r.item_id,
+      item_name: r.item_name,
       question_label: r.question_label,
       battery_type: r.battery_type,
+      category: r.category,
       mean_value: r.mean_value,
       scale_min: r.scale_min,
       scale_max: r.scale_max,
       n: r.n,
+    })),
+    agreement: (retrieved.agreement || []).map(r => ({
+      item_id: r.item_id,
+      item_name: r.item_name,
+      question_label: r.question_label,
+      category: r.category,
+      n: r.n,
+      strongly_agree_pct: r.strongly_agree_pct,
+      net_agree_pct: r.net_agree_pct,
+      neutral_pct: r.neutral_pct,
+      net_disagree_pct: r.net_disagree_pct,
+    })),
+    distributions: (retrieved.distributions || []).map(r => ({
+      item_id: r.item_id,
+      item_name: r.item_name,
+      question_label: r.question_label,
+      battery_type: r.battery_type,
+      category: r.category,
+      n_total: r.n_total,
+      top_pct: r.top_pct,
+      mid_pct: r.mid_pct,
+      bottom_pct: r.bottom_pct,
+      top_labels: r.top_labels,
     })),
     laws: retrieved.laws.map(r => ({
       id: r.id,
