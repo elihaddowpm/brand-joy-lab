@@ -1,10 +1,17 @@
 /**
- * bjl-public-chat.js — Public Joy Lab Chat answer endpoint (v6 Public Chat).
+ * bjl-public-chat.js — Public Joy Lab Chat answer endpoint (v6.3, three-layer).
+ *
+ * v6 (single-table): retrieved only from bjl_public_insights.
+ * v6.3 (this version): retrieves across the full three-layer substrate:
+ *   - Structured numbers (bjl_public_scores, bjl_public_ordinal)
+ *      via tokenized ILIKE on item_name + question_label + category
+ *   - Semantic frame/voice/story (bjl_laws, bjl_public_verbatim_truths,
+ *      bjl_public_insights) via OpenAI text-embedding-3-small +
+ *      pgvector cosine search
  *
  * Surface: cross-origin POST from the embeddable chat page (joylab Netlify
- * deploy) inside an iframe on petermayer.com. NO auth (public-facing).
- * Service role on the Supabase side. Returns an answer or a no-match
- * capture acknowledgement.
+ * deploy) inside an iframe on peteramayer.com. NO auth (public-facing).
+ * Service role on the Supabase side.
  *
  * Body shape:
  *   { question: string, email?: string, user_context?: string }
@@ -18,45 +25,50 @@
  *     capture_id?: string,
  *   }
  *
- * Pipeline:
- *   1. Lightweight scope classifier (Haiku) — in_corpus / brand_specific /
- *      live_cut_requested / out_of_scope.
- *   2. Multi-channel retrieval over published rows (topic_tags + framings +
- *      title/insight token overlap), normalized 0–1.
- *   3. Compose answer via Sonnet with strict grounding rules.
- *   4. On no-match / brand-specific / live-cut paths: write a
- *      bjl_public_questions row.
+ * Gates honored:
+ *   - bjl_public_scores            WHERE public_safe = true
+ *   - bjl_public_ordinal           WHERE public_safe = true
+ *   - bjl_laws                     WHERE public_safe = true
+ *   - bjl_public_verbatim_truths   WHERE public_safe = true
+ *   - bjl_public_insights          WHERE published   = true
  *
- * Match threshold: starts at 0.45 (conservative — wrong-but-confident in
- * public is worse than an honest miss). Tunable via MATCH_THRESHOLD const.
- *
- * CORS: Access-Control-Allow-Origin allows petermayer.com (configurable
- * via PUBLIC_CHAT_ALLOWED_ORIGINS env var, comma-separated).
+ * Graceful degradation: if OPENAI_API_KEY is unset, the function falls
+ * back to structured retrieval only and notes the missing semantic
+ * substrate in the logs. It does not crash.
  */
 
 const { createClient } = require('@supabase/supabase-js');
 const Anthropic = require('@anthropic-ai/sdk').default;
 
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
+const SUPABASE_URL    = process.env.SUPABASE_URL;
+const SUPABASE_KEY    = process.env.SUPABASE_SERVICE_KEY;
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+const OPENAI_API_KEY  = process.env.OPENAI_API_KEY;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
-
 const PROMPTS = require('./_prompts_bundle.json');
 
-const SCOPE_MODEL = 'claude-haiku-4-5-20251001';
-const ANSWER_MODEL = 'claude-sonnet-4-6';
+const SCOPE_MODEL    = 'claude-haiku-4-5-20251001';
+const ANSWER_MODEL   = 'claude-sonnet-4-6';
+const EMBED_MODEL    = 'text-embedding-3-small';
 
-const MATCH_THRESHOLD = 0.45;        // top row must clear this to compose
-const CLOSEST_OFFER_FLOOR = 0.30;    // below threshold but worth surfacing as "closest"
-const MAX_RETRIEVED = 3;
+const SEMANTIC_DISTANCE_THRESHOLD = 0.55;  // cosine distance; lower is closer. tune live.
+const CLOSEST_OFFER_DISTANCE      = 0.75;  // surface as "closest" even if below answer threshold
+const STRUCTURED_MIN_HITS         = 1;     // a structured row needs at least 1 token hit
+
+const PER_LAYER_LIMITS = {
+  scores: 5,
+  ordinal: 3,
+  laws: 3,
+  insights: 3,
+  truths: 2,
+};
 
 const DEFAULT_ALLOWED_ORIGINS = [
-  'https://petermayer.com',
-  'https://www.petermayer.com',
-  'http://localhost:8888',           // local dev
+  'https://peteramayer.com',
+  'https://www.peteramayer.com',
+  'http://localhost:8888',
 ];
 const ALLOWED_ORIGINS = (process.env.PUBLIC_CHAT_ALLOWED_ORIGINS
   ? process.env.PUBLIC_CHAT_ALLOWED_ORIGINS.split(',').map(s => s.trim())
@@ -72,71 +84,35 @@ function corsHeaders(origin) {
   };
 }
 
+const STOPWORDS = new Set([
+  'the','and','for','are','that','this','with','from','what','does','did','was','were','been','have','has','had','about','their','they','them','some','more','than','then','can','could','would','should','will','any','our','out','how','why','who','where','when','which','whom','your','you','one','two','also','into','over','onto','very','much','most','few','still','just','only','like','because','through','during','before','after','between','among','these','those','being','make','made','let','say','said','says','tell','told','think','thought','know','known','want','wants','use','using','need','needs','look','looks','found','find','findings','data','people','person','around','really','pretty','quite','sort','kind','tell','show','give'
+]);
+
 function tokenize(s) {
   return (s || '').toLowerCase()
     .replace(/[^a-z0-9_\s-]/g, ' ')
     .split(/\s+/)
-    .filter(t => t.length >= 3);
+    .filter(t => t.length >= 3 && !STOPWORDS.has(t));
 }
 
-const STOPWORDS = new Set([
-  'the','and','for','are','that','this','with','from','what','does','did','was','were','been','have','has','had','about','their','they','them','some','more','than','then','can','could','would','should','will','will','any','our','out','how','why','who','where','when','which','whom','your','you','one','two','also','into','over','onto','very','much','most','few','still','just','only','like','because','through','during','before','after','between','among','these','those','being','make','made','let','say','said','says','tell','told','think','thought','know','known','want','wants','use','using','need','needs','look','looks','found','find','findings','data','people','person','around','really','pretty','quite','sort','kind'
-]);
-
-function scoreRow(row, queryTokens, queryText) {
-  // Three channels, weighted, normalized to 0–1
-  // (a) topic_tags ∩ query tokens : weight 0.4
-  // (b) question_framings best-fuzzy : weight 0.4
-  // (c) title + insight ILIKE token overlap : weight 0.2
-
-  const querySet = new Set(queryTokens);
-
-  // (a) topic_tags overlap
-  const tagTokens = (row.topic_tags || [])
-    .flatMap(t => tokenize(String(t)));
-  const tagSet = new Set(tagTokens);
-  const tagHits = [...querySet].filter(t => !STOPWORDS.has(t) && tagSet.has(t)).length;
-  const tagScore = querySet.size === 0 ? 0 : Math.min(1, tagHits / 2);  // 2 hits = max
-
-  // (b) question_framings best-fuzzy — bag-of-words Jaccard against each framing
-  let bestFramingScore = 0;
-  for (const framing of (row.question_framings || [])) {
-    const framingTokens = new Set(tokenize(framing).filter(t => !STOPWORDS.has(t)));
-    const qContent = new Set([...querySet].filter(t => !STOPWORDS.has(t)));
-    if (framingTokens.size === 0 || qContent.size === 0) continue;
-    const intersection = [...qContent].filter(t => framingTokens.has(t)).length;
-    const union = new Set([...framingTokens, ...qContent]).size;
-    const jaccard = union > 0 ? intersection / union : 0;
-    if (jaccard > bestFramingScore) bestFramingScore = jaccard;
-  }
-  // Boost framings since they're explicit "this answers" tags
-  const framingScore = Math.min(1, bestFramingScore * 1.5);
-
-  // (c) title + insight ILIKE token overlap (content match)
-  const contentText = `${row.title || ''} ${row.insight || ''}`.toLowerCase();
-  let contentHits = 0;
-  const contentCandidates = [...querySet].filter(t => !STOPWORDS.has(t));
-  for (const t of contentCandidates) {
-    if (contentText.includes(t)) contentHits++;
-  }
-  const contentScore = contentCandidates.length === 0
-    ? 0
-    : Math.min(1, contentHits / Math.max(2, contentCandidates.length * 0.5));
-
-  return 0.4 * tagScore + 0.4 * framingScore + 0.2 * contentScore;
+function sqlEscape(s) {
+  return String(s || '').replace(/'/g, "''");
 }
+
+// =============================================================
+// Scope classifier (Haiku) — unchanged behavior from v6
+// =============================================================
 
 async function classifyScope(question) {
-  // Lightweight Haiku call to bucket the question.
   const system = `You are a scope classifier for a public-facing joy chat. Given a visitor's question, output a JSON object with one field:
 
   "scope": "in_corpus_scope" | "brand_specific" | "live_cut_requested" | "out_of_scope"
 
 Rules:
-- "brand_specific": the question names a specific brand, product, or company and asks for analysis of THAT entity. Examples: "What does the data say about Nike?", "How do Disney visitors feel?", "Is Trader Joe's beating Whole Foods?". General category questions like "what makes grocery shopping joyful" are NOT brand_specific.
-- "live_cut_requested": the visitor asked for a custom analysis, cross-tab, demographic cut, or any "give me the breakdown by X" style request. Examples: "show me joy by income bracket", "cross-tab fandom and age", "run a query on Gen Z".
-- "out_of_scope": not about consumer joy or behavior at all (greetings, weather, off-topic, troll, request to do something other than answer questions).
-- "in_corpus_scope": everything else — a question about general consumer joy patterns, category-level findings, audience truths, that the curated corpus might answer.
+- "brand_specific": names a specific brand, product, or company and asks for analysis of THAT entity (e.g., "How do Disney visitors feel?"). General category questions are NOT brand_specific.
+- "live_cut_requested": custom analysis, cross-tab, or "give me the breakdown by X" request.
+- "out_of_scope": not about consumer joy or behavior at all.
+- "in_corpus_scope": everything else.
 
 Output ONLY the JSON. No preamble.`;
   try {
@@ -159,23 +135,316 @@ Output ONLY the JSON. No preamble.`;
   return 'in_corpus_scope';
 }
 
-async function retrieve(question) {
-  const { data: rows, error } = await supabase
-    .from('bjl_public_insights')
-    .select('slug,title,insight,stat,category,topic_tags,question_framings,supporting_quote,confidence,source_n,source_note')
-    .eq('published', true);
-  if (error) throw new Error(`retrieve: ${error.message}`);
+// =============================================================
+// Query-time embedding via OpenAI text-embedding-3-small (1536-dim)
+// =============================================================
 
-  const tokens = tokenize(question);
-  const scored = (rows || [])
-    .map(r => ({ row: r, score: scoreRow(r, tokens, question) }))
-    .filter(s => s.score > 0)
-    .sort((a, b) => b.score - a.score);
-
-  return scored.slice(0, MAX_RETRIEVED);
+async function embedQuery(question) {
+  if (!OPENAI_API_KEY) return null;
+  try {
+    const resp = await fetch('https://api.openai.com/v1/embeddings', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({ model: EMBED_MODEL, input: question }),
+    });
+    if (!resp.ok) {
+      const text = await resp.text();
+      console.error('[bjl-public-chat] embed call failed:', resp.status, text.slice(0, 300));
+      return null;
+    }
+    const j = await resp.json();
+    return (j.data && j.data[0] && j.data[0].embedding) || null;
+  } catch (err) {
+    console.error('[bjl-public-chat] embed call threw:', err.message);
+    return null;
+  }
 }
 
-async function composeAnswer({ question, scope, retrieved, thresholdCleared }) {
+function vectorLiteral(embedding) {
+  // pgvector accepts the string form '[1.23,4.56,...]' cast to ::vector(N)
+  return `'[${embedding.join(',')}]'::vector(1536)`;
+}
+
+// =============================================================
+// Structured retrieval (bjl_public_scores, bjl_public_ordinal)
+// Tokenized ILIKE across item_name + question_label + category
+// =============================================================
+
+async function retrieveScores(question) {
+  const tokens = tokenize(question);
+  if (tokens.length === 0) return [];
+
+  // Build OR-of-ILIKE for each token across the three searchable columns.
+  // Score = number of distinct tokens that hit anywhere on the row.
+  // 795 rows total — full scan is fine.
+  const conds = tokens.map(t => {
+    const tEsc = sqlEscape(t);
+    return `(item_name ILIKE '%${tEsc}%' OR question_label ILIKE '%${tEsc}%' OR category ILIKE '%${tEsc}%')`;
+  });
+  const scoreExpr = tokens.map(t => {
+    const tEsc = sqlEscape(t);
+    return `(CASE WHEN (item_name ILIKE '%${tEsc}%' OR question_label ILIKE '%${tEsc}%' OR category ILIKE '%${tEsc}%') THEN 1 ELSE 0 END)`;
+  }).join(' + ');
+
+  const sql = `
+    SELECT item_id, item_name, question_label, category, joy_index, n, question_type,
+           (${scoreExpr})::int AS hit_count
+    FROM bjl_public_scores
+    WHERE public_safe = true
+      AND (${conds.join(' OR ')})
+    ORDER BY hit_count DESC, n DESC NULLS LAST
+    LIMIT ${PER_LAYER_LIMITS.scores}
+  `;
+  const { data, error } = await supabase.rpc('execute_read_sql', { query_text: sql });
+  if (error) {
+    console.error('[bjl-public-chat] retrieveScores error:', error.message);
+    return [];
+  }
+  return (data || []).filter(r => r.hit_count >= STRUCTURED_MIN_HITS);
+}
+
+async function retrieveOrdinal(question) {
+  const tokens = tokenize(question);
+  if (tokens.length === 0) return [];
+
+  // bjl_public_ordinal carries question_label + battery_type. We search
+  // both for token hits.
+  const conds = tokens.map(t => {
+    const tEsc = sqlEscape(t);
+    return `(question_label ILIKE '%${tEsc}%' OR battery_type ILIKE '%${tEsc}%')`;
+  });
+  const scoreExpr = tokens.map(t => {
+    const tEsc = sqlEscape(t);
+    return `(CASE WHEN (question_label ILIKE '%${tEsc}%' OR battery_type ILIKE '%${tEsc}%') THEN 1 ELSE 0 END)`;
+  }).join(' + ');
+
+  const sql = `
+    SELECT item_id, question_label, battery_type, mean_value, scale_min, scale_max, n,
+           (${scoreExpr})::int AS hit_count
+    FROM bjl_public_ordinal
+    WHERE public_safe = true
+      AND (${conds.join(' OR ')})
+    ORDER BY hit_count DESC, n DESC NULLS LAST
+    LIMIT ${PER_LAYER_LIMITS.ordinal}
+  `;
+  const { data, error } = await supabase.rpc('execute_read_sql', { query_text: sql });
+  if (error) {
+    console.error('[bjl-public-chat] retrieveOrdinal error:', error.message);
+    return [];
+  }
+  return (data || []).filter(r => r.hit_count >= STRUCTURED_MIN_HITS);
+}
+
+// =============================================================
+// Semantic retrieval (bjl_laws, bjl_public_verbatim_truths,
+// bjl_public_insights) via pgvector cosine
+// =============================================================
+
+async function retrieveLawsSemantic(vecLit) {
+  const sql = `
+    SELECT id, statement, evidence, implication,
+           (embedding <=> ${vecLit})::float AS distance
+    FROM bjl_laws
+    WHERE public_safe = true AND embedding IS NOT NULL
+    ORDER BY embedding <=> ${vecLit}
+    LIMIT ${PER_LAYER_LIMITS.laws}
+  `;
+  const { data, error } = await supabase.rpc('execute_read_sql', { query_text: sql });
+  if (error) {
+    console.error('[bjl-public-chat] retrieveLawsSemantic error:', error.message);
+    return [];
+  }
+  return data || [];
+}
+
+async function retrieveInsightsSemantic(vecLit) {
+  const sql = `
+    SELECT id, slug, title, insight, stat, category, confidence, source_n, source_note,
+           supporting_quote,
+           (embedding <=> ${vecLit})::float AS distance
+    FROM bjl_public_insights
+    WHERE published = true AND embedding IS NOT NULL
+    ORDER BY embedding <=> ${vecLit}
+    LIMIT ${PER_LAYER_LIMITS.insights}
+  `;
+  const { data, error } = await supabase.rpc('execute_read_sql', { query_text: sql });
+  if (error) {
+    console.error('[bjl-public-chat] retrieveInsightsSemantic error:', error.message);
+    return [];
+  }
+  return data || [];
+}
+
+async function retrieveTruthsSemantic(vecLit) {
+  const sql = `
+    SELECT id, title, truth, evidence, category, source_question, supporting_quote,
+           confidence, source_n,
+           (embedding <=> ${vecLit})::float AS distance
+    FROM bjl_public_verbatim_truths
+    WHERE public_safe = true AND embedding IS NOT NULL
+    ORDER BY embedding <=> ${vecLit}
+    LIMIT ${PER_LAYER_LIMITS.truths}
+  `;
+  const { data, error } = await supabase.rpc('execute_read_sql', { query_text: sql });
+  if (error) {
+    console.error('[bjl-public-chat] retrieveTruthsSemantic error:', error.message);
+    return [];
+  }
+  return data || [];
+}
+
+// =============================================================
+// Token-fallback retrieval on insights when the embedding substrate
+// isn't usable (OPENAI_API_KEY unset, or embeddings still null).
+// =============================================================
+
+async function retrieveInsightsTokenFallback(question) {
+  const tokens = tokenize(question);
+  if (tokens.length === 0) return [];
+  const conds = tokens.map(t => {
+    const tEsc = sqlEscape(t);
+    return `(title ILIKE '%${tEsc}%' OR insight ILIKE '%${tEsc}%' OR EXISTS (SELECT 1 FROM unnest(topic_tags) tag WHERE tag ILIKE '%${tEsc}%'))`;
+  });
+  const scoreExpr = tokens.map(t => {
+    const tEsc = sqlEscape(t);
+    return `(CASE WHEN (title ILIKE '%${tEsc}%' OR insight ILIKE '%${tEsc}%') THEN 1 ELSE 0 END)`;
+  }).join(' + ');
+  const sql = `
+    SELECT id, slug, title, insight, stat, category, confidence, source_n, source_note,
+           supporting_quote,
+           NULL::float AS distance,
+           (${scoreExpr})::int AS hit_count
+    FROM bjl_public_insights
+    WHERE published = true
+      AND (${conds.join(' OR ')})
+    ORDER BY hit_count DESC
+    LIMIT ${PER_LAYER_LIMITS.insights}
+  `;
+  const { data, error } = await supabase.rpc('execute_read_sql', { query_text: sql });
+  if (error) {
+    console.error('[bjl-public-chat] insights fallback error:', error.message);
+    return [];
+  }
+  return data || [];
+}
+
+// =============================================================
+// Retrieval orchestrator
+// =============================================================
+
+async function retrieve(question) {
+  const queryEmbedding = await embedQuery(question);
+  const semanticAvailable = !!queryEmbedding;
+
+  const structuredPromises = [
+    retrieveScores(question),
+    retrieveOrdinal(question),
+  ];
+
+  let semanticPromises;
+  if (semanticAvailable) {
+    const vecLit = vectorLiteral(queryEmbedding);
+    semanticPromises = [
+      retrieveLawsSemantic(vecLit),
+      retrieveInsightsSemantic(vecLit),
+      retrieveTruthsSemantic(vecLit),
+    ];
+  } else {
+    // Token fallback for the insights layer only — laws + truths have no
+    // searchable text columns that ILIKE would help on.
+    semanticPromises = [
+      Promise.resolve([]),
+      retrieveInsightsTokenFallback(question),
+      Promise.resolve([]),
+    ];
+  }
+
+  const [scores, ordinal, laws, insights, truths] = await Promise.all([
+    ...structuredPromises,
+    ...semanticPromises,
+  ]);
+
+  // Does anything clear the answer threshold?
+  const bestSemanticDistance = Math.min(
+    ...[...laws, ...insights, ...truths]
+      .map(r => Number(r.distance))
+      .filter(d => Number.isFinite(d)),
+    Infinity,
+  );
+  const hasStrongSemantic = bestSemanticDistance <= SEMANTIC_DISTANCE_THRESHOLD;
+  const hasStrongStructured = (scores.length + ordinal.length) > 0;
+
+  return {
+    scores, ordinal, laws, insights, truths,
+    semantic_available: semanticAvailable,
+    best_semantic_distance: Number.isFinite(bestSemanticDistance) ? bestSemanticDistance : null,
+    threshold_cleared: hasStrongSemantic || hasStrongStructured,
+  };
+}
+
+// =============================================================
+// Answer composition (Sonnet) with the three-layer payload
+// =============================================================
+
+function buildRetrievedPayloadForLLM(retrieved) {
+  return {
+    scores: retrieved.scores.map(r => ({
+      item_id: r.item_id,
+      item_name: r.item_name,
+      question_label: r.question_label,
+      category: r.category,
+      joy_index: r.joy_index,
+      n: r.n,
+      question_type: r.question_type,
+    })),
+    ordinal: retrieved.ordinal.map(r => ({
+      item_id: r.item_id,
+      question_label: r.question_label,
+      battery_type: r.battery_type,
+      mean_value: r.mean_value,
+      scale_min: r.scale_min,
+      scale_max: r.scale_max,
+      n: r.n,
+    })),
+    laws: retrieved.laws.map(r => ({
+      id: r.id,
+      statement: r.statement,
+      evidence: r.evidence,
+      implication: r.implication,
+      distance: r.distance != null ? Number(Number(r.distance).toFixed(3)) : null,
+    })),
+    insights: retrieved.insights.map(r => ({
+      id: r.id,
+      slug: r.slug,
+      title: r.title,
+      insight: r.insight,
+      stat: r.stat,
+      category: r.category,
+      confidence: r.confidence,
+      source_n: r.source_n,
+      source_note: r.source_note,
+      supporting_quote: r.supporting_quote,
+      distance: r.distance != null ? Number(Number(r.distance).toFixed(3)) : null,
+    })),
+    truths: retrieved.truths.map(r => ({
+      id: r.id,
+      title: r.title,
+      truth: r.truth,
+      evidence: r.evidence,
+      category: r.category,
+      source_question: r.source_question,
+      supporting_quote: r.supporting_quote,
+      confidence: r.confidence,
+      source_n: r.source_n,
+      distance: r.distance != null ? Number(Number(r.distance).toFixed(3)) : null,
+    })),
+  };
+}
+
+async function composeAnswer({ question, scope, retrieved }) {
   const systemPrompt = PROMPTS.publicChatSynthesis;
   if (!systemPrompt) throw new Error('public_chat_synthesis prompt missing from bundle');
 
@@ -183,27 +452,17 @@ async function composeAnswer({ question, scope, retrieved, thresholdCleared }) {
     `question: ${question}`,
     '',
     `scope: ${scope}`,
+    `threshold_cleared: ${retrieved.threshold_cleared}`,
+    `best_semantic_distance: ${retrieved.best_semantic_distance}`,
+    `semantic_available: ${retrieved.semantic_available}`,
     '',
-    `match_score: ${retrieved.length > 0 ? retrieved[0].score.toFixed(3) : 'null'}`,
-    `threshold_cleared: ${thresholdCleared}`,
-    '',
-    `retrieved_rows: ${JSON.stringify(retrieved.map(r => ({
-      slug: r.row.slug,
-      title: r.row.title,
-      insight: r.row.insight,
-      stat: r.row.stat,
-      category: r.row.category,
-      confidence: r.row.confidence,
-      supporting_quote: r.row.supporting_quote,
-      source_n: r.row.source_n,
-      source_note: r.row.source_note,
-      _score: Number(r.score.toFixed(3)),
-    })), null, 2)}`,
+    `retrieved:`,
+    JSON.stringify(buildRetrievedPayloadForLLM(retrieved), null, 2),
   ].join('\n');
 
   const rsp = await anthropic.messages.create({
     model: ANSWER_MODEL,
-    max_tokens: 800,
+    max_tokens: 900,
     system: [{ type: 'text', text: systemPrompt }],
     messages: [{ role: 'user', content: userMessage }],
   });
@@ -212,7 +471,11 @@ async function composeAnswer({ question, scope, retrieved, thresholdCleared }) {
   return JSON.parse(cleaned);
 }
 
-async function captureQuestion({ question, email, userContext, scope, closestSlugs, categoryGuess }) {
+// =============================================================
+// Capture (unchanged contract from v6; richer closest_slugs source)
+// =============================================================
+
+async function captureQuestion({ question, email, userContext, closestSlugs, categoryGuess }) {
   const insertRow = {
     question: question.slice(0, 2000),
     email: email ? String(email).slice(0, 200) : null,
@@ -231,22 +494,16 @@ async function captureQuestion({ question, email, userContext, scope, closestSlu
     return null;
   }
 
-  // TODO(crm): push to CRM (HubSpot? Salesforce? other?) once Eli
-  // confirms target system + field mapping. Field mapping draft:
-  //   question         → CRM 'Initial question'
-  //   email            → CRM 'Email' (create / merge contact)
-  //   category_guess   → CRM 'Topic'
-  //   matched_insight_slugs → CRM 'Closest insights' (multi-line text)
-  //   user_context     → CRM 'Notes'
-  //   status='new'     → CRM 'Lead status: New from Public Chat'
-  // Until then the bjl_public_questions row is the lead record; team
-  // pulls from there.
-
+  // TODO(crm): push to CRM once Eli confirms target system + field mapping.
   return data && data.id;
 }
 
+// =============================================================
+// Handler
+// =============================================================
+
 exports.handler = async (event) => {
-  const origin = event.headers && (event.headers.origin || event.headers.Origin) || '';
+  const origin = (event.headers && (event.headers.origin || event.headers.Origin)) || '';
   const headers = { ...corsHeaders(origin), 'Content-Type': 'application/json' };
 
   if (event.httpMethod === 'OPTIONS') {
@@ -270,32 +527,34 @@ exports.handler = async (event) => {
   }
 
   try {
-    // Pass 1 — scope
+    // Scope classification
     const scope = await classifyScope(question);
 
-    // For decline paths, we still retrieve (to surface a closest insight
-    // when capturing), but we don't compose from rows.
+    // Retrieve across all five layers (semantic + structured)
     const retrieved = await retrieve(question);
-    const topScore = retrieved.length > 0 ? retrieved[0].score : 0;
-    const thresholdCleared = (scope === 'in_corpus_scope') && (topScore >= MATCH_THRESHOLD);
 
-    const llmResult = await composeAnswer({
-      question, scope, retrieved, thresholdCleared,
-    });
+    // For decline paths (brand_specific / live_cut_requested / out_of_scope),
+    // we still pass retrieved rows so the LLM can offer a closest insight
+    // and route the capture cleanly.
+    const llmResult = await composeAnswer({ question, scope, retrieved });
 
-    // Capture path: write a row when the LLM (or our scope router) flags it
+    // Capture: write the question + (optional) email + closest_slugs into
+    // bjl_public_questions for the team to follow up on.
     let captureId = null;
     if (llmResult.capture_question) {
-      const closestSlugs = (llmResult.closest_slugs_for_capture && llmResult.closest_slugs_for_capture.length > 0)
+      const slugsFromLLM = (llmResult.closest_slugs_for_capture && llmResult.closest_slugs_for_capture.length > 0)
         ? llmResult.closest_slugs_for_capture
-        : retrieved.filter(r => r.score >= CLOSEST_OFFER_FLOOR).map(r => r.row.slug);
-      const categoryGuess = retrieved[0] ? retrieved[0].row.category : null;
+        : retrieved.insights
+            .filter(r => Number(r.distance) <= CLOSEST_OFFER_DISTANCE)
+            .map(r => r.slug);
+      const categoryGuess = (retrieved.insights[0] && retrieved.insights[0].category)
+                          || (retrieved.scores[0]   && retrieved.scores[0].category)
+                          || null;
       captureId = await captureQuestion({
         question,
         email: body.email,
         userContext: body.user_context,
-        scope: llmResult.scope_taken || scope,
-        closestSlugs,
+        closestSlugs: slugsFromLLM,
         categoryGuess,
       });
     }

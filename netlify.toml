@@ -58,16 +58,18 @@
 # v6 — Public Joy Lab Chat
 # ---------------------------------------------------------------------
 # The chat surface (public-chat.html) is embedded as an iframe inside
-# petermayer.com (a Webflow site). For that to work cross-origin:
-#   - frame-ancestors must allow petermayer.com (and the joylab host
-#     for direct visits / preview).
+# peteramayer.com (Peter A. Mayer Advertising — Webflow site). The
+# middle "a" is intentional and matches the joylab.peteramayer.com
+# subdomain hosting the Netlify deploy. For cross-origin iframe to work:
+#   - frame-ancestors must allow peteramayer.com (apex + www) and the
+#     joylab host itself (for direct visits / preview).
 #   - The bjl-public-chat function emits CORS headers itself (per-route
 #     because Allow-Origin must reflect the request origin).
 
 [[headers]]
   for = "/public-chat.html"
   [headers.values]
-    Content-Security-Policy = "frame-ancestors 'self' https://petermayer.com https://www.petermayer.com"
+    Content-Security-Policy = "frame-ancestors 'self' https://peteramayer.com https://www.peteramayer.com"
     X-Content-Type-Options  = "nosniff"
 
 # The Webflow embed lands as: <iframe src="https://<joylab>/public-chat.html">

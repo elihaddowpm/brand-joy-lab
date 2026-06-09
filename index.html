@@ -4698,6 +4698,7 @@ const PublicCorpusMode = () => {
             confidence: 'high', created_from: 'manual_stage',
           }} />
         )}
+        <PublicCorpusOpsButtons />
       </div>
 
       {error && <div className="joy-map-error">Error: {error}</div>}
@@ -4893,6 +4894,84 @@ const PublicCandidatesPanel = ({ candidates, sourceTurnPrompt }) => {
           </div>
         ))}
       </div>
+    </div>
+  );
+};
+
+// v6.3 — Operator buttons in the Public Corpus pane for the two routine
+// maintenance ops:
+//   - Populate embeddings: fills NULL embeddings on insights + verbatim
+//     truths, and (one-time, force_all mode) regenerates bjl_laws
+//     embeddings so all four layers share the same model.
+//   - Refresh score snapshot: recomputes bjl_public_scores from
+//     bjl_responses (~45s background job, preserves public_safe).
+const PublicCorpusOpsButtons = () => {
+  const [running, setRunning] = useState(null);  // 'embed_incremental' | 'embed_force' | 'refresh' | null
+  const [lastResult, setLastResult] = useState(null);
+
+  const runEmbed = async (mode) => {
+    setRunning(mode === 'force_all' ? 'embed_force' : 'embed_incremental');
+    setLastResult(null);
+    try {
+      const r = await fetch('/.netlify/functions/bjl-embed-public-corpus', authedFetchInit({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode }),
+      }));
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || j.message || `embed failed (${r.status})`);
+      setLastResult({ kind: 'embed', mode, ...j });
+    } catch (err) {
+      setLastResult({ kind: 'error', error: String(err.message || err) });
+    } finally {
+      setRunning(null);
+    }
+  };
+
+  const runRefresh = async () => {
+    setRunning('refresh');
+    setLastResult(null);
+    try {
+      const r = await fetch('/.netlify/functions/bjl-refresh-public-scores', authedFetchInit({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      }));
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || `refresh failed (${r.status})`);
+      setLastResult({ kind: 'refresh', ...j });
+    } catch (err) {
+      setLastResult({ kind: 'error', error: String(err.message || err) });
+    } finally {
+      setRunning(null);
+    }
+  };
+
+  return (
+    <div className="public-corpus-ops">
+      <button className="btn ghost" disabled={!!running} onClick={() => runEmbed('incremental')}
+              title="Embed any rows missing vectors (insights, verbatim truths, laws)">
+        {running === 'embed_incremental' ? 'Embedding…' : 'Populate embeddings'}
+      </button>
+      <button className="btn ghost" disabled={!!running} onClick={() => runEmbed('force_all')}
+              title="Re-embed ALL rows. Use once to standardize laws on text-embedding-3-small.">
+        {running === 'embed_force' ? 'Re-embedding all…' : 'Re-embed all'}
+      </button>
+      <button className="btn ghost" disabled={!!running} onClick={runRefresh}
+              title="Recompute bjl_public_scores from bjl_responses. Runs in background (~60s).">
+        {running === 'refresh' ? 'Refreshing…' : 'Refresh scores'}
+      </button>
+      {lastResult && lastResult.kind === 'embed' && (
+        <span className="public-corpus-ops-result">
+          {Object.entries(lastResult.results || {}).map(([t, r]) => `${t}: ${r.embedded} embedded`).join(' · ')}
+        </span>
+      )}
+      {lastResult && lastResult.kind === 'refresh' && (
+        <span className="public-corpus-ops-result">{lastResult.message || 'Refresh dispatched.'}</span>
+      )}
+      {lastResult && lastResult.kind === 'error' && (
+        <span className="public-corpus-ops-result error">{lastResult.error}</span>
+      )}
     </div>
   );
 };
