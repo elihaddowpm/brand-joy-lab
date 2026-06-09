@@ -244,8 +244,11 @@ async function retrieveOrdinal(question) {
 // =============================================================
 
 async function retrieveLawsSemantic(vecLit) {
+  // v6.3.1: bjl_laws PK is law_id, not id. Aliased to id for the
+  // downstream payload so the synthesizer prompt's "law:<id>" rows_used
+  // identifier still works.
   const sql = `
-    SELECT id, statement, evidence, implication,
+    SELECT law_id AS id, statement, evidence, implication,
            (embedding <=> ${vecLit})::float AS distance
     FROM bjl_laws
     WHERE public_safe = true AND embedding IS NOT NULL
@@ -279,8 +282,11 @@ async function retrieveInsightsSemantic(vecLit) {
 }
 
 async function retrieveTruthsSemantic(vecLit) {
+  // v6.3.1: bjl_public_verbatim_truths PK is slug, not id. Aliased to id
+  // for the downstream payload so the synthesizer prompt's
+  // "truth:<id>" rows_used identifier remains stable.
   const sql = `
-    SELECT id, title, truth, evidence, category, source_question, supporting_quote,
+    SELECT slug AS id, title, truth, evidence, category, source_question, supporting_quote,
            confidence, source_n,
            (embedding <=> ${vecLit})::float AS distance
     FROM bjl_public_verbatim_truths
