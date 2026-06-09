@@ -1361,9 +1361,13 @@ const generateOneEmail = async ({
   const briefLower     = (userEmailInstructions || "").toLowerCase();
   const wantsBJL       = /bjl|research|data|insight|stat|finding|consumer|traveler|fan/i.test(briefLower);
   const wantsCaseStudy = /case study|case|client work|example|parallel|we worked/i.test(briefLower);
-  const wantsArticle   = /article|story|piece|published|read|blog/i.test(briefLower);
+  // Word-boundaried: the unbounded /read/ matched "read" inside "thread"
+  // (and /story/ would match "storytelling"), firing wantsArticle on briefs
+  // like "build a thread" and injecting an article URL nobody asked for.
+  const wantsArticle   = /\barticles?\b|\bstor(?:y|ies)\b|\bpieces?\b|\bpublished\b|\bread\b|\bblogs?\b/i.test(briefLower);
   // DEBUG: orchestrator instrumentation — remove after diagnosis
   console.log("[bjl-orch] signals for", contactName, "@", company, { wantsBJL, wantsCaseStudy, wantsArticle, briefSample: briefLower.slice(0, 240) });
+  console.log("[bjl-orch] wantsArticle:", wantsArticle, "brief sample:", briefLower.substring(0, 80));
 
   const prospectContext = extractProspectContext({
     waldo: waldoAccount || null,
