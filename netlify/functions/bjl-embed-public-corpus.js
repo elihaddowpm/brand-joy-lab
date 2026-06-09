@@ -48,7 +48,9 @@ function jsonResp(statusCode, body) {
 // Per-table sources of the text the embedding should reflect.
 const TABLE_CONFIG = {
   bjl_laws: {
-    id_col: 'id',
+    // v6.3.1: bjl_laws PK is law_id (text), not id. The original v6.3 cut
+    // hardcoded 'id' and silently returned 0 rows on this table.
+    id_col: 'law_id',
     embed_input: (row) => {
       // Laws are paragraph-like: combine statement + evidence + implication
       // so semantic retrieval surfaces a law for any aspect of its content.
@@ -56,7 +58,7 @@ const TABLE_CONFIG = {
         .filter(s => typeof s === 'string' && s.trim().length > 0)
         .join('\n\n');
     },
-    select_cols: 'id,statement,evidence,implication',
+    select_cols: 'law_id,statement,evidence,implication',
   },
   bjl_public_insights: {
     id_col: 'id',
@@ -74,13 +76,14 @@ const TABLE_CONFIG = {
     select_cols: 'id,title,insight,stat,question_framings',
   },
   bjl_public_verbatim_truths: {
-    id_col: 'id',
+    // v6.3.1: bjl_public_verbatim_truths PK is slug (text), not id.
+    id_col: 'slug',
     embed_input: (row) => {
       return [row.title, row.truth, row.evidence]
         .filter(s => typeof s === 'string' && s.trim().length > 0)
         .join('\n\n');
     },
-    select_cols: 'id,title,truth,evidence',
+    select_cols: 'slug,title,truth,evidence',
   },
 };
 
