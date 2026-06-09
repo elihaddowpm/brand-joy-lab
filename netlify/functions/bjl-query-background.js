@@ -420,11 +420,11 @@ async function runSynthesis(triage, scratch, extraContext) {
 
   // email_mode: invoked from /api/bjl-content for bjl_finding requests. The
   // full investigator analysis runs as normal, but the synthesize stage
-  // emits a single counterintuitive sentence for use as a cold-email data
-  // point. The caller discards everything except response_text.
+  // emits a single strategically-relevant sentence for use as a cold-email
+  // data point. The caller discards everything except response_text.
   const emailMode = !!(extraContext && extraContext.email_mode === true);
   const finalSystemPrompt = emailMode
-    ? `${augmentedSystemPrompt}\n\n## EMAIL MODE\n\nFrom your full analysis, extract only the single most counterintuitive finding for use in a cold outreach email. Return one plain sentence only - no scores, no index numbers, no markdown, no methodology. Describe what people feel, prefer, or do in plain language. Discard the rest of your analysis. Put the sentence in response_text. followup_chips may be empty.`
+    ? `${augmentedSystemPrompt}\n\n## EMAIL MODE\n\nFrom your full analysis, select the single finding that speaks most directly to the prospect's strategic challenge as stated in the query above (look for "Strategic tension:"). Strategic relevance beats novelty: do NOT default to the highest-joy, most striking, or most counterintuitive item if it does not bear on what this prospect is actually working on. A finding that reframes how the prospect thinks about their specific challenge is worth more than one that simply describes their category or geography. Return one plain sentence only - no scores, no index numbers, no markdown, no methodology. Describe what people feel, prefer, or do in plain language. Discard the rest of your analysis. Put the sentence in response_text. followup_chips may be empty.`
     : augmentedSystemPrompt;
 
   const lengthKey = emailMode ? 'short' : ((triage && triage.response_length) || 'medium');
