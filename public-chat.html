@@ -1,680 +1,437 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Brand Joy Lab — Ask Us</title>
-  <meta name="robots" content="noindex" />
-  <style>
-    :root {
-      --bg: #faf9f4;
-      --paper: #ffffff;
-      --paper-2: #f4f3ed;
-      --ink: #1a1a17;
-      --iron: #e2e2dc;
-      --iron-dark: #8a8a82;
-      --iron-darker: #5a5a55;
-      --accent: #0d9488;
-      --accent-dark: #0b7c71;
-      --error: #b91c1c;
-      --radius: 8px;
-      --shadow-sm: 0 1px 2px rgba(0,0,0,.05);
-    }
-    *, *::before, *::after { box-sizing: border-box; }
-    html, body {
-      margin: 0;
-      padding: 0;
-      background: var(--bg);
-      color: var(--ink);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
-      font-size: 15px;
-      line-height: 1.5;
-      height: 100%;
-    }
-    body {
-      display: flex;
-      flex-direction: column;
-      min-height: 100vh;
-    }
-    .chat-shell {
-      display: flex;
-      flex-direction: column;
-      flex: 1;
-      max-width: 860px;
-      width: 100%;
-      margin: 0 auto;
-      padding: 1rem;
-      gap: 1rem;
-    }
-    .chat-header {
-      padding: 0 .25rem;
-    }
-    .chat-header h1 {
-      margin: 0 0 .35rem 0;
-      font-size: 22px;
-      font-weight: 500;
-      letter-spacing: -0.01em;
-      color: var(--ink);
-    }
-    .chat-header p {
-      margin: 0;
-      font-size: 13px;
-      color: var(--iron-darker);
-    }
-    .chat-log {
-      display: flex;
-      flex-direction: column;
-      gap: .85rem;
-      flex: 1;
-      overflow-y: auto;
-      padding: .25rem .25rem 1rem .25rem;
-    }
-    .msg {
-      max-width: 86%;
-      padding: .7rem .95rem;
-      border-radius: var(--radius);
-      box-shadow: var(--shadow-sm);
-      font-size: 14px;
-      line-height: 1.55;
-      white-space: pre-wrap;
-      word-break: break-word;
-    }
-    .msg-user {
-      align-self: flex-end;
-      background: var(--accent);
-      color: white;
-    }
-    .msg-bot {
-      align-self: flex-start;
-      background: var(--paper);
-      color: var(--ink);
-      border: 1px solid var(--iron);
-    }
-    .msg-loading {
-      align-self: flex-start;
-      background: var(--paper-2);
-      color: var(--iron-dark);
-      font-style: italic;
-      border: 1px dashed var(--iron);
-    }
-    .msg-error {
-      align-self: flex-start;
-      background: rgba(185, 28, 28, .07);
-      color: var(--error);
-      border: 1px solid rgba(185, 28, 28, .25);
-    }
-    .sample-questions {
-      display: flex;
-      flex-direction: column;
-      gap: .35rem;
-      padding: .35rem 0;
-    }
-    .sample-questions-label {
-      font-size: 11px;
-      text-transform: uppercase;
-      letter-spacing: .07em;
-      color: var(--iron-dark);
-      padding: 0 .25rem;
-    }
-    .sample-chip {
-      display: inline-block;
-      padding: .5rem .75rem;
-      background: var(--paper);
-      border: 1px solid var(--iron);
-      border-radius: var(--radius);
-      font-size: 13px;
-      color: var(--ink);
-      cursor: pointer;
-      text-align: left;
-      transition: border-color .12s, background .12s;
-      width: 100%;
-    }
-    .sample-chip:hover {
-      border-color: var(--accent);
-      background: var(--paper-2);
-    }
-    .capture-block {
-      margin-top: .35rem;
-      padding: .65rem .85rem;
-      background: var(--paper-2);
-      border: 1px solid var(--iron);
-      border-radius: var(--radius);
-      font-size: 13px;
-    }
-    .capture-block label {
-      display: block;
-      font-size: 11px;
-      text-transform: uppercase;
-      letter-spacing: .06em;
-      color: var(--iron-darker);
-      margin-bottom: .25rem;
-    }
-    .capture-block input[type="email"],
-    .capture-block input[type="text"] {
-      width: 100%;
-      padding: .45rem .6rem;
-      border: 1px solid var(--iron);
-      border-radius: 6px;
-      font-size: 13px;
-      background: white;
-      color: var(--ink);
-    }
-    .capture-block .lead-form-row {
-      display: flex;
-      gap: .5rem;
-      margin-bottom: .4rem;
-    }
-    .capture-block .lead-form-row > label {
-      flex: 1;
-      margin-bottom: 0;
-    }
-    .capture-block .lead-form-row > label > input {
-      margin-top: .2rem;
-    }
-    /* v6.6 lightbox after 7-8 consecutive queries */
-    .lead-lightbox-backdrop {
-      position: fixed;
-      inset: 0;
-      background: rgba(20, 20, 18, .55);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 100;
-    }
-    .lead-lightbox {
-      background: white;
-      border-radius: var(--radius);
-      padding: 1.2rem 1.3rem;
-      max-width: 420px;
-      width: calc(100% - 2rem);
-      box-shadow: 0 20px 50px rgba(0, 0, 0, .15);
-    }
-    .lead-lightbox h3 {
-      margin: 0 0 .4rem 0;
-      font-size: 15px;
-      color: var(--ink);
-    }
-    .lead-lightbox p {
-      margin: 0 0 .8rem 0;
-      font-size: 13px;
-      color: var(--iron-darker);
-      line-height: 1.4;
-    }
-    .lead-lightbox label {
-      display: block;
-      font-size: 11px;
-      text-transform: uppercase;
-      letter-spacing: .06em;
-      color: var(--iron-darker);
-      margin-bottom: .35rem;
-    }
-    .lead-lightbox input {
-      width: 100%;
-      padding: .5rem .65rem;
-      border: 1px solid var(--iron);
-      border-radius: 6px;
-      font-size: 13px;
-      background: white;
-      color: var(--ink);
-      margin-top: .15rem;
-    }
-    .lead-lightbox .lead-form-row {
-      display: flex;
-      gap: .5rem;
-      margin-bottom: .5rem;
-    }
-    .lead-lightbox .lead-form-row > label { flex: 1; margin-bottom: 0; }
-    .lead-lightbox .lead-lightbox-actions {
-      display: flex;
-      justify-content: flex-end;
-      gap: .5rem;
-      margin-top: .8rem;
-    }
-    .lead-lightbox button {
-      padding: .5rem 1rem;
-      border: none;
-      border-radius: 6px;
-      font-size: 13px;
-      cursor: pointer;
-    }
-    .lead-lightbox button[data-action="submit"] {
-      background: var(--accent);
-      color: white;
-    }
-    .lead-lightbox button[data-action="decline"] {
-      background: transparent;
-      color: var(--iron-darker);
-    }
-    .lead-lightbox button[data-action="decline"]:hover {
-      color: var(--ink);
-    }
-    .capture-block-msg {
-      margin: 0 0 .55rem 0;
-      font-size: 13px;
-      color: var(--iron-darker);
-    }
-    .capture-block-actions {
-      display: flex;
-      justify-content: flex-end;
-      gap: .5rem;
-      margin-top: .5rem;
-    }
-    .capture-block-actions button {
-      padding: .4rem .85rem;
-      font-size: 13px;
-      border-radius: 6px;
-      border: 1px solid var(--accent);
-      background: var(--accent);
-      color: white;
-      cursor: pointer;
-    }
-    .capture-block-actions button.secondary {
-      background: transparent;
-      color: var(--iron-darker);
-      border-color: var(--iron);
-    }
-    .compose {
-      position: relative;
-      display: flex;
-      gap: .5rem;
-      padding: .5rem;
-      background: var(--paper);
-      border: 1px solid var(--iron);
-      border-radius: var(--radius);
-      box-shadow: var(--shadow-sm);
-    }
-    .compose textarea {
-      flex: 1;
-      resize: none;
-      border: none;
-      outline: none;
-      background: transparent;
-      font-family: inherit;
-      font-size: 14px;
-      line-height: 1.45;
-      padding: .35rem .35rem;
-      color: var(--ink);
-      max-height: 140px;
-      min-height: 24px;
-      overflow-y: auto;
-    }
-    .compose button {
-      padding: 0 .9rem;
-      font-size: 14px;
-      font-weight: 500;
-      border: none;
-      border-radius: 6px;
-      background: var(--accent);
-      color: white;
-      cursor: pointer;
-      align-self: flex-end;
-      height: 36px;
-    }
-    .compose button:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
-    .footer-note {
-      font-size: 11px;
-      color: var(--iron-dark);
-      text-align: center;
-      padding: .25rem 0;
-    }
-    /* Tighter padding in narrow iframe contexts */
-    @media (max-width: 480px) {
-      .chat-shell { padding: .75rem; gap: .75rem; }
-      .chat-header h1 { font-size: 18px; }
-      .msg { max-width: 92%; }
-    }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Brand Joy Lab · PETERMAYER</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="stylesheet" href="bjl-chat.css">
 </head>
 <body>
-  <div class="chat-shell">
-    <header class="chat-header">
-      <h1>Ask the Brand Joy Lab</h1>
-      <p>What does the data say about joy? Ask a question, get the finding.</p>
-    </header>
 
-    <div class="chat-log" id="chat-log" aria-live="polite">
-      <div class="msg msg-bot">
-        Hi. I answer from the Brand Joy Lab's published findings on what brings consumers joy. Ask anything in this neighborhood, or try one of the prompts below.
-      </div>
-      <div class="sample-questions" id="sample-questions">
-        <div class="sample-questions-label">Try one of these</div>
-        <button class="sample-chip" data-q="Does sponsoring sports actually make people love a brand more?">Does sponsoring sports actually make people love a brand more?</button>
-        <button class="sample-chip" data-q="What makes people happier on vacation, a beach or a theme park?">What makes people happier on vacation, a beach or a theme park?</button>
-        <button class="sample-chip" data-q="Do younger fans care more about tradition or about what is new?">Do younger fans care more about tradition or about what is new?</button>
-        <button class="sample-chip" data-q="What do people want from a bank that they are not getting?">What do people want from a bank that they are not getting?</button>
-        <button class="sample-chip" data-q="In fandom, is the joy about the team or about the people you watch it with?">In fandom, is the joy about the team or about the people you watch it with?</button>
-      </div>
-    </div>
+<!-- ════════════════════════════════════════════════════════════════
+     PRODUCTION MARKUP — the entire iframe body.
+     CSS lives in /bjl-chat.css. Brand assets in /assets and /fonts.
+     ════════════════════════════════════════════════════════════════ -->
+<div class="chat-frame is-empty" id="chatFrame">
 
-    <form class="compose" id="compose">
-      <textarea
-        id="question-input"
-        placeholder="Type a question about joy…"
-        rows="1"
-        autofocus
-        maxlength="2000"></textarea>
-      <button type="submit" id="send-btn">Ask</button>
-    </form>
+  <header class="chat-header">
+    <img class="bjl-wordmark" src="assets/petermayer-wordmark-black.svg" alt="PETERMAYER">
+    <span class="bjl-divider"></span>
+    <span class="bjl-title">Brand Joy Lab</span>
+    <span class="bjl-status">Live</span>
+  </header>
 
-    <div class="footer-note">Brand Joy Lab • findings from real consumer research</div>
+  <div id="chat-log" role="log" aria-live="polite" aria-label="Conversation"></div>
+
+  <div id="sample-questions">
+    <p class="bjl-intro">Ask about why people fall for brands, what joy does for the bottom line, or where it&rsquo;s hiding in a category that feels beige. <strong>I&rsquo;ll answer straight.</strong></p>
+    <p class="bjl-prompt">Or start with one of these</p>
+    <button class="sample-chip">What actually makes people love a brand?</button>
+    <button class="sample-chip">Does joy really drive sales?</button>
+    <button class="sample-chip">Where's the joy in a boring category?</button>
+    <button class="sample-chip">What's the fastest way to lose brand love?</button>
+    <button class="sample-chip">Can a B2B brand be joyful?</button>
+    <button class="sample-chip">How do you keep a brand joyful as it scales?</button>
   </div>
 
-  <script>
-    (function () {
-      const CHAT_API    = '/.netlify/functions/bjl-public-chat';
-      const CAPTURE_API = '/.netlify/functions/bjl-public-capture-lead';
+  <form id="compose" autocomplete="off">
+    <textarea id="question-input" rows="1" placeholder="Ask about consumer joy…" aria-label="Your question"></textarea>
+    <button id="send-btn" type="submit" disabled>Send</button>
+  </form>
 
-      // v6.6 lead-capture trigger rules.
-      // - Inline form on no-answer: backend signals via prompt_lead_capture.
-      // - Lightbox after 7 queries in a session.
-      // - Decline suppresses the lightbox for ~8 more queries.
-      const LIGHTBOX_THRESHOLD_QUERIES = 7;
-      const SUPPRESS_DEFAULT_QUERIES   = 8;
+  <p class="footer-note">Answers from <strong>PETERMAYER&rsquo;s Brand Joy Lab</strong> &middot; New Orleans</p>
 
-      const $log = document.getElementById('chat-log');
-      const $form = document.getElementById('compose');
-      const $input = document.getElementById('question-input');
-      const $send = document.getElementById('send-btn');
-      const $samples = document.getElementById('sample-questions');
+  <!-- Surface B — lightbox lead form (hidden until ~7 queries) -->
+  <div class="lead-lightbox-backdrop" id="lightbox" role="dialog" aria-modal="true" aria-labelledby="lb-title" hidden>
+    <div class="lead-lightbox" id="lightboxInner">
+      <p class="bjl-credit">PETERMAYER &middot; Brand Joy Lab</p>
+      <h3 id="lb-title">Let&rsquo;s skip to the good part.</h3>
+      <p>The fastest route to exactly what you need is a direct conversation with PETERMAYER.</p>
+      <div class="lead-form-row">
+        <input type="text" name="first" placeholder="First name" aria-label="First name">
+        <input type="text" name="last"  placeholder="Last name"  aria-label="Last name">
+      </div>
+      <input type="email" name="email"   placeholder="Work email"          aria-label="Work email">
+      <input type="text"  name="company" placeholder="Company (optional)"  aria-label="Company (optional)">
+      <p class="lead-form-error" hidden></p>
+      <div class="lead-lightbox-actions">
+        <button class="bjl-submit"  type="button">Start the conversation</button>
+        <button class="bjl-decline" type="button">No thanks, I&rsquo;ll keep searching</button>
+      </div>
+    </div>
+  </div>
 
-      // Session state (lives only as long as the iframe stays open).
-      const session = {
-        pending:                  false,
-        queryCount:               0,           // increments on each successful chat response
-        conversationSynthesis:    '',          // running 2-4 sentence summary from the LLM
-        lastQuestion:             '',
-        lastClosestSlugs:         [],
-        lastCategoryGuess:        null,
-        lightboxOpen:             false,
-        suppressLightboxUntilQuery: 0,         // lightbox won't open while queryCount < this
-        leadAlreadySubmitted:     false,       // once submitted, stop nagging
-      };
+</div>
 
-      // Auto-grow textarea
-      $input.addEventListener('input', () => {
-        $input.style.height = 'auto';
-        $input.style.height = Math.min(140, $input.scrollHeight) + 'px';
-      });
+<!-- ════════════════════════════════════════════════════════════════
+     CHAT LOGIC — production. Talks to /api/bjl-public-chat for answers
+     and /api/bjl-public-capture-lead for both Surface A (inline, on
+     no-answer) and Surface B (lightbox, after 7 consecutive queries)
+     submit + decline paths. Maintains conversation_synthesis and
+     query_count as session state, threading both back to the backend
+     on every chat call.
+     ════════════════════════════════════════════════════════════════ -->
+<script>
+(function () {
+  "use strict";
 
-      // Sample question chip → fill input + submit
-      $samples.addEventListener('click', (e) => {
-        const btn = e.target.closest('.sample-chip');
-        if (!btn || session.pending) return;
-        $input.value = btn.dataset.q || btn.textContent.trim();
-        $input.style.height = 'auto';
-        $input.style.height = Math.min(140, $input.scrollHeight) + 'px';
-        submit();
-      });
+  var CHAT_API    = "/.netlify/functions/bjl-public-chat";
+  var CAPTURE_API = "/.netlify/functions/bjl-public-capture-lead";
+  var CREDIT      = "PETERMAYER \u00b7 Brand Joy Lab";
 
-      $form.addEventListener('submit', (e) => {
-        e.preventDefault();
-        submit();
-      });
-      $input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-          e.preventDefault();
-          submit();
-        }
-      });
+  var LIGHTBOX_THRESHOLD_QUERIES = 7;
+  var SUPPRESS_DEFAULT_QUERIES   = 8;
 
-      function addBubble(text, klass) {
-        const div = document.createElement('div');
-        div.className = 'msg ' + klass;
-        div.textContent = text;
-        $log.appendChild(div);
-        scrollToBottom();
-        return div;
-      }
+  var log      = document.getElementById("chat-log");
+  var samples  = document.getElementById("sample-questions");
+  var compose  = document.getElementById("compose");
+  var input    = document.getElementById("question-input");
+  var sendBtn  = document.getElementById("send-btn");
+  var lightbox = document.getElementById("lightbox");
+  var frame    = document.getElementById("chatFrame");
 
-      function scrollToBottom() {
-        $log.scrollTop = $log.scrollHeight;
-      }
+  // Session state (lives only as long as the iframe stays open).
+  var session = {
+    pending:                    false,
+    queryCount:                 0,
+    conversationSynthesis:      "",
+    lastQuestion:               "",
+    lastClosestSlugs:           [],
+    lastCategoryGuess:          null,
+    leadAlreadySubmitted:       false,
+    declinedLightbox:           false,
+    suppressLightboxUntilQuery: 0,
+  };
 
-      // ----- Lead capture: inline (no-answer) and lightbox (consecutive queries) -----
+  // ---- helpers ------------------------------------------------------
+  function esc(s){ return String(s).replace(/[&<>"]/g, function(c){
+    return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]; }); }
+  function scrollLog(){ log.scrollTop = log.scrollHeight; }
+  function beginConversation(){ samples.style.display = "none"; frame.classList.remove("is-empty"); }
 
-      function addInlineLeadForm() {
-        // Inline form shown when the backend signals prompt_lead_capture.
-        // Trigger source = 'no_answer'. Same fields as the lightbox.
-        const wrap = document.createElement('div');
-        wrap.className = 'capture-block';
-        wrap.innerHTML = `
-          <p class="capture-block-msg">Want a real answer to this one? Leave us a way to reach you and the team will dig in.</p>
-          <div class="lead-form-row">
-            <label>First name<input type="text" data-field="first_name" autocomplete="given-name" /></label>
-            <label>Last name<input type="text" data-field="last_name" autocomplete="family-name" /></label>
-          </div>
-          <label>Email<input type="email" data-field="email" autocomplete="email" placeholder="you@company.com" /></label>
-          <label>Company (optional)<input type="text" data-field="company_name" autocomplete="organization" /></label>
-          <div class="capture-block-actions">
-            <button class="secondary" data-action="decline">No thanks, I'll keep searching.</button>
-            <button data-action="submit">Send</button>
-          </div>
-        `;
-        $log.appendChild(wrap);
-        scrollToBottom();
+  // ---- bubble factories ---------------------------------------------
+  function addUser(text){
+    var el = document.createElement("div");
+    el.className = "msg msg-user";
+    el.textContent = text;
+    log.appendChild(el); scrollLog();
+  }
 
-        wireLeadForm(wrap, 'no_answer');
-      }
+  function addLoading(){
+    var el = document.createElement("div");
+    el.className = "msg msg-loading";
+    el.id = "loading";
+    el.setAttribute("aria-label", "Brand Joy Lab is thinking");
+    el.innerHTML = '<span class="dot"></span><span class="dot"></span><span class="dot"></span>';
+    log.appendChild(el); scrollLog();
+  }
+  function removeLoading(){ var l = document.getElementById("loading"); if (l) l.remove(); }
 
-      function openLightbox() {
-        // Lightbox shown after the visitor crosses LIGHTBOX_THRESHOLD_QUERIES
-        // consecutive queries without submitting. Trigger source =
-        // 'consecutive_queries'.
-        if (session.lightboxOpen || session.leadAlreadySubmitted) return;
-        if (session.queryCount < session.suppressLightboxUntilQuery) return;
-        session.lightboxOpen = true;
+  function botShell(bodyHTML){
+    return '<div class="bjl-credit">' + CREDIT + '</div>' + bodyHTML;
+  }
 
-        const backdrop = document.createElement('div');
-        backdrop.className = 'lead-lightbox-backdrop';
-        backdrop.innerHTML = `
-          <div class="lead-lightbox" role="dialog" aria-modal="true">
-            <h3>Want a faster answer?</h3>
-            <p>The fastest route to exactly what you need is a direct conversation with PETERMAYER. Leave a few details and the team will be in touch.</p>
-            <div class="lead-form-row">
-              <label>First name<input type="text" data-field="first_name" autocomplete="given-name" /></label>
-              <label>Last name<input type="text" data-field="last_name" autocomplete="family-name" /></label>
-            </div>
-            <label>Email<input type="email" data-field="email" autocomplete="email" placeholder="you@company.com" /></label>
-            <label>Company (optional)<input type="text" data-field="company_name" autocomplete="organization" /></label>
-            <div class="lead-lightbox-actions">
-              <button data-action="decline">No thanks, I'll keep searching.</button>
-              <button data-action="submit">Send</button>
-            </div>
-          </div>
-        `;
-        backdrop.addEventListener('click', (e) => {
-          // Click on backdrop (not the modal) closes as decline.
-          if (e.target === backdrop) handleDecline(backdrop.firstElementChild, 'consecutive_queries', backdrop);
+  function addBotAnswer(text){
+    var el = document.createElement("div");
+    el.className = "msg msg-bot";
+    // Wrap each paragraph break (two newlines) into a <p> so the
+    // .msg-bot > p margin rules kick in.
+    var paragraphs = String(text || "").split(/\n\s*\n/).map(function(p){
+      return "<p>" + esc(p.trim()) + "</p>";
+    }).join("");
+    el.innerHTML = botShell(paragraphs || "<p>&nbsp;</p>");
+    log.appendChild(el); scrollLog();
+  }
+
+  function addError(){
+    var el = document.createElement("div");
+    el.className = "msg msg-error";
+    el.innerHTML =
+      "<p>Something hiccuped on our end and the answer didn&rsquo;t come through. " +
+      'Give it another go, or <a href="#" data-retry>try once more</a>.</p>';
+    log.appendChild(el); scrollLog();
+  }
+
+  // ---- Surface A — inline lead form on no-answer ---------------------
+  // Pattern: warm-decline answer is its own .msg-bot bubble; the form
+  // gets appended as a sibling .msg-bot bubble so the credit + answer
+  // bubble stays clean for screenshots, and the form has its own visual
+  // weight as the conversion moment.
+  function addInlineLeadForm(){
+    var el = document.createElement("div");
+    el.className = "msg msg-bot";
+    el.innerHTML = botShell(
+      '<div class="capture-block">' +
+        '<p class="bjl-capture-lede">Let\u2019s talk it through.</p>' +
+        '<div class="lead-form-row">' +
+          '<input type="text" placeholder="First name" aria-label="First name">' +
+          '<input type="text" placeholder="Last name"  aria-label="Last name">' +
+        '</div>' +
+        '<input type="email" placeholder="Work email"         aria-label="Work email">' +
+        '<input type="text"  placeholder="Company (optional)" aria-label="Company (optional)">' +
+        '<p class="lead-form-error" hidden></p>' +
+        '<div class="capture-block-actions">' +
+          '<button class="bjl-submit"  type="button">Send</button>' +
+          '<button class="bjl-decline" type="button">No thanks, I\u2019ll keep searching</button>' +
+        '</div>' +
+      '</div>'
+    );
+    log.appendChild(el); scrollLog();
+    wireCaptureBlock(el.querySelector(".capture-block"));
+  }
+
+  // ---- shared validation (Surface A + Surface B) ---------------------
+  function readFields(scope){
+    return {
+      first_name:   (scope.querySelector('input[placeholder="First name"]') || {}).value || "",
+      last_name:    (scope.querySelector('input[placeholder="Last name"]')  || {}).value || "",
+      email:        (scope.querySelector('input[type="email"]')             || {}).value || "",
+      company_name: (scope.querySelector('input[placeholder="Company (optional)"]') || {}).value || "",
+    };
+  }
+  function validate(scope){
+    var f = readFields(scope);
+    var first = scope.querySelector('input[placeholder="First name"]');
+    var last  = scope.querySelector('input[placeholder="Last name"]');
+    var email = scope.querySelector('input[type="email"]');
+    var errEl = scope.querySelector(".lead-form-error");
+    [first, last, email].forEach(function(x){ if (x) x.removeAttribute("aria-invalid"); });
+    var msg = "";
+    if (!f.first_name.trim() || !f.last_name.trim()){
+      msg = "Please add your first and last name.";
+      if (!f.first_name.trim() && first) first.setAttribute("aria-invalid","true");
+      if (!f.last_name.trim()  && last)  last.setAttribute("aria-invalid","true");
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email.trim())){
+      msg = "That email doesn\u2019t look right \u2014 mind checking it?";
+      if (email) email.setAttribute("aria-invalid","true");
+    }
+    if (msg){ errEl.textContent = msg; errEl.hidden = false; return null; }
+    errEl.hidden = true;
+    return {
+      first_name:   f.first_name.trim(),
+      last_name:    f.last_name.trim(),
+      email:        f.email.trim(),
+      company_name: f.company_name.trim() || null,
+    };
+  }
+
+  function showThanks(scope, inLightbox){
+    var html =
+      '<div class="bjl-thanks">' +
+        '<span class="bjl-thanks-check" aria-hidden="true">\u2713</span>' +
+        '<p><strong>Got it, thank you.</strong> Someone from PETERMAYER\u2019s Brand Joy Lab ' +
+        'will be in touch shortly. Keep the questions coming in the meantime.</p>' +
+      '</div>';
+    if (inLightbox){
+      document.getElementById("lightboxInner").innerHTML =
+        '<p class="bjl-credit">' + CREDIT + '</p>' + html;
+      setTimeout(closeLightbox, 2400);
+    } else {
+      scope.innerHTML = html;
+    }
+    session.leadAlreadySubmitted = true;
+    scrollLog();
+  }
+
+  function showFormError(scope, msg){
+    var errEl = scope.querySelector(".lead-form-error");
+    if (!errEl) return;
+    errEl.textContent = msg; errEl.hidden = false;
+  }
+
+  // ---- capture POSTs to the backend ----------------------------------
+  function postLead(payload){
+    return fetch(CAPTURE_API, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify(payload),
+    });
+  }
+  function basePayload(triggerSource){
+    return {
+      trigger_source:         triggerSource,
+      question:               session.lastQuestion,
+      conversation_synthesis: session.conversationSynthesis,
+      query_count:            session.queryCount,
+      matched_insight_slugs:  session.lastClosestSlugs,
+      category_guess:         session.lastCategoryGuess,
+    };
+  }
+
+  function submitLead(scope, triggerSource, inLightbox){
+    var fields = validate(scope);
+    if (!fields) return;
+    var payload = basePayload(triggerSource);
+    payload.status = "submitted";
+    payload.first_name   = fields.first_name;
+    payload.last_name    = fields.last_name;
+    payload.email        = fields.email;
+    payload.company_name = fields.company_name;
+
+    postLead(payload).then(function(r){
+      if (!r.ok){
+        r.text().catch(function(){ return ""; }).then(function(d){
+          console.error("lead capture failed", r.status, d);
+          showFormError(scope, "Something went sideways on our side. Try again in a moment.");
         });
-        document.body.appendChild(backdrop);
-        wireLeadForm(backdrop.firstElementChild, 'consecutive_queries', backdrop);
-        // Focus first field
-        const first = backdrop.querySelector('input[data-field="first_name"]');
-        if (first) first.focus();
+        return;
       }
+      showThanks(scope, inLightbox);
+    }).catch(function(err){
+      console.error("lead capture error", err);
+      showFormError(scope, "Network hiccup. Try again in a moment.");
+    });
+  }
 
-      function wireLeadForm(formRoot, triggerSource, outerBackdrop) {
-        const getField = (name) => {
-          const el = formRoot.querySelector(`input[data-field="${name}"]`);
-          return el ? el.value.trim() : '';
-        };
-        const showError = (msg) => {
-          let banner = formRoot.querySelector('.lead-form-error');
-          if (!banner) {
-            banner = document.createElement('p');
-            banner.className = 'lead-form-error';
-            banner.style.cssText = 'color:#b45309;font-size:12px;margin:.4rem 0 0 0;';
-            formRoot.insertBefore(banner, formRoot.querySelector('.capture-block-actions, .lead-lightbox-actions'));
+  function declineLead(triggerSource){
+    var payload = basePayload(triggerSource);
+    payload.status = "declined";
+    return postLead(payload).then(function(r){
+      var suppress = SUPPRESS_DEFAULT_QUERIES;
+      if (r.ok){
+        return r.json().catch(function(){ return null; }).then(function(j){
+          if (j && Number.isFinite(j.suppress_next_lightbox_for_queries)){
+            suppress = j.suppress_next_lightbox_for_queries;
           }
-          banner.textContent = msg;
-        };
-        const close = () => {
-          if (outerBackdrop && outerBackdrop.parentElement) outerBackdrop.parentElement.removeChild(outerBackdrop);
-          else if (formRoot.parentElement) formRoot.parentElement.removeChild(formRoot);
-          session.lightboxOpen = false;
-        };
-        const replaceWithThanks = (msg) => {
-          // Inline form path: replace contents with a thank-you note.
-          if (outerBackdrop) {
-            outerBackdrop.firstElementChild.innerHTML = `
-              <h3>Thanks.</h3>
-              <p>${msg}</p>
-              <div class="lead-lightbox-actions"><button data-action="dismiss">Close</button></div>
-            `;
-            outerBackdrop.firstElementChild.querySelector('[data-action="dismiss"]').addEventListener('click', close);
-          } else {
-            formRoot.innerHTML = `<p class="capture-block-msg">${msg}</p>`;
-          }
-        };
-
-        formRoot.querySelector('[data-action="submit"]').addEventListener('click', async () => {
-          const first_name   = getField('first_name');
-          const last_name    = getField('last_name');
-          const email        = getField('email');
-          const company_name = getField('company_name');
-          if (!first_name || !last_name) { showError('First and last name required.'); return; }
-          if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { showError('Looks like the email is incomplete.'); return; }
-
-          try {
-            const r = await fetch(CAPTURE_API, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                status: 'submitted',
-                trigger_source: triggerSource,
-                question: session.lastQuestion,
-                conversation_synthesis: session.conversationSynthesis,
-                query_count: session.queryCount,
-                matched_insight_slugs: session.lastClosestSlugs,
-                category_guess: session.lastCategoryGuess,
-                first_name, last_name, email, company_name: company_name || null,
-              }),
-            });
-            if (!r.ok) {
-              const detail = await r.text().catch(() => '');
-              console.error('lead capture failed', r.status, detail);
-              showError('Something went sideways on our side. Try again in a moment.');
-              return;
-            }
-            session.leadAlreadySubmitted = true;
-            replaceWithThanks('Got it. The team will be in touch.');
-          } catch (err) {
-            console.error('lead capture error', err);
-            showError('Network hiccup. Try again in a moment.');
-          }
-        });
-
-        formRoot.querySelector('[data-action="decline"]').addEventListener('click', () => {
-          handleDecline(formRoot, triggerSource, outerBackdrop);
+          session.suppressLightboxUntilQuery = session.queryCount + suppress;
         });
       }
+      session.suppressLightboxUntilQuery = session.queryCount + suppress;
+    }).catch(function(){
+      session.suppressLightboxUntilQuery = session.queryCount + SUPPRESS_DEFAULT_QUERIES;
+    });
+  }
 
-      async function handleDecline(formRoot, triggerSource, outerBackdrop) {
-        // Write a decline row (no personal fields), suppress the lightbox
-        // for the next ~8 queries, dismiss the form.
-        try {
-          const r = await fetch(CAPTURE_API, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              status: 'declined',
-              trigger_source: triggerSource,
-              question: session.lastQuestion,
-              conversation_synthesis: session.conversationSynthesis,
-              query_count: session.queryCount,
-              matched_insight_slugs: session.lastClosestSlugs,
-              category_guess: session.lastCategoryGuess,
-            }),
-          });
-          if (r.ok) {
-            const j = await r.json().catch(() => null);
-            const suppress = (j && Number.isFinite(j.suppress_next_lightbox_for_queries))
-              ? j.suppress_next_lightbox_for_queries
-              : SUPPRESS_DEFAULT_QUERIES;
-            session.suppressLightboxUntilQuery = session.queryCount + suppress;
-          } else {
-            session.suppressLightboxUntilQuery = session.queryCount + SUPPRESS_DEFAULT_QUERIES;
-          }
-        } catch (_) {
-          session.suppressLightboxUntilQuery = session.queryCount + SUPPRESS_DEFAULT_QUERIES;
-        }
-        if (outerBackdrop && outerBackdrop.parentElement) outerBackdrop.parentElement.removeChild(outerBackdrop);
-        else if (formRoot && formRoot.parentElement) formRoot.parentElement.removeChild(formRoot);
-        session.lightboxOpen = false;
+  function wireCaptureBlock(block){
+    block.querySelector(".bjl-submit").addEventListener("click", function(){
+      submitLead(block, "no_answer", false);
+    });
+    block.querySelector(".bjl-decline").addEventListener("click", function(){
+      declineLead("no_answer").then(function(){
+        if (block.parentElement) block.parentElement.remove();   // remove the entire .msg-bot wrapper
+      });
+    });
+  }
+
+  // ---- Surface B — lightbox -----------------------------------------
+  function openLightbox(){
+    if (session.leadAlreadySubmitted || session.declinedLightbox) return;
+    if (session.queryCount < session.suppressLightboxUntilQuery) return;
+    lightbox.hidden = false;
+    requestAnimationFrame(function(){ lightbox.classList.add("is-open"); });
+    var f = lightbox.querySelector('input[placeholder="First name"]');
+    if (f) setTimeout(function(){ f.focus(); }, 60);
+  }
+  function closeLightbox(){
+    lightbox.classList.remove("is-open");
+    setTimeout(function(){ lightbox.hidden = true; }, 240);
+  }
+  lightbox.querySelector(".bjl-submit").addEventListener("click", function(){
+    submitLead(lightbox, "consecutive_queries", true);
+  });
+  lightbox.querySelector(".bjl-decline").addEventListener("click", function(){
+    session.declinedLightbox = true;
+    declineLead("consecutive_queries").then(closeLightbox);
+  });
+  lightbox.addEventListener("click", function(e){
+    if (e.target === lightbox){
+      session.declinedLightbox = true;
+      declineLead("consecutive_queries").then(closeLightbox);
+    }
+  });
+  document.addEventListener("keydown", function(e){
+    if (e.key === "Escape" && lightbox.classList.contains("is-open")){
+      session.declinedLightbox = true;
+      declineLead("consecutive_queries").then(closeLightbox);
+    }
+  });
+
+  // ---- ask flow → real backend --------------------------------------
+  function ask(text){
+    text = (text || "").trim();
+    if (!text || session.pending) return;
+    beginConversation();
+    addUser(text);
+    input.value = ""; autoGrow(); refreshSend();
+    session.pending = true; sendBtn.disabled = true;
+    addLoading();
+
+    fetch(CHAT_API, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({
+        question:               text,
+        conversation_synthesis: session.conversationSynthesis,
+        query_count:            session.queryCount,
+      }),
+    }).then(function(rsp){
+      removeLoading();
+      if (!rsp.ok){
+        return rsp.text().catch(function(){ return ""; }).then(function(d){
+          console.error("public chat failed", rsp.status, d);
+          addError();
+        });
       }
-
-      async function submit() {
-        const q = $input.value.trim();
-        if (!q || session.pending) return;
-
-        if ($samples && $samples.parentElement) {
-          $samples.style.display = 'none';
+      return rsp.json().then(function(data){
+        addBotAnswer(data.answer || "");
+        if (typeof data.updated_conversation_synthesis === "string"){
+          session.conversationSynthesis = data.updated_conversation_synthesis;
         }
+        session.lastQuestion      = text;
+        session.lastClosestSlugs  = Array.isArray(data.closest_insight_slugs) ? data.closest_insight_slugs : [];
+        session.lastCategoryGuess = data.category_guess || null;
+        session.queryCount += 1;
 
-        addBubble(q, 'msg-user');
-        $input.value = '';
-        $input.style.height = 'auto';
-
-        session.pending = true;
-        $send.disabled = true;
-        const $loading = addBubble('Thinking…', 'msg-loading');
-
-        try {
-          const rsp = await fetch(CHAT_API, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              question: q,
-              conversation_synthesis: session.conversationSynthesis,
-              query_count: session.queryCount,
-            }),
-          });
-          $loading.remove();
-          if (!rsp.ok) {
-            const detail = await rsp.text().catch(() => '');
-            addBubble('Something went wrong on our side. Please try again, or use the contact page to reach the team.', 'msg-error');
-            console.error('public chat failed', rsp.status, detail);
-            return;
-          }
-          const data = await rsp.json();
-          addBubble(data.answer || '', 'msg-bot');
-
-          // Update session state with what the backend returned.
-          if (typeof data.updated_conversation_synthesis === 'string') {
-            session.conversationSynthesis = data.updated_conversation_synthesis;
-          }
-          session.lastQuestion      = q;
-          session.lastClosestSlugs  = Array.isArray(data.closest_insight_slugs) ? data.closest_insight_slugs : [];
-          session.lastCategoryGuess = data.category_guess || null;
-          session.queryCount += 1;
-
-          // Inline lead form when the backend signals no-answer.
-          if (data.prompt_lead_capture && !session.leadAlreadySubmitted) {
-            addInlineLeadForm();
-          }
-          // Lightbox after the consecutive-query threshold.
-          if (!session.leadAlreadySubmitted
-              && session.queryCount >= LIGHTBOX_THRESHOLD_QUERIES
-              && session.queryCount >= session.suppressLightboxUntilQuery
-              && !data.prompt_lead_capture        // don't double-stack with an inline form
-              && !session.lightboxOpen) {
-            // Tiny delay so the answer renders cleanly before the lightbox lands.
-            setTimeout(openLightbox, 350);
-          }
-        } catch (err) {
-          $loading.remove();
-          addBubble('Network hiccup. Please try again in a moment.', 'msg-error');
-          console.error('public chat error', err);
-        } finally {
-          session.pending = false;
-          $send.disabled = false;
-          $input.focus();
+        // Surface A: inline lead form when the backend flags no-answer
+        if (data.prompt_lead_capture && !session.leadAlreadySubmitted){
+          addInlineLeadForm();
+          return;                              // don't ALSO pop the lightbox in the same beat
         }
-      }
-    })();
-  </script>
+        // Surface B: lightbox after the consecutive-query threshold
+        if (!session.leadAlreadySubmitted
+            && !session.declinedLightbox
+            && session.queryCount >= LIGHTBOX_THRESHOLD_QUERIES
+            && session.queryCount >= session.suppressLightboxUntilQuery
+            && !lightbox.classList.contains("is-open")){
+          setTimeout(openLightbox, 400);
+        }
+      });
+    }).catch(function(err){
+      removeLoading();
+      console.error("public chat error", err);
+      addError();
+    }).then(function(){
+      session.pending = false;
+      sendBtn.disabled = input.value.trim() === "";
+      input.focus();
+    });
+  }
+
+  // ---- compose behaviours -------------------------------------------
+  function refreshSend(){ sendBtn.disabled = input.value.trim() === ""; }
+  function autoGrow(){ input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 120) + "px"; }
+
+  input.addEventListener("input", function(){ autoGrow(); refreshSend(); });
+  input.addEventListener("keydown", function(e){
+    if (e.key === "Enter" && !e.shiftKey){ e.preventDefault(); ask(input.value); }
+  });
+  compose.addEventListener("submit", function(e){ e.preventDefault(); ask(input.value); });
+
+  samples.addEventListener("click", function(e){
+    var chip = e.target.closest(".sample-chip");
+    if (chip && !session.pending) ask(chip.textContent);
+  });
+
+  log.addEventListener("click", function(e){
+    var retry = e.target.closest("[data-retry]");
+    if (retry){
+      e.preventDefault();
+      var err = retry.closest(".msg-error"); if (err) err.remove();
+      ask(session.lastQuestion);
+    }
+  });
+})();
+</script>
 </body>
 </html>
