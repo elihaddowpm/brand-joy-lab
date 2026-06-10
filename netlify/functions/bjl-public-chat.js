@@ -58,13 +58,14 @@ const CLOSEST_OFFER_DISTANCE      = 0.75;  // surface as "closest" even if below
 const STRUCTURED_MIN_HITS         = 1;     // a structured row needs at least 1 token hit
 
 const PER_LAYER_LIMITS = {
-  scores:        5,
-  ordinal:       3,
-  agreement:     4,   // v6.4 — agreement-battery % shares (X% strongly agree, X% net agree)
-  distributions: 4,   // v6.4 — frequency / describe-grid polarity-summed shares
-  laws:          3,
-  insights:      3,
-  truths:        2,
+  scores:           5,
+  ordinal:          3,
+  agreement:        4,   // v6.4 — agreement-battery % shares (X% strongly agree, X% net agree)
+  distributions:    4,   // v6.4 — frequency / describe-grid polarity-summed shares
+  laws:             3,
+  insights:         3,
+  truths:           2,
+  global_extremes: 10,   // v6.9 — top-N highest + top-N lowest, dedup-aware
 };
 
 const DEFAULT_ALLOWED_ORIGINS = [
@@ -327,6 +328,74 @@ async function retrieveDistributions(question) {
   return (data || []).filter(r => r.hit_count >= STRUCTURED_MIN_HITS);
 }
 
+// v6.9 — true global extremes (dedup-aware).
+//
+// Two grounding failures from Eli's diagnostic motivate this layer:
+//   - The "highest-joy" answer crowned a verbatim relational finding
+//     as edging out the top scored items. Vacation (78.7) is actually
+//     above the relationship item (78.2); the top cluster sits within
+//     a few points and there's no clean #1.
+//   - The "lowest-score" answer crowned the end-of-vacation arc low
+//     (35.5) as "the single lowest anywhere", missing the actual
+//     global minimum (psychedelics in the public-safe set has rows at
+//     0.2 and −6.3; tofu sits at −2.6).
+//
+// Both bugs trace to the same root: the synthesizer was asserting a
+// superlative from rows that were a slice, not the universe. This
+// layer pre-computes the true global top-N and bottom-N from
+// bjl_public_scores so the synthesizer has the actual extremes
+// available whenever a question reaches for "highest" / "lowest".
+//
+// Dedup rule: the same item can appear under multiple fielding cuts
+// (psychedelics shows up at both 0.2 n=1,468 and −6.3 n=1,364 — same
+// item_name, different question wording). Without dedup, the answer
+// flips depending on which fielding row got returned. We dedupe by
+// LOWER(TRIM(item_name)) and keep the highest-n row per concept as
+// the canonical reading. The synthesizer is told that some items
+// have multiple fielding cuts and to treat the canonical row as the
+// headline number.
+async function retrieveGlobalExtremes() {
+  const sql = `
+    WITH deduped AS (
+      SELECT DISTINCT ON (LOWER(TRIM(item_name)))
+        item_id, item_name, question_label, category, joy_index, n
+      FROM bjl_public_scores
+      WHERE public_safe = true
+        AND joy_index IS NOT NULL
+      ORDER BY LOWER(TRIM(item_name)), n DESC NULLS LAST
+    ),
+    top_n AS (
+      SELECT item_id, item_name, question_label, category, joy_index, n,
+             'highest' AS extreme
+      FROM deduped
+      ORDER BY joy_index DESC
+      LIMIT ${PER_LAYER_LIMITS.global_extremes}
+    ),
+    bottom_n AS (
+      SELECT item_id, item_name, question_label, category, joy_index, n,
+             'lowest' AS extreme
+      FROM deduped
+      ORDER BY joy_index ASC
+      LIMIT ${PER_LAYER_LIMITS.global_extremes}
+    )
+    SELECT * FROM top_n
+    UNION ALL
+    SELECT * FROM bottom_n
+  `;
+  const { data, error } = await supabase.rpc('execute_read_sql', { query_text: sql });
+  if (error) {
+    console.error('[bjl-public-chat] retrieveGlobalExtremes error:', error.message);
+    return { highest: [], lowest: [] };
+  }
+  const highest = [];
+  const lowest  = [];
+  for (const r of (data || [])) {
+    if (r.extreme === 'highest') highest.push(r);
+    else if (r.extreme === 'lowest') lowest.push(r);
+  }
+  return { highest, lowest };
+}
+
 // =============================================================
 // Semantic retrieval (bjl_laws, bjl_public_verbatim_truths,
 // bjl_public_insights) via pgvector cosine
@@ -439,6 +508,7 @@ async function retrieve(question) {
     retrieveOrdinal(question),
     retrieveAgreement(question),       // v6.4
     retrieveDistributions(question),   // v6.4
+    retrieveGlobalExtremes(),          // v6.9 — always-on top/bottom N for superlative grounding
   ];
 
   let semanticPromises;
@@ -459,7 +529,7 @@ async function retrieve(question) {
     ];
   }
 
-  const [scores, ordinal, agreement, distributions, laws, insights, truths] = await Promise.all([
+  const [scores, ordinal, agreement, distributions, globalExtremes, laws, insights, truths] = await Promise.all([
     ...structuredPromises,
     ...semanticPromises,
   ]);
@@ -477,6 +547,7 @@ async function retrieve(question) {
 
   return {
     scores, ordinal, agreement, distributions, laws, insights, truths,
+    global_extremes: globalExtremes,    // v6.9 — always available; the synthesizer reaches for it on superlative questions
     semantic_available: semanticAvailable,
     best_semantic_distance: Number.isFinite(bestSemanticDistance) ? bestSemanticDistance : null,
     threshold_cleared: hasStrongSemantic || hasStrongStructured,
@@ -564,6 +635,22 @@ function buildRetrievedPayloadForLLM(retrieved) {
       source_n: r.source_n,
       distance: r.distance != null ? Number(Number(r.distance).toFixed(3)) : null,
     })),
+    global_extremes: {
+      highest: ((retrieved.global_extremes && retrieved.global_extremes.highest) || []).map(r => ({
+        item_id: r.item_id,
+        item_name: r.item_name,
+        category: r.category,
+        joy_index: Number(r.joy_index),
+        n: Number(r.n),
+      })),
+      lowest: ((retrieved.global_extremes && retrieved.global_extremes.lowest) || []).map(r => ({
+        item_id: r.item_id,
+        item_name: r.item_name,
+        category: r.category,
+        joy_index: Number(r.joy_index),
+        n: Number(r.n),
+      })),
+    },
   };
 }
 
