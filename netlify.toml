@@ -87,3 +87,9 @@
   from = "/api/bjl-public-corpus"
   to = "/.netlify/functions/bjl-public-corpus"
   status = 200
+
+# v6.6 — public-facing lead capture (submit + decline). No auth.
+[[redirects]]
+  from = "/api/bjl-public-capture-lead"
+  to = "/.netlify/functions/bjl-public-capture-lead"
+  status = 200

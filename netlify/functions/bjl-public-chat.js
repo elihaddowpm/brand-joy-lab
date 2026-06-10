@@ -567,17 +567,17 @@ function buildRetrievedPayloadForLLM(retrieved) {
   };
 }
 
-async function composeAnswer({ question, scope, retrieved }) {
+async function composeAnswer({ question, scope, retrieved, conversation_synthesis }) {
   const systemPrompt = PROMPTS.publicChatSynthesis;
   if (!systemPrompt) throw new Error('public_chat_synthesis prompt missing from bundle');
 
   const userMessage = [
     `question: ${question}`,
     '',
+    `conversation_synthesis: ${conversation_synthesis ? conversation_synthesis : '(none yet — this is the first turn or no prior synthesis was provided)'}`,
+    '',
     `scope: ${scope}`,
     `threshold_cleared: ${retrieved.threshold_cleared}`,
-    `best_semantic_distance: ${retrieved.best_semantic_distance}`,
-    `semantic_available: ${retrieved.semantic_available}`,
     '',
     `retrieved:`,
     JSON.stringify(buildRetrievedPayloadForLLM(retrieved), null, 2),
@@ -594,32 +594,10 @@ async function composeAnswer({ question, scope, retrieved }) {
   return JSON.parse(cleaned);
 }
 
-// =============================================================
-// Capture (unchanged contract from v6; richer closest_slugs source)
-// =============================================================
-
-async function captureQuestion({ question, email, userContext, closestSlugs, categoryGuess }) {
-  const insertRow = {
-    question: question.slice(0, 2000),
-    email: email ? String(email).slice(0, 200) : null,
-    category_guess: categoryGuess || null,
-    matched_insight_slugs: closestSlugs || [],
-    status: 'new',
-    user_context: userContext ? String(userContext).slice(0, 500) : null,
-  };
-  const { data, error } = await supabase
-    .from('bjl_public_questions')
-    .insert(insertRow)
-    .select('id')
-    .single();
-  if (error) {
-    console.error('[bjl-public-chat] capture insert error:', error);
-    return null;
-  }
-
-  // TODO(crm): push to CRM once Eli confirms target system + field mapping.
-  return data && data.id;
-}
+// v6.6: capture-write logic moved out of this endpoint. The frontend now
+// drives lead capture via a dedicated form (inline on no-answer, lightbox
+// after consecutive queries). bjl-public-capture-lead.js is the new
+// write endpoint; this function returns nothing capture-related.
 
 // =============================================================
 // Handler
@@ -650,47 +628,47 @@ exports.handler = async (event) => {
   }
 
   try {
+    // v6.6: visitor session context
+    const conversationSynthesis = typeof body.conversation_synthesis === 'string'
+                                    ? body.conversation_synthesis.slice(0, 2000)
+                                    : '';
+
     // Scope classification
     const scope = await classifyScope(question);
 
-    // Retrieve across all five layers (semantic + structured)
+    // Retrieve across all seven layers (semantic + structured)
     const retrieved = await retrieve(question);
 
     // For decline paths (brand_specific / live_cut_requested / out_of_scope),
-    // we still pass retrieved rows so the LLM can offer a closest insight
-    // and route the capture cleanly.
-    const llmResult = await composeAnswer({ question, scope, retrieved });
+    // we still pass retrieved rows so the LLM can offer the nearest thing.
+    const llmResult = await composeAnswer({
+      question, scope, retrieved,
+      conversation_synthesis: conversationSynthesis,
+    });
 
-    // Capture: write the question + (optional) email + closest_slugs into
-    // bjl_public_questions for the team to follow up on.
-    let captureId = null;
-    if (llmResult.capture_question) {
-      const slugsFromLLM = (llmResult.closest_slugs_for_capture && llmResult.closest_slugs_for_capture.length > 0)
-        ? llmResult.closest_slugs_for_capture
-        : retrieved.insights
-            .filter(r => Number(r.distance) <= CLOSEST_OFFER_DISTANCE)
-            .map(r => r.slug);
-      const categoryGuess = (retrieved.insights[0] && retrieved.insights[0].category)
-                          || (retrieved.scores[0]   && retrieved.scores[0].category)
-                          || null;
-      captureId = await captureQuestion({
-        question,
-        email: body.email,
-        userContext: body.user_context,
-        closestSlugs: slugsFromLLM,
-        categoryGuess,
-      });
-    }
+    // Closest insight slugs the frontend can stash in case the visitor
+    // submits the lead form. The form endpoint accepts these and writes
+    // them to matched_insight_slugs on the captured row.
+    const closestInsightSlugs = retrieved.insights
+      .filter(r => Number.isFinite(Number(r.distance)) && Number(r.distance) <= CLOSEST_OFFER_DISTANCE)
+      .map(r => r.slug)
+      .slice(0, 3);
+    const categoryGuess = (retrieved.insights[0] && retrieved.insights[0].category)
+                        || (retrieved.scores[0]   && retrieved.scores[0].category)
+                        || null;
 
     return {
       statusCode: 200,
       headers,
       body: JSON.stringify({
-        answer: llmResult.answer || '',
-        scope_taken: llmResult.scope_taken || scope,
-        rows_used: llmResult.rows_used || [],
-        captured: !!captureId,
-        capture_id: captureId,
+        answer:                          llmResult.answer || '',
+        scope_taken:                     llmResult.scope_taken || scope,
+        rows_used:                       llmResult.rows_used || [],
+        updated_conversation_synthesis:  llmResult.updated_conversation_synthesis || '',
+        prompt_lead_capture:             !!llmResult.prompt_lead_capture,
+        lead_capture_trigger_source:     llmResult.lead_capture_trigger_source || null,
+        closest_insight_slugs:           closestInsightSlugs,
+        category_guess:                  categoryGuess,
       }),
     };
   } catch (err) {

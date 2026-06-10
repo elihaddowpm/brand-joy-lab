@@ -149,13 +149,103 @@
       color: var(--iron-darker);
       margin-bottom: .25rem;
     }
-    .capture-block input[type="email"] {
+    .capture-block input[type="email"],
+    .capture-block input[type="text"] {
       width: 100%;
       padding: .45rem .6rem;
       border: 1px solid var(--iron);
       border-radius: 6px;
       font-size: 13px;
       background: white;
+      color: var(--ink);
+    }
+    .capture-block .lead-form-row {
+      display: flex;
+      gap: .5rem;
+      margin-bottom: .4rem;
+    }
+    .capture-block .lead-form-row > label {
+      flex: 1;
+      margin-bottom: 0;
+    }
+    .capture-block .lead-form-row > label > input {
+      margin-top: .2rem;
+    }
+    /* v6.6 lightbox after 7-8 consecutive queries */
+    .lead-lightbox-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(20, 20, 18, .55);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+    }
+    .lead-lightbox {
+      background: white;
+      border-radius: var(--radius);
+      padding: 1.2rem 1.3rem;
+      max-width: 420px;
+      width: calc(100% - 2rem);
+      box-shadow: 0 20px 50px rgba(0, 0, 0, .15);
+    }
+    .lead-lightbox h3 {
+      margin: 0 0 .4rem 0;
+      font-size: 15px;
+      color: var(--ink);
+    }
+    .lead-lightbox p {
+      margin: 0 0 .8rem 0;
+      font-size: 13px;
+      color: var(--iron-darker);
+      line-height: 1.4;
+    }
+    .lead-lightbox label {
+      display: block;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: var(--iron-darker);
+      margin-bottom: .35rem;
+    }
+    .lead-lightbox input {
+      width: 100%;
+      padding: .5rem .65rem;
+      border: 1px solid var(--iron);
+      border-radius: 6px;
+      font-size: 13px;
+      background: white;
+      color: var(--ink);
+      margin-top: .15rem;
+    }
+    .lead-lightbox .lead-form-row {
+      display: flex;
+      gap: .5rem;
+      margin-bottom: .5rem;
+    }
+    .lead-lightbox .lead-form-row > label { flex: 1; margin-bottom: 0; }
+    .lead-lightbox .lead-lightbox-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: .5rem;
+      margin-top: .8rem;
+    }
+    .lead-lightbox button {
+      padding: .5rem 1rem;
+      border: none;
+      border-radius: 6px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .lead-lightbox button[data-action="submit"] {
+      background: var(--accent);
+      color: white;
+    }
+    .lead-lightbox button[data-action="decline"] {
+      background: transparent;
+      color: var(--iron-darker);
+    }
+    .lead-lightbox button[data-action="decline"]:hover {
       color: var(--ink);
     }
     .capture-block-msg {
@@ -274,14 +364,34 @@
 
   <script>
     (function () {
-      const API = '/.netlify/functions/bjl-public-chat';
+      const CHAT_API    = '/.netlify/functions/bjl-public-chat';
+      const CAPTURE_API = '/.netlify/functions/bjl-public-capture-lead';
+
+      // v6.6 lead-capture trigger rules.
+      // - Inline form on no-answer: backend signals via prompt_lead_capture.
+      // - Lightbox after 7 queries in a session.
+      // - Decline suppresses the lightbox for ~8 more queries.
+      const LIGHTBOX_THRESHOLD_QUERIES = 7;
+      const SUPPRESS_DEFAULT_QUERIES   = 8;
+
       const $log = document.getElementById('chat-log');
       const $form = document.getElementById('compose');
       const $input = document.getElementById('question-input');
       const $send = document.getElementById('send-btn');
       const $samples = document.getElementById('sample-questions');
-      let pending = false;
-      let lastUnanswered = null;        // { question, capture_id } when capture happened
+
+      // Session state (lives only as long as the iframe stays open).
+      const session = {
+        pending:                  false,
+        queryCount:               0,           // increments on each successful chat response
+        conversationSynthesis:    '',          // running 2-4 sentence summary from the LLM
+        lastQuestion:             '',
+        lastClosestSlugs:         [],
+        lastCategoryGuess:        null,
+        lightboxOpen:             false,
+        suppressLightboxUntilQuery: 0,         // lightbox won't open while queryCount < this
+        leadAlreadySubmitted:     false,       // once submitted, stop nagging
+      };
 
       // Auto-grow textarea
       $input.addEventListener('input', () => {
@@ -292,7 +402,7 @@
       // Sample question chip → fill input + submit
       $samples.addEventListener('click', (e) => {
         const btn = e.target.closest('.sample-chip');
-        if (!btn || pending) return;
+        if (!btn || session.pending) return;
         $input.value = btn.dataset.q || btn.textContent.trim();
         $input.style.height = 'auto';
         $input.style.height = Math.min(140, $input.scrollHeight) + 'px';
@@ -319,53 +429,187 @@
         return div;
       }
 
-      function addCaptureBlock(captureId, originalQuestion) {
-        const wrap = document.createElement('div');
-        wrap.className = 'capture-block';
-        wrap.innerHTML = `
-          <p class="capture-block-msg">Want the answer when we publish it? Drop your email and we'll come find you.</p>
-          <label for="email-${captureId}">Email (optional)</label>
-          <input type="email" id="email-${captureId}" placeholder="you@company.com" />
-          <div class="capture-block-actions">
-            <button class="secondary" data-action="dismiss">No thanks</button>
-            <button data-action="submit">Send my email</button>
-          </div>
-        `;
-        const $emailInput = wrap.querySelector('input[type="email"]');
-        wrap.querySelector('[data-action="dismiss"]').addEventListener('click', () => {
-          wrap.remove();
-        });
-        wrap.querySelector('[data-action="submit"]').addEventListener('click', async () => {
-          const email = $emailInput.value.trim();
-          if (!email) { $emailInput.focus(); return; }
-          // Re-post the original question with the email so the backend
-          // links the email to the same capture (idempotent on slug — a new
-          // bjl_public_questions row is fine, it carries the same question).
-          try {
-            await fetch(API, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ question: originalQuestion, email }),
-            });
-            wrap.innerHTML = '<p class="capture-block-msg">Got it. We will be in touch when we publish on this one.</p>';
-          } catch (_) {
-            wrap.innerHTML = '<p class="capture-block-msg">Something went sideways. Please use the contact page to reach us directly.</p>';
-          }
-        });
-        $log.appendChild(wrap);
-        scrollToBottom();
-      }
-
       function scrollToBottom() {
         $log.scrollTop = $log.scrollHeight;
       }
 
+      // ----- Lead capture: inline (no-answer) and lightbox (consecutive queries) -----
+
+      function addInlineLeadForm() {
+        // Inline form shown when the backend signals prompt_lead_capture.
+        // Trigger source = 'no_answer'. Same fields as the lightbox.
+        const wrap = document.createElement('div');
+        wrap.className = 'capture-block';
+        wrap.innerHTML = `
+          <p class="capture-block-msg">Want a real answer to this one? Leave us a way to reach you and the team will dig in.</p>
+          <div class="lead-form-row">
+            <label>First name<input type="text" data-field="first_name" autocomplete="given-name" /></label>
+            <label>Last name<input type="text" data-field="last_name" autocomplete="family-name" /></label>
+          </div>
+          <label>Email<input type="email" data-field="email" autocomplete="email" placeholder="you@company.com" /></label>
+          <label>Company (optional)<input type="text" data-field="company_name" autocomplete="organization" /></label>
+          <div class="capture-block-actions">
+            <button class="secondary" data-action="decline">No thanks, I'll keep searching.</button>
+            <button data-action="submit">Send</button>
+          </div>
+        `;
+        $log.appendChild(wrap);
+        scrollToBottom();
+
+        wireLeadForm(wrap, 'no_answer');
+      }
+
+      function openLightbox() {
+        // Lightbox shown after the visitor crosses LIGHTBOX_THRESHOLD_QUERIES
+        // consecutive queries without submitting. Trigger source =
+        // 'consecutive_queries'.
+        if (session.lightboxOpen || session.leadAlreadySubmitted) return;
+        if (session.queryCount < session.suppressLightboxUntilQuery) return;
+        session.lightboxOpen = true;
+
+        const backdrop = document.createElement('div');
+        backdrop.className = 'lead-lightbox-backdrop';
+        backdrop.innerHTML = `
+          <div class="lead-lightbox" role="dialog" aria-modal="true">
+            <h3>Want a faster answer?</h3>
+            <p>The fastest route to exactly what you need is a direct conversation with PETERMAYER. Leave a few details and the team will be in touch.</p>
+            <div class="lead-form-row">
+              <label>First name<input type="text" data-field="first_name" autocomplete="given-name" /></label>
+              <label>Last name<input type="text" data-field="last_name" autocomplete="family-name" /></label>
+            </div>
+            <label>Email<input type="email" data-field="email" autocomplete="email" placeholder="you@company.com" /></label>
+            <label>Company (optional)<input type="text" data-field="company_name" autocomplete="organization" /></label>
+            <div class="lead-lightbox-actions">
+              <button data-action="decline">No thanks, I'll keep searching.</button>
+              <button data-action="submit">Send</button>
+            </div>
+          </div>
+        `;
+        backdrop.addEventListener('click', (e) => {
+          // Click on backdrop (not the modal) closes as decline.
+          if (e.target === backdrop) handleDecline(backdrop.firstElementChild, 'consecutive_queries', backdrop);
+        });
+        document.body.appendChild(backdrop);
+        wireLeadForm(backdrop.firstElementChild, 'consecutive_queries', backdrop);
+        // Focus first field
+        const first = backdrop.querySelector('input[data-field="first_name"]');
+        if (first) first.focus();
+      }
+
+      function wireLeadForm(formRoot, triggerSource, outerBackdrop) {
+        const getField = (name) => {
+          const el = formRoot.querySelector(`input[data-field="${name}"]`);
+          return el ? el.value.trim() : '';
+        };
+        const showError = (msg) => {
+          let banner = formRoot.querySelector('.lead-form-error');
+          if (!banner) {
+            banner = document.createElement('p');
+            banner.className = 'lead-form-error';
+            banner.style.cssText = 'color:#b45309;font-size:12px;margin:.4rem 0 0 0;';
+            formRoot.insertBefore(banner, formRoot.querySelector('.capture-block-actions, .lead-lightbox-actions'));
+          }
+          banner.textContent = msg;
+        };
+        const close = () => {
+          if (outerBackdrop && outerBackdrop.parentElement) outerBackdrop.parentElement.removeChild(outerBackdrop);
+          else if (formRoot.parentElement) formRoot.parentElement.removeChild(formRoot);
+          session.lightboxOpen = false;
+        };
+        const replaceWithThanks = (msg) => {
+          // Inline form path: replace contents with a thank-you note.
+          if (outerBackdrop) {
+            outerBackdrop.firstElementChild.innerHTML = `
+              <h3>Thanks.</h3>
+              <p>${msg}</p>
+              <div class="lead-lightbox-actions"><button data-action="dismiss">Close</button></div>
+            `;
+            outerBackdrop.firstElementChild.querySelector('[data-action="dismiss"]').addEventListener('click', close);
+          } else {
+            formRoot.innerHTML = `<p class="capture-block-msg">${msg}</p>`;
+          }
+        };
+
+        formRoot.querySelector('[data-action="submit"]').addEventListener('click', async () => {
+          const first_name   = getField('first_name');
+          const last_name    = getField('last_name');
+          const email        = getField('email');
+          const company_name = getField('company_name');
+          if (!first_name || !last_name) { showError('First and last name required.'); return; }
+          if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { showError('Looks like the email is incomplete.'); return; }
+
+          try {
+            const r = await fetch(CAPTURE_API, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                status: 'submitted',
+                trigger_source: triggerSource,
+                question: session.lastQuestion,
+                conversation_synthesis: session.conversationSynthesis,
+                query_count: session.queryCount,
+                matched_insight_slugs: session.lastClosestSlugs,
+                category_guess: session.lastCategoryGuess,
+                first_name, last_name, email, company_name: company_name || null,
+              }),
+            });
+            if (!r.ok) {
+              const detail = await r.text().catch(() => '');
+              console.error('lead capture failed', r.status, detail);
+              showError('Something went sideways on our side. Try again in a moment.');
+              return;
+            }
+            session.leadAlreadySubmitted = true;
+            replaceWithThanks('Got it. The team will be in touch.');
+          } catch (err) {
+            console.error('lead capture error', err);
+            showError('Network hiccup. Try again in a moment.');
+          }
+        });
+
+        formRoot.querySelector('[data-action="decline"]').addEventListener('click', () => {
+          handleDecline(formRoot, triggerSource, outerBackdrop);
+        });
+      }
+
+      async function handleDecline(formRoot, triggerSource, outerBackdrop) {
+        // Write a decline row (no personal fields), suppress the lightbox
+        // for the next ~8 queries, dismiss the form.
+        try {
+          const r = await fetch(CAPTURE_API, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              status: 'declined',
+              trigger_source: triggerSource,
+              question: session.lastQuestion,
+              conversation_synthesis: session.conversationSynthesis,
+              query_count: session.queryCount,
+              matched_insight_slugs: session.lastClosestSlugs,
+              category_guess: session.lastCategoryGuess,
+            }),
+          });
+          if (r.ok) {
+            const j = await r.json().catch(() => null);
+            const suppress = (j && Number.isFinite(j.suppress_next_lightbox_for_queries))
+              ? j.suppress_next_lightbox_for_queries
+              : SUPPRESS_DEFAULT_QUERIES;
+            session.suppressLightboxUntilQuery = session.queryCount + suppress;
+          } else {
+            session.suppressLightboxUntilQuery = session.queryCount + SUPPRESS_DEFAULT_QUERIES;
+          }
+        } catch (_) {
+          session.suppressLightboxUntilQuery = session.queryCount + SUPPRESS_DEFAULT_QUERIES;
+        }
+        if (outerBackdrop && outerBackdrop.parentElement) outerBackdrop.parentElement.removeChild(outerBackdrop);
+        else if (formRoot && formRoot.parentElement) formRoot.parentElement.removeChild(formRoot);
+        session.lightboxOpen = false;
+      }
+
       async function submit() {
         const q = $input.value.trim();
-        if (!q || pending) return;
+        if (!q || session.pending) return;
 
-        // Once the user asks something, hide the sample chips so the
-        // conversation gets the real estate. (They reappear on reload.)
         if ($samples && $samples.parentElement) {
           $samples.style.display = 'none';
         }
@@ -374,15 +618,19 @@
         $input.value = '';
         $input.style.height = 'auto';
 
-        pending = true;
+        session.pending = true;
         $send.disabled = true;
         const $loading = addBubble('Thinking…', 'msg-loading');
 
         try {
-          const rsp = await fetch(API, {
+          const rsp = await fetch(CHAT_API, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ question: q }),
+            body: JSON.stringify({
+              question: q,
+              conversation_synthesis: session.conversationSynthesis,
+              query_count: session.queryCount,
+            }),
           });
           $loading.remove();
           if (!rsp.ok) {
@@ -393,16 +641,35 @@
           }
           const data = await rsp.json();
           addBubble(data.answer || '', 'msg-bot');
-          if (data.captured && data.capture_id) {
-            lastUnanswered = { question: q, capture_id: data.capture_id };
-            addCaptureBlock(data.capture_id, q);
+
+          // Update session state with what the backend returned.
+          if (typeof data.updated_conversation_synthesis === 'string') {
+            session.conversationSynthesis = data.updated_conversation_synthesis;
+          }
+          session.lastQuestion      = q;
+          session.lastClosestSlugs  = Array.isArray(data.closest_insight_slugs) ? data.closest_insight_slugs : [];
+          session.lastCategoryGuess = data.category_guess || null;
+          session.queryCount += 1;
+
+          // Inline lead form when the backend signals no-answer.
+          if (data.prompt_lead_capture && !session.leadAlreadySubmitted) {
+            addInlineLeadForm();
+          }
+          // Lightbox after the consecutive-query threshold.
+          if (!session.leadAlreadySubmitted
+              && session.queryCount >= LIGHTBOX_THRESHOLD_QUERIES
+              && session.queryCount >= session.suppressLightboxUntilQuery
+              && !data.prompt_lead_capture        // don't double-stack with an inline form
+              && !session.lightboxOpen) {
+            // Tiny delay so the answer renders cleanly before the lightbox lands.
+            setTimeout(openLightbox, 350);
           }
         } catch (err) {
           $loading.remove();
           addBubble('Network hiccup. Please try again in a moment.', 'msg-error');
           console.error('public chat error', err);
         } finally {
-          pending = false;
+          session.pending = false;
           $send.disabled = false;
           $input.focus();
         }
