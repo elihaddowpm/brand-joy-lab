@@ -311,10 +311,14 @@ followup_seeds:  ${JSON.stringify(triage.followup_seeds || [])}
 // 242-item table with n>1000 truncated mid-line at item 115. These ceilings
 // give literal/long requests room while keeping short responses fast and
 // cheap (each output token is real money + latency on Sonnet).
+// v6.8: raised medium + long to give the synthesizer more headroom on
+// dense responses. The "user sees raw JSON" pattern was partially driven
+// by mid-object truncation that didn't trip the truncation heuristic
+// cleanly; more room reduces the frequency.
 const LENGTH_TO_MAX_TOKENS = {
-  short:  1500,
-  medium: 4000,
-  long:   16000
+  short:  2000,
+  medium: 6000,
+  long:   20000
 };
 
 // Heuristic for distinguishing truncation from other JSON-parse failures.
@@ -333,17 +337,76 @@ function looksLikeTruncation(stopReason, raw) {
   return trimmed.startsWith('{') && last !== '}';
 }
 
+// v6.8: prep the raw model output for JSON.parse. Handles three drift
+// patterns we've seen intermittently:
+//   1. Lead-in prose before the JSON ("Here's the response:\n{...}")
+//   2. Code fences that don't sit exactly at the start of the buffer
+//      (the prior strip only caught ^```json\n)
+//   3. Trailing prose after the JSON close (rare but happens)
+//
+// Strategy: locate the outermost {...} and slice. Bracket-counting handles
+// nested objects/arrays correctly; strings (with escapes) are skipped so
+// quotes inside response_text don't fool the counter.
+function extractJsonObjectSubstring(raw) {
+  if (!raw || typeof raw !== 'string') return null;
+  const first = raw.indexOf('{');
+  if (first === -1) return null;
+  let depth = 0;
+  let inString = false;
+  for (let i = first; i < raw.length; i++) {
+    const c = raw[i];
+    if (inString) {
+      if (c === '\\') { i++; continue; }
+      if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') { inString = true; continue; }
+    if (c === '{') depth++;
+    else if (c === '}') {
+      depth--;
+      if (depth === 0) return raw.slice(first, i + 1);
+    }
+  }
+  // Reached EOF mid-object — truncated. Return the partial buffer from
+  // the first { onward so downstream extractors can still pull response_text.
+  return raw.slice(first);
+}
+
+// v6.8: key-normalization read. The synthesizer schema specifies
+// snake_case (response_text, followup_chips) but Sonnet occasionally
+// emits camelCase or lowercase-no-underscore variants (responseText,
+// responsetext, followupchips, followupChips). Build a case-/separator-
+// insensitive lookup so we read the right value regardless of which
+// spelling the model picked.
+function makeNormalizedReader(obj) {
+  const map = new Map();
+  if (obj && typeof obj === 'object') {
+    for (const k of Object.keys(obj)) {
+      const norm = k.toLowerCase().replace(/[_\-\s]/g, '');
+      if (!map.has(norm)) map.set(norm, obj[k]);
+    }
+  }
+  return (canonicalKey) => {
+    const norm = canonicalKey.toLowerCase().replace(/[_\-\s]/g, '');
+    return map.has(norm) ? map.get(norm) : undefined;
+  };
+}
+
 // Try to extract whatever response_text the truncated JSON managed to
 // produce before being cut off, so we can show the user the partial
 // content alongside the truncation notice. Best-effort; returns null if
 // nothing salvageable.
+//
+// v6.8: also handles the casing-wobble case where the model wrote
+// "responsetext" or "responseText" instead of "response_text".
 function extractTruncatedResponseText(raw) {
   if (!raw) return null;
   // Find the start of the response_text value: looks like
-  //    "response_text": "..."
+  //    "response_text": "..." (or any case/separator variant)
   // The value is a JSON string, so we need to walk it manually because
   // it can contain escaped quotes.
-  const keyMatch = raw.match(/"response_text"\s*:\s*"/);
+  const keyMatch = raw.match(/"response[_\-\s]?text"\s*:\s*"/i)
+                || raw.match(/"responsetext"\s*:\s*"/i);
   if (!keyMatch) return null;
   const start = keyMatch.index + keyMatch[0].length;
   let i = start;
@@ -438,34 +501,52 @@ async function runSynthesis(triage, scratch, extraContext) {
   });
 
   let raw = (response.content[0] && response.content[0].text) ? response.content[0].text.trim() : '';
-  if (raw.startsWith('```')) {
-    raw = raw.replace(/^```(?:json)?\s*\n/, '').replace(/\n```\s*$/, '').trim();
-  }
+  // v6.8: lenient fence + preamble strip. The strict ^```json\n form
+  // missed cases where the model wrote "Here's the JSON:\n```json\n{...}"
+  // or wrapped the fences with surrounding prose. Walk the buffer to the
+  // outermost {…} and slice; that handles preamble, late fences, and
+  // trailing prose at once.
+  const jsonSlice = extractJsonObjectSubstring(raw);
+  if (jsonSlice) raw = jsonSlice;
+
+  // Helper for the never-dump-raw-JSON fallback: try the permissive
+  // string-walking extractor regardless of stop_reason. The extractor
+  // already handles case/separator variants for the response_text key.
+  const salvagePartial = () => extractTruncatedResponseText(raw);
 
   try {
     const parsed = JSON.parse(raw);
-    // The JSON parsed cleanly. Use parsed.response_text directly — never fall
-    // back to the raw JSON string as the response. If parsed.response_text is
-    // missing or empty, that's a separate failure mode (synthesizer produced
-    // valid JSON but didn't include the expected field). Surface a clear
-    // error instead of dumping the raw JSON to the user, which is what was
-    // happening before this fix and showed up to users as a literal
-    // `{ "response_text": "..." }` rendered as the answer body.
-    const responseText = (parsed && typeof parsed.response_text === 'string')
-      ? parsed.response_text
+    // v6.8: read via normalized lookup so case/separator drift in the
+    // model's keys (responsetext / responseText / response_text) doesn't
+    // dump the whole object on the user.
+    const read = makeNormalizedReader(parsed);
+    const responseTextValue = read('response_text');
+    const followupChipsValue = read('followup_chips');
+
+    const responseText = (typeof responseTextValue === 'string' && responseTextValue.trim())
+      ? responseTextValue
       : null;
-    const followupChips = Array.isArray(parsed.followup_chips)
-      ? parsed.followup_chips
+    const followupChips = Array.isArray(followupChipsValue)
+      ? followupChipsValue
       : (triage.followup_seeds || []);
 
     if (!responseText) {
-      console.warn('[synthesis] parsed JSON OK but response_text missing/empty/non-string. parsed keys:',
-        Object.keys(parsed || {}), 'raw chars:', raw.length);
+      // JSON parsed but no recognizable response_text key in any casing.
+      // Salvage what we can from the buffer; never expose the raw JSON.
+      const partial = salvagePartial();
+      console.warn('[synthesis] parsed JSON OK but response_text missing across all key variants. keys:',
+        Object.keys(parsed || {}), 'raw chars:', raw.length, 'partial chars:', partial ? partial.length : 0);
+      if (partial && partial.trim()) {
+        return {
+          response_text: partial.trim(),
+          followup_chips: followupChips,
+          synth_warning: 'key_drift_recovered'
+        };
+      }
       return {
-        response_text: "The synthesizer parsed valid JSON but did not include a response_text field. "
-          + "The investigation scratch is intact (look at the evidence drawer or pull job_id "
-          + "from the URL). This is a synthesizer-prompt issue, not a data issue. Try rephrasing "
-          + "the question or rerun.",
+        response_text: "The synthesizer parsed valid JSON but did not include a recognizable "
+          + "response_text field. The investigation scratch is intact (look at the evidence "
+          + "drawer or pull job_id from the URL). Try rephrasing the question or rerun.",
         followup_chips: followupChips,
         synth_error: 'missing_response_text'
       };
@@ -476,12 +557,13 @@ async function runSynthesis(triage, scratch, extraContext) {
       followup_chips: followupChips
     };
   } catch (e) {
-    // Distinguish truncation from other malformations. Truncation gets a
-    // clean message + whatever partial content we can salvage. Anything
-    // else falls through to the raw-text fallback so the user still sees
-    // the model's output rather than a silent failure.
-    if (looksLikeTruncation(response.stop_reason, raw)) {
-      const partial = extractTruncatedResponseText(raw);
+    // JSON.parse failed entirely. Three sub-paths, all of which now route
+    // through the permissive extractor so we NEVER hand the user raw
+    // braces as the answer body.
+    const truncated = looksLikeTruncation(response.stop_reason, raw);
+    const partial = salvagePartial();
+
+    if (truncated) {
       const truncMsg = "I had to cut this short due to response length limits"
         + ` (the lab's synthesizer hit its ${maxTokens.toLocaleString()}-token ceiling on this ${lengthKey} response).`
         + " The full result set may be larger than fits in one response."
@@ -498,14 +580,30 @@ async function runSynthesis(triage, scratch, extraContext) {
         truncated: true
       };
     }
-    // Non-truncation malformation: model emitted plain prose, fence the
-    // strip didn't catch, etc. Surface the raw output so we don't lose the
-    // model's work; the user sees something readable.
-    console.warn('[synthesis] JSON parse failed (non-truncation), using raw text. err:', e.message,
+
+    // Non-truncation malformation. v6.8: if we can extract a clean
+    // response_text via the string walker, return that (no raw JSON
+    // ever reaches the user). If we can't, return an honest hiccup
+    // message instead of dumping the buffer.
+    if (partial && partial.trim()) {
+      console.warn('[synthesis] JSON parse failed but response_text extracted. err:', e.message,
+        'stop_reason=', response.stop_reason, 'raw chars=', raw.length,
+        'partial chars=', partial.length);
+      return {
+        response_text: partial.trim(),
+        followup_chips: triage.followup_seeds || [],
+        synth_warning: 'parse_failed_recovered'
+      };
+    }
+
+    console.warn('[synthesis] JSON parse failed and no response_text salvageable. err:', e.message,
       'stop_reason=', response.stop_reason, 'raw chars=', raw.length);
     return {
-      response_text: raw,
-      followup_chips: triage.followup_seeds || []
+      response_text: "The synthesizer hit a formatting hiccup on this one. The investigation "
+        + "scratch is intact (the evidence drawer carries the underlying data). Try rerunning, "
+        + "or rephrase the question and we'll have another go.",
+      followup_chips: triage.followup_seeds || [],
+      synth_error: 'parse_failed_unsalvageable'
     };
   }
 }
