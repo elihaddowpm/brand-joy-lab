@@ -146,6 +146,17 @@
 /* =====================================================================
    3 · FRAME + HEADER + LOG
    ===================================================================== */
+
+/* v6.12: html + body must be height:100% so .chat-frame's height:100%
+   actually fills the iframe. Without these the body collapses to its
+   natural content height and the iframe shows blank space below the
+   chat content (visible as the parent page's background bleeding
+   through). Margin reset prevents a small gap at the top edge. */
+html, body {
+  height: 100%;
+  margin: 0;
+}
+
 .chat-frame {
   container-type: inline-size;   /* THIS is the responsive query container */
   position: relative;            /* anchors the Surface-B lightbox overlay */
