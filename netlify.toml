@@ -69,7 +69,13 @@
 [[headers]]
   for = "/public-chat.html"
   [headers.values]
-    Content-Security-Policy = "frame-ancestors 'self' https://peteramayer.com https://www.peteramayer.com"
+    # v6.11: added https://petermayer.webflow.io (no "a") so the team can
+    # QA the embed on Webflow's staging URL before publishing to the
+    # production peteramayer.com domain (with "a"). The Webflow staging
+    # subdomain naming drops the agency's middle "a" — that's a Webflow
+    # quirk, not a typo. Keep this entry while staging-side QA is active;
+    # tighten back to peteramayer.com-only at launch if desired.
+    Content-Security-Policy = "frame-ancestors 'self' https://peteramayer.com https://www.peteramayer.com https://petermayer.webflow.io"
     X-Content-Type-Options  = "nosniff"
 
 # The Webflow embed lands as: <iframe src="https://<joylab>/public-chat.html">
