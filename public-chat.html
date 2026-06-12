@@ -104,6 +104,7 @@
     leadAlreadySubmitted:       false,
     declinedLightbox:           false,
     suppressLightboxUntilQuery: 0,
+    errorFormShown:             false,  // v6.13: limit error-triggered form to once per session
   };
 
   // ---- helpers ------------------------------------------------------
@@ -160,12 +161,16 @@
   // gets appended as a sibling .msg-bot bubble so the credit + answer
   // bubble stays clean for screenshots, and the form has its own visual
   // weight as the conversion moment.
-  function addInlineLeadForm(){
+  function addInlineLeadForm(triggerSource){
+    triggerSource = triggerSource || "no_answer";
+    var lede = triggerSource === "error"
+      ? "While we sort that out, want to leave it with us?"
+      : "Let\u2019s talk it through.";
     var el = document.createElement("div");
     el.className = "msg msg-bot";
     el.innerHTML = botShell(
-      '<div class="capture-block">' +
-        '<p class="bjl-capture-lede">Let\u2019s talk it through.</p>' +
+      '<div class="capture-block" data-trigger="' + triggerSource + '">' +
+        '<p class="bjl-capture-lede">' + lede + '</p>' +
         '<div class="lead-form-row">' +
           '<input type="text" placeholder="First name" aria-label="First name">' +
           '<input type="text" placeholder="Last name"  aria-label="Last name">' +
@@ -306,11 +311,15 @@
   }
 
   function wireCaptureBlock(block){
+    // v6.13: inline form now serves both no-answer AND error trigger
+    // sources. The block carries its own trigger via data-trigger so
+    // submit/decline POST the right value to bjl_public_questions.
+    var triggerSource = block.getAttribute("data-trigger") || "no_answer";
     block.querySelector(".bjl-submit").addEventListener("click", function(){
-      submitLead(block, "no_answer", false);
+      submitLead(block, triggerSource, false);
     });
     block.querySelector(".bjl-decline").addEventListener("click", function(){
-      declineLead("no_answer").then(function(){
+      declineLead(triggerSource).then(function(){
         if (block.parentElement) block.parentElement.remove();   // remove the entire .msg-bot wrapper
       });
     });
@@ -373,6 +382,17 @@
         return rsp.text().catch(function(){ return ""; }).then(function(d){
           console.error("public chat failed", rsp.status, d);
           addError();
+          // v6.13: HTTP failure (502/504/timeout/5xx) silently dropped
+          // the lead-capture opportunity. Surface the inline form so
+          // the visitor isn't stuck at the "Something hiccuped" bubble
+          // with no path forward.
+          session.lastQuestion = text;
+          session.lastClosestSlugs = [];
+          session.lastCategoryGuess = null;
+          if (!session.leadAlreadySubmitted && !session.errorFormShown){
+            addInlineLeadForm("error");
+            session.errorFormShown = true;
+          }
         });
       }
       return rsp.json().then(function(data){
@@ -403,6 +423,15 @@
       removeLoading();
       console.error("public chat error", err);
       addError();
+      // v6.13: network failure (offline, DNS, fetch threw) — same
+      // visitor-facing fix as the HTTP failure branch above.
+      session.lastQuestion = text;
+      session.lastClosestSlugs = [];
+      session.lastCategoryGuess = null;
+      if (!session.leadAlreadySubmitted && !session.errorFormShown){
+        addInlineLeadForm("error");
+        session.errorFormShown = true;
+      }
     }).then(function(){
       session.pending = false;
       sendBtn.disabled = input.value.trim() === "";
