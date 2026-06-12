@@ -78,12 +78,21 @@
 (function () {
   "use strict";
 
-  var CHAT_API    = "/.netlify/functions/bjl-public-chat";
-  var CAPTURE_API = "/.netlify/functions/bjl-public-capture-lead";
-  var CREDIT      = "PETERMAYER \u00b7 Brand Joy Lab";
+  var CHAT_API        = "/.netlify/functions/bjl-public-chat";
+  var CHAT_STATUS_API = "/.netlify/functions/bjl-public-chat-status";
+  var CAPTURE_API     = "/.netlify/functions/bjl-public-capture-lead";
+  var CREDIT          = "PETERMAYER \u00b7 Brand Joy Lab";
 
   var LIGHTBOX_THRESHOLD_QUERIES = 7;
   var SUPPRESS_DEFAULT_QUERIES   = 8;
+
+  // v6.15 polling — async chat behind a background function.
+  // Visitor flow: POST CHAT_API → get {job_id} → poll CHAT_STATUS_API
+  // every POLL_INTERVAL_MS until the job is complete / errored, or
+  // we hit POLL_HARD_TIMEOUT_MS and treat as failure (showing the
+  // error bubble + the v6.13 capture form).
+  var POLL_INTERVAL_MS    = 1500;
+  var POLL_HARD_TIMEOUT_MS = 90000;   // 90s ceiling — well past Sonnet p99
 
   var log      = document.getElementById("chat-log");
   var samples  = document.getElementById("sample-questions");
@@ -399,7 +408,87 @@
     }
   });
 
-  // ---- ask flow → real backend --------------------------------------
+  // ---- ask flow (v6.15: enqueue + poll) -----------------------------
+  // The chat backend is now async. POST returns a {job_id} immediately;
+  // we poll the status endpoint until the job is complete / errored, or
+  // until we hit POLL_HARD_TIMEOUT_MS (treated as failure with the
+  // v6.13 capture form). Loading bubble stays visible the whole time.
+  function failHard(text){
+    removeLoading();
+    addError();
+    session.lastQuestion       = text;
+    session.lastClosestSlugs   = [];
+    session.lastCategoryGuess  = null;
+    if (!session.leadAlreadySubmitted && !session.errorFormShown){
+      addInlineLeadForm("error");
+      session.errorFormShown = true;
+    }
+    session.pending  = false;
+    sendBtn.disabled = input.value.trim() === "";
+    input.focus();
+  }
+
+  function handleAnswer(data, originalText){
+    removeLoading();
+    addBotAnswer(data.answer || "", data.provenance);
+    if (typeof data.updated_conversation_synthesis === "string"){
+      session.conversationSynthesis = data.updated_conversation_synthesis;
+    }
+    session.lastQuestion      = originalText;
+    session.lastClosestSlugs  = Array.isArray(data.closest_insight_slugs) ? data.closest_insight_slugs : [];
+    session.lastCategoryGuess = data.category_guess || null;
+    session.queryCount       += 1;
+
+    // Surface A: inline lead form when the backend flags no-answer
+    if (data.prompt_lead_capture && !session.leadAlreadySubmitted){
+      addInlineLeadForm();
+    } else if (!session.leadAlreadySubmitted
+            && !session.declinedLightbox
+            && session.queryCount >= LIGHTBOX_THRESHOLD_QUERIES
+            && session.queryCount >= session.suppressLightboxUntilQuery
+            && !lightbox.classList.contains("is-open")){
+      // Surface B: lightbox after the consecutive-query threshold
+      setTimeout(openLightbox, 400);
+    }
+
+    session.pending  = false;
+    sendBtn.disabled = input.value.trim() === "";
+    input.focus();
+  }
+
+  // Poll the status endpoint. Resolves to the final data payload, or
+  // rejects on terminal failure / hard timeout. The loading bubble
+  // stays visible across the polling window; the caller (ask) handles
+  // success vs failure rendering.
+  function pollStatus(jobId, startedAt){
+    return fetch(CHAT_STATUS_API + "?job_id=" + encodeURIComponent(jobId)).then(function(rsp){
+      if (!rsp.ok){
+        return rsp.text().catch(function(){ return ""; }).then(function(d){
+          throw new Error("status poll failed " + rsp.status + ": " + d.slice(0, 120));
+        });
+      }
+      return rsp.json();
+    }).then(function(data){
+      if (data && data.status === "complete"){
+        return data;
+      }
+      if (data && data.status === "error"){
+        throw new Error("server: " + (data.error || "unknown"));
+      }
+      // pending / running — check the elapsed clock, schedule the
+      // next poll, or give up.
+      var elapsed = Date.now() - startedAt;
+      if (elapsed > POLL_HARD_TIMEOUT_MS){
+        throw new Error("hard timeout after " + Math.round(elapsed/1000) + "s");
+      }
+      return new Promise(function(resolve, reject){
+        setTimeout(function(){
+          pollStatus(jobId, startedAt).then(resolve, reject);
+        }, POLL_INTERVAL_MS);
+      });
+    });
+  }
+
   function ask(text){
     text = (text || "").trim();
     if (!text || session.pending) return;
@@ -415,68 +504,36 @@
       body:    JSON.stringify({
         question:               text,
         conversation_synthesis: session.conversationSynthesis,
-        query_count:            session.queryCount,
       }),
     }).then(function(rsp){
-      removeLoading();
       if (!rsp.ok){
         return rsp.text().catch(function(){ return ""; }).then(function(d){
-          console.error("public chat failed", rsp.status, d);
-          addError();
-          // v6.13: HTTP failure (502/504/timeout/5xx) silently dropped
-          // the lead-capture opportunity. Surface the inline form so
-          // the visitor isn't stuck at the "Something hiccuped" bubble
-          // with no path forward.
-          session.lastQuestion = text;
-          session.lastClosestSlugs = [];
-          session.lastCategoryGuess = null;
-          if (!session.leadAlreadySubmitted && !session.errorFormShown){
-            addInlineLeadForm("error");
-            session.errorFormShown = true;
-          }
+          console.error("public chat enqueue failed", rsp.status, d);
+          failHard(text);
+          throw new Error("enqueue failed");
         });
       }
-      return rsp.json().then(function(data){
-        addBotAnswer(data.answer || "", data.provenance);
-        if (typeof data.updated_conversation_synthesis === "string"){
-          session.conversationSynthesis = data.updated_conversation_synthesis;
-        }
-        session.lastQuestion      = text;
-        session.lastClosestSlugs  = Array.isArray(data.closest_insight_slugs) ? data.closest_insight_slugs : [];
-        session.lastCategoryGuess = data.category_guess || null;
-        session.queryCount += 1;
-
-        // Surface A: inline lead form when the backend flags no-answer
-        if (data.prompt_lead_capture && !session.leadAlreadySubmitted){
-          addInlineLeadForm();
-          return;                              // don't ALSO pop the lightbox in the same beat
-        }
-        // Surface B: lightbox after the consecutive-query threshold
-        if (!session.leadAlreadySubmitted
-            && !session.declinedLightbox
-            && session.queryCount >= LIGHTBOX_THRESHOLD_QUERIES
-            && session.queryCount >= session.suppressLightboxUntilQuery
-            && !lightbox.classList.contains("is-open")){
-          setTimeout(openLightbox, 400);
-        }
-      });
-    }).catch(function(err){
-      removeLoading();
-      console.error("public chat error", err);
-      addError();
-      // v6.13: network failure (offline, DNS, fetch threw) — same
-      // visitor-facing fix as the HTTP failure branch above.
-      session.lastQuestion = text;
-      session.lastClosestSlugs = [];
-      session.lastCategoryGuess = null;
-      if (!session.leadAlreadySubmitted && !session.errorFormShown){
-        addInlineLeadForm("error");
-        session.errorFormShown = true;
+      return rsp.json();
+    }).then(function(body){
+      if (!body) return;                                   // failHard already ran
+      if (!body.job_id) {
+        console.error("public chat enqueue returned no job_id", body);
+        failHard(text);
+        return;
       }
-    }).then(function(){
-      session.pending = false;
-      sendBtn.disabled = input.value.trim() === "";
-      input.focus();
+      return pollStatus(body.job_id, Date.now())
+        .then(function(data){ handleAnswer(data, text); })
+        .catch(function(err){
+          console.error("public chat poll error", err);
+          failHard(text);
+        });
+    }).catch(function(err){
+      // Reached only when the enqueue POST itself threw (network
+      // failure on submit). pollStatus's own errors land in its inner
+      // .catch above.
+      if (!err || String(err.message) === "enqueue failed") return;   // already handled
+      console.error("public chat error", err);
+      failHard(text);
     });
   }
 
