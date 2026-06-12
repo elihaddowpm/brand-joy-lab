@@ -7,7 +7,11 @@
  *      (trigger_source = 'no_answer')
  *   2. Lightbox after 7–8 consecutive queries in a session
  *      (trigger_source = 'consecutive_queries')
- * Both surfaces carry a "No thanks, I'll keep searching." control.
+ *   3. Inline form when the chat endpoint itself fails (502/504/timeout
+ *      or network error), so the visitor isn't left with just the
+ *      "Something hiccuped" bubble and no path forward.
+ *      (trigger_source = 'error', added v6.13)
+ * All surfaces carry a "No thanks, I'll keep searching." control.
  *
  * Submit and decline BOTH write a row to bjl_public_questions so the
  * team can see what triggered each surface and what the visitor was
@@ -17,7 +21,7 @@
  * Body shape (POST):
  *   {
  *     status:                  'submitted' | 'declined',
- *     trigger_source:          'no_answer' | 'consecutive_queries',
+ *     trigger_source:          'no_answer' | 'consecutive_queries' | 'error',
  *     question:                <string>  (latest question that triggered the surface)
  *     conversation_synthesis:  <string>  (latest running synthesis; may be empty)
  *     query_count:             <integer> (queries asked so far in this session)
@@ -62,7 +66,7 @@ function corsHeaders(origin) {
 }
 
 const VALID_STATUS  = new Set(['submitted', 'declined']);
-const VALID_TRIGGER = new Set(['no_answer', 'consecutive_queries']);
+const VALID_TRIGGER = new Set(['no_answer', 'consecutive_queries', 'error']);
 const SUPPRESS_AFTER_DECLINE_FOR_QUERIES = 8;
 
 function clean(s, max) {
@@ -104,7 +108,7 @@ exports.handler = async (event) => {
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'status must be "submitted" or "declined"' }) };
   }
   if (!VALID_TRIGGER.has(triggerSource)) {
-    return { statusCode: 400, headers, body: JSON.stringify({ error: 'trigger_source must be "no_answer" or "consecutive_queries"' }) };
+    return { statusCode: 400, headers, body: JSON.stringify({ error: 'trigger_source must be "no_answer", "consecutive_queries", or "error"' }) };
   }
   if (!question) {
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'question required' }) };
