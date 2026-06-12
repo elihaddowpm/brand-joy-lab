@@ -279,6 +279,46 @@ html, body {
 .msg-bot p:last-child { margin-bottom: 0; }
 .msg-bot strong { color: var(--text-strong); font-weight: var(--fw-bold); }
 
+/* --- v6.14: provenance footer beneath each bot answer -------------- */
+/* Eli's ask: data provenance at the bottom of each answer — the
+   questions the tool referenced and the n for each. Rendered as a
+   muted footer so it doesn't compete with the answer prose. */
+.msg-provenance {
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--surface-rule, rgba(30, 38, 32, 0.08));
+}
+.msg-prov-label {
+  font-size: 0.6875rem;             /* ~11px */
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: var(--fw-bold);
+  color: var(--text-muted, #6b7670);
+  margin-bottom: var(--space-2);
+}
+.msg-prov-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.msg-prov-row {
+  font-size: 0.8125rem;             /* ~13px */
+  line-height: 1.4;
+  color: var(--text-muted, #6b7670);
+}
+.msg-prov-q {
+  font-style: italic;
+  color: var(--text-secondary, #4a5550);
+}
+.msg-prov-meta {
+  font-size: 0.75rem;               /* ~12px */
+  margin-top: 2px;
+  color: var(--text-muted, #6b7670);
+}
+
 /* --- Thinking / loading -------------------------------------------- */
 .msg-loading {
   align-self: flex-start;

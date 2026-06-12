@@ -135,7 +135,48 @@
     return '<div class="bjl-credit">' + CREDIT + '</div>' + bodyHTML;
   }
 
-  function addBotAnswer(text){
+  // v6.14: small provenance footer beneath each bot answer.
+  // Eli's ask: "data provenance at the bottom of each answer. The
+  // questions the tool referenced and the n for each."
+  function renderProvenance(entries){
+    if (!Array.isArray(entries) || entries.length === 0) return "";
+    var rows = entries.map(function(p){
+      var q = String(p.question || "").trim();
+      if (q.length > 200) q = q.slice(0, 197) + "\u2026";   // truncate long question text
+      var item   = String(p.item   || "").trim();
+      var metric = String(p.metric || "").trim();
+      var value  = (p.value === 0 || p.value)
+                     ? String(p.value)
+                     : "";
+      var n      = (typeof p.n === "number" && p.n > 0)
+                     ? p.n.toLocaleString()
+                     : "";
+
+      // Build the meta line: <item>, <metric> <value> (n=<n>)
+      var meta = [];
+      if (item)               meta.push(esc(item));
+      if (metric && value)    meta.push(esc(metric) + " " + esc(value));
+      else if (metric)        meta.push(esc(metric));
+      else if (value)         meta.push(esc(value));
+      if (n)                  meta.push("n=" + n);
+      var metaLine = meta.join(" \u00b7 ");
+
+      return (
+        '<li class="msg-prov-row">' +
+          (q     ? '<div class="msg-prov-q">\u201c' + esc(q) + '\u201d</div>' : "") +
+          (metaLine ? '<div class="msg-prov-meta">' + metaLine + '</div>'    : "") +
+        '</li>'
+      );
+    }).join("");
+    return (
+      '<div class="msg-provenance">' +
+        '<div class="msg-prov-label">What informed this</div>' +
+        '<ul class="msg-prov-list">' + rows + '</ul>' +
+      '</div>'
+    );
+  }
+
+  function addBotAnswer(text, provenance){
     var el = document.createElement("div");
     el.className = "msg msg-bot";
     // Wrap each paragraph break (two newlines) into a <p> so the
@@ -143,7 +184,7 @@
     var paragraphs = String(text || "").split(/\n\s*\n/).map(function(p){
       return "<p>" + esc(p.trim()) + "</p>";
     }).join("");
-    el.innerHTML = botShell(paragraphs || "<p>&nbsp;</p>");
+    el.innerHTML = botShell((paragraphs || "<p>&nbsp;</p>") + renderProvenance(provenance));
     log.appendChild(el); scrollLog();
   }
 
@@ -396,7 +437,7 @@
         });
       }
       return rsp.json().then(function(data){
-        addBotAnswer(data.answer || "");
+        addBotAnswer(data.answer || "", data.provenance);
         if (typeof data.updated_conversation_synthesis === "string"){
           session.conversationSynthesis = data.updated_conversation_synthesis;
         }
