@@ -21,8 +21,12 @@
  *     answer: string,
  *     scope_taken: 'in_corpus_scope'|'brand_specific'|'live_cut_requested'|'out_of_scope'|'no_match',
  *     rows_used: string[],
- *     captured: boolean,
- *     capture_id?: string,
+ *     provenance: [{ question, item, metric, value, n }],   // v6.14: footer audit trail
+ *     updated_conversation_synthesis: string,
+ *     prompt_lead_capture: boolean,
+ *     lead_capture_trigger_source: 'no_answer'|null,
+ *     closest_insight_slugs: string[],
+ *     category_guess: string|null,
  *   }
  *
  * Gates honored:
@@ -744,6 +748,26 @@ exports.handler = async (event) => {
                         || (retrieved.scores[0]   && retrieved.scores[0].category)
                         || null;
 
+    // v6.14: provenance is a small sanitized array surfaced to the
+    // visitor in a footer beneath each answer. We pass through what the
+    // LLM authored, capped at 8 entries and with field-level type guards
+    // so a malformed entry can't break the frontend render.
+    const provenance = Array.isArray(llmResult.provenance)
+      ? llmResult.provenance
+          .filter(p => p && typeof p === 'object')
+          .slice(0, 8)
+          .map(p => ({
+            question: typeof p.question === 'string' ? p.question.slice(0, 400) : '',
+            item:     typeof p.item     === 'string' ? p.item.slice(0, 200)     : '',
+            metric:   typeof p.metric   === 'string' ? p.metric.slice(0, 60)    : '',
+            value:    (typeof p.value === 'string' || typeof p.value === 'number')
+                        ? p.value
+                        : null,
+            n:        Number.isFinite(Number(p.n)) ? Math.round(Number(p.n)) : null,
+          }))
+          .filter(p => p.question || p.item)
+      : [];
+
     return {
       statusCode: 200,
       headers,
@@ -751,6 +775,7 @@ exports.handler = async (event) => {
         answer:                          llmResult.answer || '',
         scope_taken:                     llmResult.scope_taken || scope,
         rows_used:                       llmResult.rows_used || [],
+        provenance,
         updated_conversation_synthesis:  llmResult.updated_conversation_synthesis || '',
         prompt_lead_capture:             !!llmResult.prompt_lead_capture,
         lead_capture_trigger_source:     llmResult.lead_capture_trigger_source || null,
