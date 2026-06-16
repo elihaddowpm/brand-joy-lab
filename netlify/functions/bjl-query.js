@@ -25,6 +25,33 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const VALID_TYPES = ['brand_lookup', 'audience_dive', 'outreach_angle', 'data_pull', 'email_findings'];
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// v7: derive a 60-char title from the first user message in a session.
+function deriveTitle(prompt) {
+  const trimmed = String(prompt || '').replace(/\s+/g, ' ').trim();
+  if (trimmed.length <= 60) return trimmed;
+  return trimmed.slice(0, 57) + '\u2026';
+}
+
+// Compute the next seq for a session. Service-role bypasses RLS, so the
+// caller is responsible for confirming ownership before this is called.
+// Returns 1 when the session has no messages yet.
+async function nextSeq(sessionId) {
+  const { data, error } = await supabase
+    .from('bjl_session_messages')
+    .select('seq')
+    .eq('session_id', sessionId)
+    .order('seq', { ascending: false })
+    .limit(1);
+  if (error) {
+    console.error('[bjl-query] nextSeq error:', error);
+    return null;
+  }
+  if (!data || data.length === 0) return 1;
+  return Number(data[0].seq || 0) + 1;
+}
+
 function normalizeRequest(body) {
   // Triage uses prior_conversation_context to recognize follow-ups. Accept
   // it from either request shape, as either prior_conversation_context (snake)
@@ -33,13 +60,20 @@ function normalizeRequest(body) {
     || body.priorConversationContext
     || null;
 
+  // v7: optional session id (uuid). Validated again on the handler
+  // before any write; we just normalize the shape here.
+  const sessionId = (typeof body.session_id === 'string' && UUID_RE.test(body.session_id))
+    ? body.session_id
+    : null;
+
   // V1 shape passthrough
   if (typeof body.prompt === 'string' && body.prompt) {
     return {
       prompt: body.prompt,
       query_type: VALID_TYPES.includes(body.query_type) ? body.query_type : 'data_pull',
       extra_context: null,
-      prior_conversation_context: priorContext
+      prior_conversation_context: priorContext,
+      session_id: sessionId
     };
   }
   // V2 shape translation. The Intelligence-mode client sends `intent`, the
@@ -65,7 +99,8 @@ function normalizeRequest(body) {
       prompt: body.query,
       query_type: queryType,
       extra_context: Object.keys(extra).length ? extra : null,
-      prior_conversation_context: priorContext
+      prior_conversation_context: priorContext,
+      session_id: sessionId
     };
   }
   return null;
@@ -128,13 +163,127 @@ exports.handler = async (event) => {
     }
   }
 
+  // ============================================================
+  // v7 — Session persistence (writes happen only when authenticated).
+  //
+  // Three cases:
+  //   (a) Caller supplied session_id AND owns it → use it.
+  //   (b) Caller supplied session_id they don't own → 404.
+  //       Foreign / inactive sessions are not silently rewritten.
+  //   (c) Caller supplied nothing OR a malformed id → create a new
+  //       session, derive title from the first prompt.
+  //
+  // After the session is resolved, write the USER message immediately.
+  // The background worker writes the ASSISTANT message after the
+  // synthesizer completes (see bjl-query-background.js).
+  //
+  // Bypass mode (auth.user === null) skips session writes entirely.
+  // Sessions are RLS-scoped to email; without one there's nothing to
+  // attach the row to.
+  // ============================================================
+  let activeSessionId = null;
+  let createdSessionThisTurn = false;
+
+  if (auth.user) {
+    const email = String(auth.user.email).toLowerCase();
+
+    if (norm.session_id) {
+      // (a) or (b): verify ownership
+      const { data: existing, error: existingErr } = await supabase
+        .from('bjl_sessions')
+        .select('id, user_email, is_active')
+        .eq('id', norm.session_id)
+        .single();
+      if (existingErr || !existing) {
+        return {
+          statusCode: 404,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ error: 'session not found' })
+        };
+      }
+      if (existing.user_email !== email || existing.is_active === false) {
+        // Don't disclose existence
+        return {
+          statusCode: 404,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ error: 'session not found' })
+        };
+      }
+      activeSessionId = existing.id;
+    } else {
+      // (c) Create new session
+      const { data: newRow, error: newErr } = await supabase
+        .from('bjl_sessions')
+        .insert({
+          user_email: email,
+          title:      deriveTitle(norm.prompt),
+          // started_at, last_active_at, is_active take their defaults
+        })
+        .select('id')
+        .single();
+      if (newErr || !newRow) {
+        console.error('[bjl-query] session create error:', newErr);
+        return {
+          statusCode: 500,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ error: 'session create failed', detail: newErr && newErr.message })
+        };
+      }
+      activeSessionId = newRow.id;
+      createdSessionThisTurn = true;
+    }
+
+    // Compute next seq + write the user message.
+    const seq = await nextSeq(activeSessionId);
+    if (seq != null) {
+      const userMsgContext = {};
+      if (norm.extra_context) {
+        // Persist a small subset of useful context per turn (don't
+        // duplicate the prompt itself; that's `content`).
+        if (norm.extra_context.intent)            userMsgContext.intent            = norm.extra_context.intent;
+        if (norm.extra_context.intentHint)        userMsgContext.intentHint        = norm.extra_context.intentHint;
+        if (norm.extra_context.strategistContext) userMsgContext.strategistContext = norm.extra_context.strategistContext;
+        if (norm.extra_context.waldoContext)      userMsgContext.waldoContext      = norm.extra_context.waldoContext;
+      }
+      if (norm.prior_conversation_context) {
+        userMsgContext.prior_conversation_context = norm.prior_conversation_context;
+      }
+      const { error: msgErr } = await supabase
+        .from('bjl_session_messages')
+        .insert({
+          session_id: activeSessionId,
+          seq:        seq,
+          role:       'user',
+          content:    norm.prompt,
+          context:    Object.keys(userMsgContext).length ? userMsgContext : null,
+        });
+      if (msgErr) {
+        console.error('[bjl-query] user-message insert error:', msgErr);
+      }
+    }
+
+    // Bump last_active_at so the recent-sessions list ordering is fresh
+    // even before the assistant reply lands.
+    await supabase
+      .from('bjl_sessions')
+      .update({ last_active_at: new Date().toISOString() })
+      .eq('id', activeSessionId);
+  }
+
+  // Thread the session id through to the background worker via
+  // extra_context._session_id (underscore prefix marks it as worker-
+  // internal; not a strategist-facing field).
+  const extraForJob = activeSessionId
+    ? Object.assign({}, norm.extra_context || {}, { _session_id: activeSessionId })
+    : norm.extra_context;
+
   const { data: jobRow, error: insertErr } = await supabase
     .from('bjl_query_jobs')
     .insert({
       status: 'pending',
       query_type: norm.query_type,
       prompt: norm.prompt,
-      extra_context: norm.extra_context,
+      extra_context: extraForJob,
       prior_conversation_context: norm.prior_conversation_context,
       auth_user_id: auth.user ? auth.user.id : null,
       auth_user_email: auth.user ? auth.user.email : null
@@ -236,6 +385,13 @@ exports.handler = async (event) => {
   return {
     statusCode: 202,
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ job_id: jobId, status: 'pending' })
+    body: JSON.stringify({
+      job_id: jobId,
+      status: 'pending',
+      // v7: surface the session id (esp. when we created one this turn)
+      // so the client can stash it in the URL + localStorage.
+      session_id: activeSessionId,
+      session_created: createdSessionThisTurn
+    })
   };
 };
