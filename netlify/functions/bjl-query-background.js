@@ -63,6 +63,79 @@ const DEPTH_TO_MAX_TURNS = {
 // deploy if the .md sources have changed.
 const PROMPTS = require('./_prompts_bundle.json');
 
+// ============================================================
+// v7 — Session persistence helpers.
+//
+// bjl-query.js wrote the USER message + created the session (if
+// needed) at enqueue time. After the background pipeline produces
+// a response (clarification, early-exit, or full synthesis), we
+// write the ASSISTANT message and bump the session's last_active_at
+// + summary so the Recent dropdown stays ordered correctly.
+//
+// session_id arrives via job.extra_context._session_id (threaded by
+// bjl-query.js). Null in bypass / unauthenticated mode.
+// ============================================================
+async function writeAssistantTurn(sessionId, content, contextObj) {
+  if (!sessionId) return;
+  if (!content || typeof content !== 'string') return;
+
+  try {
+    // Compute next seq. Reusing the same scheme as the sync enqueue:
+    // max(seq)+1, defaults to a higher number than the user message
+    // we just wrote.
+    const { data: maxRows, error: seqErr } = await supabase
+      .from('bjl_session_messages')
+      .select('seq')
+      .eq('session_id', sessionId)
+      .order('seq', { ascending: false })
+      .limit(1);
+    if (seqErr) {
+      console.error('[bjl-query-background] seq lookup failed:', seqErr);
+      return;
+    }
+    const nextSeq = (maxRows && maxRows.length > 0) ? Number(maxRows[0].seq || 0) + 1 : 1;
+
+    const { error: insErr } = await supabase
+      .from('bjl_session_messages')
+      .insert({
+        session_id: sessionId,
+        seq:        nextSeq,
+        role:       'assistant',
+        content,
+        context:    (contextObj && Object.keys(contextObj).length) ? contextObj : null,
+      });
+    if (insErr) {
+      console.error('[bjl-query-background] assistant-message insert failed:', insErr);
+      return;
+    }
+
+    // Bump last_active_at. Summary updates happen on the sync path
+    // (which has the latest user prompt at hand); we don't touch
+    // summary here.
+    const { error: updErr } = await supabase
+      .from('bjl_sessions')
+      .update({ last_active_at: new Date().toISOString() })
+      .eq('id', sessionId);
+    if (updErr) {
+      console.error('[bjl-query-background] session bump failed:', updErr);
+    }
+  } catch (e) {
+    // Session writes are best-effort: a failed write does NOT roll
+    // back the strategist's job. The conversation still renders from
+    // the polled job result; only the session-persistence side
+    // diverges, and the next turn will continue regardless.
+    console.error('[bjl-query-background] writeAssistantTurn threw:', e);
+  }
+}
+
+function getSessionIdFromJob(job) {
+  if (!job || !job.extra_context || typeof job.extra_context !== 'object') return null;
+  const raw = job.extra_context._session_id;
+  return (typeof raw === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw))
+    ? raw
+    : null;
+}
+
 console.log('[bjl-query-background] prompts bundle loaded:');
 console.log('  triage_prompt.md       ', PROMPTS.triage.length, 'chars');
 console.log('  investigator_v3.md     ', PROMPTS.investigator.length, 'chars');
@@ -665,6 +738,11 @@ exports.handler = async (event) => {
       })
       .eq('job_id', jobId);
 
+    // v7 — session id threaded by the sync enqueue. Used by all three
+    // completion paths below to log the assistant's reply against the
+    // session message log.
+    const sessionId = getSessionIdFromJob(job);
+
     // Bypass: clarification needed
     if (triage.needs_clarification === true) {
       console.log('[bjl-query-background] taking clarification bypass for job', jobId);
@@ -682,6 +760,9 @@ exports.handler = async (event) => {
       } else {
         console.log('[bjl-query-background] clarification update OK for job', jobId);
       }
+      // Session log: clarification IS the assistant's turn from the
+      // strategist's POV — render it as the next message.
+      await writeAssistantTurn(sessionId, triage.clarifying_question || '', { kind: 'clarification' });
       return { statusCode: 200, body: JSON.stringify({ ok: true, status: 'clarification_needed', job_id: jobId }) };
     }
 
@@ -698,6 +779,10 @@ exports.handler = async (event) => {
           completed_at: new Date().toISOString()
         })
         .eq('job_id', jobId);
+      await writeAssistantTurn(sessionId, triage.early_exit_response || '', {
+        kind: 'early_exit',
+        followup_chips: triage.followup_seeds || [],
+      });
       return { statusCode: 200, body: JSON.stringify({ ok: true, status: 'complete', early_exit: true, job_id: jobId }) };
     }
 
@@ -725,6 +810,17 @@ exports.handler = async (event) => {
         completed_at: new Date().toISOString()
       })
       .eq('job_id', jobId);
+
+    // v7 session log — the strategist-facing assistant message + a
+    // compact context payload (followup chips, query count). Full
+    // scratch lives on the job row; we don't duplicate it into the
+    // session message context (avoids ballooning the JSONB column).
+    await writeAssistantTurn(sessionId, response_text, {
+      kind: 'synthesized',
+      followup_chips: followup_chips || [],
+      query_count:    queryCount,
+      hit_max_turns:  !!hit_max_turns,
+    });
 
     return { statusCode: 200, body: JSON.stringify({ ok: true, status: 'complete', job_id: jobId }) };
 

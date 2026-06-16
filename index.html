@@ -1098,6 +1098,27 @@ const _bjlScratchToEvidenceRows = (scratch) => {
 // Map a polled job's stage to a UI phase. The new backend exposes a `stage`
 // field; if absent (legacy job rows from before the triage rollout), fall
 // back to inferring from status.
+
+// v7: relative time label for the Recent sessions menu.
+const _bjlRelativeTime = (iso) => {
+  if (!iso) return "";
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return "";
+  const diffMs = Date.now() - then;
+  const mins = Math.round(diffMs / 60000);
+  if (mins < 1)        return "just now";
+  if (mins < 60)       return mins + "m ago";
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24)        return hrs + "h ago";
+  const days = Math.round(hrs / 24);
+  if (days < 7)        return days + "d ago";
+  const weeks = Math.round(days / 7);
+  if (weeks < 5)       return weeks + "w ago";
+  const months = Math.round(days / 30);
+  if (months < 12)     return months + "mo ago";
+  return Math.round(months / 12) + "y ago";
+};
+
 const _stageToPhase = (job) => {
   const stage = job.stage || (job.status === "running" ? (job.triage_brief ? "investigation" : "triage") : job.status);
   switch (stage) {
@@ -1219,6 +1240,10 @@ const investigateQuery = async ({
   question, intent = null, debug = false,
   strategistContext = null,
   priorConversationContext = null,
+  // v7: session id (uuid) — null on first turn (server creates one and
+  // returns it in the enqueue response). Threaded into onDone via the
+  // info payload so the caller can stash it in URL + localStorage.
+  sessionId = null,
   onStatus = () => {}, onNote = () => {}, onChunk = () => {}, onDone = () => {},
   onError = () => {}, onDebug = () => {}, onEvidence = () => {},
   endpoint = "/api/bjl-query", signal,
@@ -1240,6 +1265,7 @@ const investigateQuery = async ({
         query: question, intent, mode: "investigate", debug,
         strategistContext: strategistContextStr,
         prior_conversation_context: priorConversationContext,
+        session_id: sessionId,
       }),
       signal,
     }));
@@ -1257,7 +1283,13 @@ const investigateQuery = async ({
   try { enqueue = await enqueueRes.json(); } catch { onError({ message: "Invalid enqueue response", phase: "fetch" }); return; }
   if (!enqueue || !enqueue.job_id) { onError({ message: "Enqueue returned no job_id", phase: "fetch" }); return; }
 
-  if (debug) onDebug({ job_id: enqueue.job_id, phase: "enqueued" });
+  // v7: capture the session id the server resolved (existing) or created
+  // this turn. Threaded into every onDone payload below so IntelligenceMode
+  // can stash it in URL + localStorage.
+  const resolvedSessionId      = enqueue.session_id || null;
+  const sessionCreatedThisTurn = !!enqueue.session_created;
+
+  if (debug) onDebug({ job_id: enqueue.job_id, phase: "enqueued", session_id: resolvedSessionId });
   onStatus(_stageToPhase({ status: "pending" }));
 
   let job;
@@ -1289,6 +1321,8 @@ const investigateQuery = async ({
         finding: "",
         query_count: 0,
         job_id: enqueue.job_id,
+        session_id: resolvedSessionId,
+        session_created: sessionCreatedThisTurn,
         completed_at: job.completed_at,
       });
     } catch (e) { console.error("[investigateQuery] onDone threw:", e); }
@@ -1320,6 +1354,8 @@ const investigateQuery = async ({
       query_count: qc,
       queryBudgetUsed: qc,
       job_id: enqueue.job_id,
+      session_id: resolvedSessionId,
+      session_created: sessionCreatedThisTurn,
       completed_at: job.completed_at,
       triage_brief: job.triage_brief || null,
       followup_chips: Array.isArray(job.followup_chips) ? job.followup_chips : [],
@@ -1522,7 +1558,7 @@ const generateOneEmail = async ({
       headers: { "Content-Type": "application/json" },
       signal: ctrl.signal,
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514", max_tokens: 800,
+        model: "claude-sonnet-4-6", max_tokens: 800,
         system: EMAIL_SYSTEM,
         messages: [{ role: "user", content: userMsg }],
       }),
@@ -1553,7 +1589,7 @@ const generateOneEmail = async ({
           headers: { "Content-Type": "application/json" },
           signal: subjCtrl.signal,
           body: JSON.stringify({
-            model: "claude-sonnet-4-20250514", max_tokens: 60,
+            model: "claude-sonnet-4-6", max_tokens: 60,
             system: "You write email subject lines.",
             messages: [{ role: "user", content:
               "Write one subject line only, under 10 words, for this email. " +
@@ -2114,6 +2150,86 @@ const PrintHeader = ({ turns, printedAt }) => {
   );
 };
 
+// v7 session-persistence helpers.
+// Conversations live in bjl_sessions / bjl_session_messages on the
+// server; localStorage + the URL mirror the active session id so a
+// forced refresh or restored tab repaints instantly, then reconciles
+// against the server as the source of truth.
+const BJL_INTELLIGENCE_SESSION_LSKEY = "bjl.session.intelligence";
+const UUID_RE_FRONTEND = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function readSessionFromUrl() {
+  try {
+    const p = new URL(window.location.href).searchParams.get("session");
+    return (p && UUID_RE_FRONTEND.test(p)) ? p : null;
+  } catch (_) { return null; }
+}
+function writeSessionToUrl(sessionId) {
+  try {
+    const url = new URL(window.location.href);
+    if (sessionId) url.searchParams.set("session", sessionId);
+    else           url.searchParams.delete("session");
+    window.history.replaceState({}, "", url.toString());
+  } catch (_) { /* non-fatal */ }
+}
+function readSessionLocal() {
+  try {
+    const raw = window.localStorage.getItem(BJL_INTELLIGENCE_SESSION_LSKEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || !UUID_RE_FRONTEND.test(parsed.session_id || "")) return null;
+    return parsed;
+  } catch (_) { return null; }
+}
+function writeSessionLocal(sessionId, turns) {
+  try {
+    if (!sessionId) {
+      window.localStorage.removeItem(BJL_INTELLIGENCE_SESSION_LSKEY);
+      return;
+    }
+    const payload = {
+      session_id: sessionId,
+      last_seen_seq: 0,    // server reconciliation can update this
+      turns: Array.isArray(turns) ? turns : [],
+      saved_at: new Date().toISOString(),
+    };
+    window.localStorage.setItem(BJL_INTELLIGENCE_SESSION_LSKEY, JSON.stringify(payload));
+  } catch (_) { /* localStorage may be unavailable in some embed contexts */ }
+}
+
+// Convert server message rows (role/content/context/seq) into the
+// frontend's `turns` shape (one turn = one user message + the assistant
+// reply, plus any meta from context). Pairs adjacent user→assistant
+// rows; orphan trailing user message becomes a turn with empty response.
+function serverMessagesToTurns(messages) {
+  if (!Array.isArray(messages)) return [];
+  const out = [];
+  let pending = null;
+  for (const m of messages) {
+    if (!m || !m.role) continue;
+    if (m.role === "user") {
+      if (pending) out.push(pending);
+      pending = {
+        prompt: m.content || "",
+        response: "",
+        triage_brief: null,
+        followup_chips: [],
+        isClarification: false,
+      };
+    } else if (m.role === "assistant" && pending) {
+      const ctx = m.context || {};
+      pending.response       = m.content || "";
+      pending.triage_brief   = ctx.triage_brief || null;
+      pending.followup_chips = Array.isArray(ctx.followup_chips) ? ctx.followup_chips : [];
+      pending.isClarification = ctx.kind === "clarification";
+      out.push(pending);
+      pending = null;
+    }
+  }
+  if (pending) out.push(pending);
+  return out;
+}
+
 const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistContext }) => {
   const [intent, setIntent] = useState(null); // null means no chip selected
   const [prompt, setPrompt] = useState("");
@@ -2127,6 +2243,122 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
 
   // Conversation history. Preserved across follow-ups.
   const [turns, setTurns] = useState([]);
+
+  // v7: active session id, plus the recent-sessions dropdown state.
+  const [sessionId, setSessionId] = useState(null);
+  const [recentSessions, setRecentSessions] = useState([]);
+  const [recentMenuOpen, setRecentMenuOpen] = useState(false);
+
+  // v7 mount-time restore. Priority: URL > localStorage > server most-
+  // recent > fresh. The localStorage path repaints instantly so the
+  // strategist doesn't see a flash of empty state; the server fetch
+  // happens in parallel and overwrites once it lands (server wins).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      // 1. Instant repaint from localStorage if it matches the URL,
+      //    OR if the URL has no session (use whatever's local).
+      const urlSession = readSessionFromUrl();
+      const localCache = readSessionLocal();
+      const targetSession = urlSession
+        || (localCache && localCache.session_id)
+        || null;
+
+      if (localCache && (!urlSession || localCache.session_id === urlSession)) {
+        if (Array.isArray(localCache.turns) && localCache.turns.length > 0) {
+          setTurns(localCache.turns);
+          setSessionId(localCache.session_id);
+        }
+      }
+
+      // 2. Always try to reconcile against the server. If targetSession
+      //    is set, fetch that one. Else, fetch the user's most-recent
+      //    active session and adopt it.
+      try {
+        if (targetSession) {
+          const r = await fetch("/.netlify/functions/bjl-sessions-load?session_id=" + encodeURIComponent(targetSession),
+                                authedFetchInit());
+          if (cancelled) return;
+          if (r.ok) {
+            const j = await r.json();
+            const t = serverMessagesToTurns(j.messages);
+            setSessionId(j.session.id);
+            setTurns(t);
+            writeSessionToUrl(j.session.id);
+            writeSessionLocal(j.session.id, t);
+          } else if (r.status === 404) {
+            // Session in URL/localStorage doesn't belong to this user
+            // (or was deleted). Fall back to most-recent-active.
+            await tryAdoptMostRecent();
+          }
+        } else {
+          await tryAdoptMostRecent();
+        }
+      } catch (_) { /* non-fatal — UI just stays on fresh / cached */ }
+
+      async function tryAdoptMostRecent() {
+        try {
+          const r = await fetch("/.netlify/functions/bjl-sessions-list?limit=1", authedFetchInit());
+          if (!r.ok || cancelled) return;
+          const j = await r.json();
+          const recent = (j && Array.isArray(j.sessions) && j.sessions[0]) || null;
+          if (!recent) return;
+          const load = await fetch("/.netlify/functions/bjl-sessions-load?session_id=" + encodeURIComponent(recent.id),
+                                   authedFetchInit());
+          if (!load.ok || cancelled) return;
+          const lj = await load.json();
+          const t = serverMessagesToTurns(lj.messages);
+          setSessionId(lj.session.id);
+          setTurns(t);
+          writeSessionToUrl(lj.session.id);
+          writeSessionLocal(lj.session.id, t);
+        } catch (_) { /* non-fatal */ }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // v7: refresh the Recent dropdown whenever it opens.
+  useEffect(() => {
+    if (!recentMenuOpen) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch("/.netlify/functions/bjl-sessions-list?limit=15", authedFetchInit());
+        if (!r.ok || cancelled) return;
+        const j = await r.json();
+        setRecentSessions(Array.isArray(j.sessions) ? j.sessions : []);
+      } catch (_) { /* non-fatal */ }
+    })();
+    return () => { cancelled = true; };
+  }, [recentMenuOpen]);
+
+  // v7: mirror the live turns + sessionId to localStorage on every
+  // change so a refresh repaints instantly.
+  useEffect(() => {
+    writeSessionLocal(sessionId, turns);
+  }, [sessionId, turns]);
+
+  const loadSession = useCallback(async (id) => {
+    if (!id || !UUID_RE_FRONTEND.test(id)) return;
+    setRecentMenuOpen(false);
+    try {
+      const r = await fetch("/.netlify/functions/bjl-sessions-load?session_id=" + encodeURIComponent(id),
+                            authedFetchInit());
+      if (!r.ok) return;
+      const j = await r.json();
+      const t = serverMessagesToTurns(j.messages);
+      setSessionId(j.session.id);
+      setTurns(t);
+      setCurrentPrompt("");
+      setCurrentStream("");
+      setError(null);
+      setEvidenceRows([]);
+      setNotes([]);
+      writeSessionToUrl(j.session.id);
+      writeSessionLocal(j.session.id, t);
+    } catch (_) { /* non-fatal */ }
+  }, [setEvidenceRows]);
   const [currentPrompt, setCurrentPrompt] = useState("");
   const [currentStream, setCurrentStream] = useState("");
   const [currentIsFollowup, setCurrentIsFollowup] = useState(false);
@@ -2206,6 +2438,9 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
       intent: intent || null,
       strategistContext: strategistContext || null,
       priorConversationContext: priorContext,
+      // v7: pass the active session id (null on a fresh conversation;
+      // the server creates a session and returns its id in onDone.session_id).
+      sessionId: sessionId,
       onStatus: ({ phase }) => setPhase(phase),
       onNote: ({ note }) => setNotes(prev => [...prev, note]),
       onEvidence: ({ rows }) => setEvidenceRows(rows || []),
@@ -2213,6 +2448,17 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
       onDone: (info) => {
         setRunning(false);
         setPhase(null);
+        // v7: server resolved or created a session. Mirror it to URL +
+        // localStorage so a refresh repaints the same conversation. We
+        // do this once per turn rather than every keystroke.
+        if (info && info.session_id) {
+          setSessionId(prev => {
+            if (prev !== info.session_id) {
+              writeSessionToUrl(info.session_id);
+            }
+            return info.session_id;
+          });
+        }
         // Clarification bypass: render the clarifying question as the
         // assistant's response for this turn. No follow-up chips on this
         // state — the user types a clarifying answer in the input box.
@@ -2250,7 +2496,7 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
         setCurrentStream("");
       },
     });
-  }, [intent, strategistContext, running, turns, setEvidenceRows]);
+  }, [intent, strategistContext, running, turns, sessionId, setEvidenceRows]);
 
   const run = useCallback(() => runQuery(prompt, false), [runQuery, prompt]);
   const runFollowup = useCallback(() => {
@@ -2266,6 +2512,12 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
     setCurrentStream("");
     setError(null);
     setEvidenceRows([]);
+    // v7: starting a new conversation drops the session id everywhere.
+    // The next runQuery will create a fresh session server-side and the
+    // URL/localStorage get re-mirrored from the enqueue response.
+    setSessionId(null);
+    writeSessionToUrl(null);
+    writeSessionLocal(null, []);
   }, [setEvidenceRows]);
 
   // v6.1 — Auto-extract publishable candidates from each completed turn.
@@ -2425,7 +2677,36 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
                   : running ? "running…" : "—"}</span>
               </div>
               <div className="doc-actions">
-                <button className="icon-btn" title="Clear conversation" onClick={clearConversation} disabled={running || turns.length === 0}><Icon name="regen" /></button>
+                {/* v7 — Recent sessions pill + dropdown. Click opens
+                    a small menu listing the signed-in user's last 15
+                    active sessions; click a row to load it. */}
+                <div className="bjl-recent-wrap" style={{position: "relative"}}>
+                  <button
+                    type="button"
+                    className="btn ghost"
+                    title="Recent conversations"
+                    onClick={() => setRecentMenuOpen(v => !v)}
+                    disabled={running}
+                  >Recent</button>
+                  {recentMenuOpen && (
+                    <div className="bjl-recent-menu" onMouseLeave={() => setRecentMenuOpen(false)}>
+                      {recentSessions.length === 0
+                        ? <div className="bjl-recent-empty">No recent conversations yet.</div>
+                        : recentSessions.map(s => (
+                            <button
+                              key={s.id}
+                              type="button"
+                              className={"bjl-recent-row" + (s.id === sessionId ? " is-active" : "")}
+                              onClick={() => loadSession(s.id)}
+                            >
+                              <span className="bjl-recent-title">{s.title || "(untitled conversation)"}</span>
+                              <span className="bjl-recent-time">{_bjlRelativeTime(s.last_active_at)}</span>
+                            </button>
+                          ))}
+                    </div>
+                  )}
+                </div>
+                <button className="icon-btn" title="New conversation" onClick={clearConversation} disabled={running || turns.length === 0}><Icon name="regen" /></button>
                 <button className="icon-btn" title="Copy full conversation" onClick={copyConversation} disabled={turns.length === 0}><Icon name="copy" /></button>
                 <button className="btn ghost" onClick={exportPdf} disabled={turns.length === 0}><Icon name="download" size={12} /> Export PDF</button>
               </div>
@@ -5089,7 +5370,7 @@ const App = ({ authedUser = null, onSignOut = null } = {}) => {
     fetch("/api/claude", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1, messages: [{ role: "user", content: "." }] }),
+      body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 1, messages: [{ role: "user", content: "." }] }),
     }).catch(() => {});
   }, []);
 

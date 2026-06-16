@@ -689,7 +689,57 @@ textarea { font-family: var(--font-text); }
   letter-spacing: 0.08em;
 }
 .doc-meta b { color: var(--iron); font-weight: 500; }
-.doc-head .doc-actions { display: flex; gap: 4px; }
+.doc-head .doc-actions { display: flex; gap: 4px; align-items: center; }
+
+/* v7 — Recent sessions dropdown next to the conversation action group. */
+.bjl-recent-wrap { display: inline-flex; }
+.bjl-recent-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 280px;
+  max-width: 360px;
+  max-height: 380px;
+  overflow-y: auto;
+  background: #fff;
+  border: 1px solid var(--iron, #e2e2dc);
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(20, 20, 20, .12);
+  z-index: 50;
+  padding: 4px;
+}
+.bjl-recent-empty {
+  padding: 12px 14px;
+  font-size: 13px;
+  color: var(--iron-dark, #8a8a82);
+  font-style: italic;
+}
+.bjl-recent-row {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  gap: 2px;
+}
+.bjl-recent-row:hover { background: var(--paper-2, #f4f3ed); }
+.bjl-recent-row.is-active { background: var(--paper-2, #f4f3ed); }
+.bjl-recent-row.is-active .bjl-recent-title { font-weight: 500; }
+.bjl-recent-title {
+  font-size: 13px;
+  color: var(--ink, #1a1a17);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bjl-recent-time {
+  font-size: 11px;
+  color: var(--iron-dark, #8a8a82);
+}
 
 .doc h1.doc-title {
   font-family: var(--font-display);
