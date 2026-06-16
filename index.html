@@ -1522,7 +1522,7 @@ const generateOneEmail = async ({
       headers: { "Content-Type": "application/json" },
       signal: ctrl.signal,
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514", max_tokens: 800,
+        model: "claude-sonnet-4-6", max_tokens: 800,
         system: EMAIL_SYSTEM,
         messages: [{ role: "user", content: userMsg }],
       }),
@@ -1553,7 +1553,7 @@ const generateOneEmail = async ({
           headers: { "Content-Type": "application/json" },
           signal: subjCtrl.signal,
           body: JSON.stringify({
-            model: "claude-sonnet-4-20250514", max_tokens: 60,
+            model: "claude-sonnet-4-6", max_tokens: 60,
             system: "You write email subject lines.",
             messages: [{ role: "user", content:
               "Write one subject line only, under 10 words, for this email. " +
@@ -5089,7 +5089,7 @@ const App = ({ authedUser = null, onSignOut = null } = {}) => {
     fetch("/api/claude", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1, messages: [{ role: "user", content: "." }] }),
+      body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 1, messages: [{ role: "user", content: "." }] }),
     }).catch(() => {});
   }, []);
 
