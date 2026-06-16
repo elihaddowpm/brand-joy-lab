@@ -47,7 +47,7 @@ const anthropic = ANTHROPIC_API_KEY ? new Anthropic({ apiKey: ANTHROPIC_API_KEY 
 const HAIKU_MODEL = 'claude-haiku-4-5-20251001';
 // bjl_finding synthesis runs on Sonnet, not Haiku — Haiku with 80 tokens
 // only summarizes; Sonnet with room to reason can surface a tension.
-const SONNET_MODEL = 'claude-sonnet-4-20250514';
+const SONNET_MODEL = 'claude-sonnet-4-6';
 
 // Length of the title prefix used for in-brief substring matching. Long
 // enough to be distinctive across the article catalog, short enough to
