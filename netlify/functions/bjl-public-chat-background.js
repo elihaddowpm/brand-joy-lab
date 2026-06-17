@@ -33,14 +33,52 @@
 const { createClient } = require('@supabase/supabase-js');
 const Anthropic = require('@anthropic-ai/sdk').default;
 
-const SUPABASE_URL    = process.env.SUPABASE_URL;
-const SUPABASE_KEY    = process.env.SUPABASE_SERVICE_KEY;
+const SUPABASE_URL      = process.env.SUPABASE_URL;
+const SUPABASE_KEY      = process.env.SUPABASE_SERVICE_KEY;
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-const OPENAI_API_KEY  = process.env.OPENAI_API_KEY;
+const OPENAI_API_KEY    = process.env.OPENAI_API_KEY;
 
+// v7.2 — two clients, two roles, two responsibilities.
+//
+// `supabase` runs as service-role. Reserved for DELIBERATE WRITES the
+// public chat must do: bjl_query_jobs (job state), bjl_public_questions
+// (lead capture, written elsewhere), bjl_sessions / bjl_session_messages
+// (written elsewhere). Anon has no privileges on any of these tables;
+// service-role is the only path.
+//
+// `supabaseAnon` runs as anon. Reserved for CORPUS READS through the
+// seven _safe views (bjl_public_scores_safe, bjl_public_ordinal_safe,
+// bjl_public_agreement_safe, bjl_public_distributions_safe,
+// bjl_laws_safe, bjl_public_verbatim_truths_safe,
+// bjl_public_insights_safe). Anon has SELECT on those views and zero
+// privileges on the base tables. Calls go through execute_read_sql_safe
+// (a SECURITY INVOKER twin of the workbench's execute_read_sql) so the
+// caller's grants apply — a SQL string targeting a base table gets
+// "permission denied" before any row is read.
+//
+// Brand pre-check reads bjl_gated_entities via the anon client too;
+// anon has SELECT there (the list is the same one the publish trigger
+// uses, intentionally shared between the read and write paths).
+//
+// Fallback: if SUPABASE_ANON_KEY is not set in env, the anon client
+// is left null and the worker falls back to service-role reads with
+// a logged warning. Lets a missing-env config self-heal once the key
+// is set rather than 500-ing every request in the meantime.
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+const supabaseAnon = SUPABASE_ANON_KEY
+  ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+  : null;
+if (!supabaseAnon) {
+  console.warn('[bjl-public-chat-background] SUPABASE_ANON_KEY missing; corpus reads will fall back to service-role (lockdown not enforced until the key is set in env).');
+}
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
 const PROMPTS = require('./_prompts_bundle.json');
+
+// v7.2 — read client used for every corpus read. If the anon client
+// initialized, use it (lockdown enforced). Otherwise fall back to
+// service-role with a degraded warning visible in the logs.
+const readClient = supabaseAnon || supabase;
 
 const SCOPE_MODEL    = 'claude-haiku-4-5-20251001';
 const ANSWER_MODEL   = 'claude-sonnet-4-6';
@@ -78,6 +116,90 @@ function tokenize(s) {
 
 function sqlEscape(s) {
   return String(s || '').replace(/'/g, "''");
+}
+
+// =============================================================
+// v7.2 — Deterministic brand-query pre-check.
+//
+// Before any retrieval or generation, screen the visitor's question
+// against the bjl_gated_entities table. Same 226-name list of brands,
+// venues, and places the publish trigger uses — both reading the one
+// table keeps the read path and the publish guard in sync by
+// construction.
+//
+// No model in this decision so it cannot drift. Matching is
+// case-insensitive, word-boundary regex: a query that names a brand
+// directly ("Chipotle", "M&Ms") hits; a query whose tokens contain
+// the entity as a substring of a larger word doesn't ("lumens of
+// light" doesn't trigger the "Lumen" brand). The deterministic check
+// is the floor; the scope classifier downstream still handles looser
+// "what about XYZ brand" phrasings that don't name an entity directly.
+//
+// The entity list is loaded fresh per invocation (rather than cached
+// at module scope) so a newly-added brand fires the refusal on the
+// very next chat turn. The list is small (~226 rows) and lives behind
+// an anon-readable table, so the round-trip is negligible.
+// =============================================================
+
+function escapeRegexLiteral(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+async function loadGatedEntities() {
+  // Anon has SELECT on bjl_gated_entities (the publish trigger needs
+  // anon-reachable data so the public function can read it without
+  // service-role bypassing the gating model).
+  const { data, error } = await readClient
+    .from('bjl_gated_entities')
+    .select('name');
+  if (error) {
+    console.error('[bjl-public-chat-background] loadGatedEntities failed:', error.message);
+    return [];
+  }
+  return (data || [])
+    .map(r => (r && typeof r.name === 'string') ? r.name.trim() : '')
+    .filter(Boolean);
+}
+
+// Returns the matching entity name on hit, or null.
+function findGatedMatch(question, entities) {
+  if (!question || !Array.isArray(entities) || entities.length === 0) return null;
+  for (const ent of entities) {
+    // Word-boundary match: \bChipotle\b matches "Chipotle is great" but
+    // not "chipotled" (no word ending there). Punctuation in the entity
+    // name (e.g., "Arlington, Texas") is escaped for regex literal use;
+    // the comma + space inside still requires the visitor to write the
+    // full phrasing. That's the intended behavior — the floor catches
+    // direct brand naming; the scope classifier handles looser cases.
+    const pattern = new RegExp('\\b' + escapeRegexLiteral(ent) + '\\b', 'i');
+    if (pattern.test(question)) return ent;
+  }
+  return null;
+}
+
+// Canned refusal copy — voice-aligned with prompts/public_chat_synthesis.md
+// Path C (brand_specific decline). No em dashes, direct assertion, invites
+// the conversation. Returned as the full finding payload so the worker can
+// short-circuit before the LLM stack runs at all.
+function brandPrecheckFinding(matchedEntity) {
+  const answer =
+    "PETERMAYER's Brand Joy Lab doesn't share findings on specific brands publicly. " +
+    "Brand-level work happens in direct conversations with the team. " +
+    "If that's the question you're chasing, leave it with us and we'll set up a real conversation.";
+  return {
+    answer,
+    scope_taken: 'brand_specific',
+    rows_used: [],
+    provenance: [],
+    updated_conversation_synthesis: '',
+    prompt_lead_capture: true,
+    lead_capture_trigger_source: 'no_answer',
+    closest_insight_slugs: [],
+    category_guess: null,
+    // Internal diagnostic — useful in scratch / logs to know which
+    // entity triggered the refusal without exposing it to the visitor.
+    _matched_gated_entity: matchedEntity,
+  };
 }
 
 // =============================================================
@@ -173,13 +295,12 @@ async function retrieveScores(question) {
   const sql = `
     SELECT item_id, item_name, question_label, category, joy_index, n, question_type,
            (${scoreExpr})::int AS hit_count
-    FROM bjl_public_scores
-    WHERE public_safe = true
-      AND (${conds.join(' OR ')})
+    FROM bjl_public_scores_safe
+    WHERE (${conds.join(' OR ')})
     ORDER BY hit_count DESC, n DESC NULLS LAST
     LIMIT ${PER_LAYER_LIMITS.scores}
   `;
-  const { data, error } = await supabase.rpc('execute_read_sql', { query_text: sql });
+  const { data, error } = await readClient.rpc('execute_read_sql_safe', { query_text: sql });
   if (error) {
     console.error('[bjl-public-chat] retrieveScores error:', error.message);
     return [];
@@ -207,13 +328,12 @@ async function retrieveOrdinal(question) {
     SELECT item_id, item_name, question_label, battery_type, category,
            mean_value, scale_min, scale_max, n,
            (${scoreExpr})::int AS hit_count
-    FROM bjl_public_ordinal
-    WHERE public_safe = true
-      AND (${conds.join(' OR ')})
+    FROM bjl_public_ordinal_safe
+    WHERE (${conds.join(' OR ')})
     ORDER BY hit_count DESC, n DESC NULLS LAST
     LIMIT ${PER_LAYER_LIMITS.ordinal}
   `;
-  const { data, error } = await supabase.rpc('execute_read_sql', { query_text: sql });
+  const { data, error } = await readClient.rpc('execute_read_sql_safe', { query_text: sql });
   if (error) {
     console.error('[bjl-public-chat] retrieveOrdinal error:', error.message);
     return [];
@@ -243,13 +363,12 @@ async function retrieveAgreement(question) {
     SELECT item_id, item_name, question_label, category, n,
            strongly_agree_pct, net_agree_pct, neutral_pct, net_disagree_pct,
            (${scoreExpr})::int AS hit_count
-    FROM bjl_public_agreement
-    WHERE public_safe = true
-      AND (${conds.join(' OR ')})
+    FROM bjl_public_agreement_safe
+    WHERE (${conds.join(' OR ')})
     ORDER BY hit_count DESC, n DESC NULLS LAST
     LIMIT ${PER_LAYER_LIMITS.agreement}
   `;
-  const { data, error } = await supabase.rpc('execute_read_sql', { query_text: sql });
+  const { data, error } = await readClient.rpc('execute_read_sql_safe', { query_text: sql });
   if (error) {
     console.error('[bjl-public-chat] retrieveAgreement error:', error.message);
     return [];
@@ -289,16 +408,15 @@ async function retrieveDistributions(question) {
            STRING_AGG(response_label, ' | ' ORDER BY pct DESC NULLS LAST)
              FILTER (WHERE polarity = 'top')  AS top_labels,
            (MAX(${scoreExpr}))::int AS hit_count
-    FROM bjl_public_distributions
-    WHERE public_safe = true
-      AND (${conds.join(' OR ')})
+    FROM bjl_public_distributions_safe
+    WHERE (${conds.join(' OR ')})
     GROUP BY item_id
     HAVING SUM(pct) FILTER (WHERE polarity = 'top') IS NOT NULL
        AND SUM(pct) FILTER (WHERE polarity = 'top') > 0
     ORDER BY hit_count DESC, MAX(n_total) DESC NULLS LAST
     LIMIT ${PER_LAYER_LIMITS.distributions}
   `;
-  const { data, error } = await supabase.rpc('execute_read_sql', { query_text: sql });
+  const { data, error } = await readClient.rpc('execute_read_sql_safe', { query_text: sql });
   if (error) {
     console.error('[bjl-public-chat] retrieveDistributions error:', error.message);
     return [];
@@ -337,9 +455,8 @@ async function retrieveGlobalExtremes() {
     WITH deduped AS (
       SELECT DISTINCT ON (LOWER(TRIM(item_name)))
         item_id, item_name, question_label, category, joy_index, n
-      FROM bjl_public_scores
-      WHERE public_safe = true
-        AND joy_index IS NOT NULL
+      FROM bjl_public_scores_safe
+      WHERE joy_index IS NOT NULL
       ORDER BY LOWER(TRIM(item_name)), n DESC NULLS LAST
     ),
     top_n AS (
@@ -360,7 +477,7 @@ async function retrieveGlobalExtremes() {
     UNION ALL
     SELECT * FROM bottom_n
   `;
-  const { data, error } = await supabase.rpc('execute_read_sql', { query_text: sql });
+  const { data, error } = await readClient.rpc('execute_read_sql_safe', { query_text: sql });
   if (error) {
     console.error('[bjl-public-chat] retrieveGlobalExtremes error:', error.message);
     return { highest: [], lowest: [] };
@@ -386,12 +503,12 @@ async function retrieveLawsSemantic(vecLit) {
   const sql = `
     SELECT law_id AS id, statement, evidence, implication,
            (embedding <=> ${vecLit})::float AS distance
-    FROM bjl_laws
-    WHERE public_safe = true AND embedding IS NOT NULL
+    FROM bjl_laws_safe
+    WHERE embedding IS NOT NULL
     ORDER BY embedding <=> ${vecLit}
     LIMIT ${PER_LAYER_LIMITS.laws}
   `;
-  const { data, error } = await supabase.rpc('execute_read_sql', { query_text: sql });
+  const { data, error } = await readClient.rpc('execute_read_sql_safe', { query_text: sql });
   if (error) {
     console.error('[bjl-public-chat] retrieveLawsSemantic error:', error.message);
     return [];
@@ -404,12 +521,12 @@ async function retrieveInsightsSemantic(vecLit) {
     SELECT id, slug, title, insight, stat, category, confidence, source_n, source_note,
            supporting_quote,
            (embedding <=> ${vecLit})::float AS distance
-    FROM bjl_public_insights
-    WHERE published = true AND embedding IS NOT NULL
+    FROM bjl_public_insights_safe
+    WHERE embedding IS NOT NULL
     ORDER BY embedding <=> ${vecLit}
     LIMIT ${PER_LAYER_LIMITS.insights}
   `;
-  const { data, error } = await supabase.rpc('execute_read_sql', { query_text: sql });
+  const { data, error } = await readClient.rpc('execute_read_sql_safe', { query_text: sql });
   if (error) {
     console.error('[bjl-public-chat] retrieveInsightsSemantic error:', error.message);
     return [];
@@ -425,12 +542,12 @@ async function retrieveTruthsSemantic(vecLit) {
     SELECT slug AS id, title, truth, evidence, category, source_question, supporting_quote,
            confidence, source_n,
            (embedding <=> ${vecLit})::float AS distance
-    FROM bjl_public_verbatim_truths
-    WHERE public_safe = true AND embedding IS NOT NULL
+    FROM bjl_public_verbatim_truths_safe
+    WHERE embedding IS NOT NULL
     ORDER BY embedding <=> ${vecLit}
     LIMIT ${PER_LAYER_LIMITS.truths}
   `;
-  const { data, error } = await supabase.rpc('execute_read_sql', { query_text: sql });
+  const { data, error } = await readClient.rpc('execute_read_sql_safe', { query_text: sql });
   if (error) {
     console.error('[bjl-public-chat] retrieveTruthsSemantic error:', error.message);
     return [];
@@ -459,13 +576,12 @@ async function retrieveInsightsTokenFallback(question) {
            supporting_quote,
            NULL::float AS distance,
            (${scoreExpr})::int AS hit_count
-    FROM bjl_public_insights
-    WHERE published = true
-      AND (${conds.join(' OR ')})
+    FROM bjl_public_insights_safe
+    WHERE (${conds.join(' OR ')})
     ORDER BY hit_count DESC
     LIMIT ${PER_LAYER_LIMITS.insights}
   `;
-  const { data, error } = await supabase.rpc('execute_read_sql', { query_text: sql });
+  const { data, error } = await readClient.rpc('execute_read_sql_safe', { query_text: sql });
   if (error) {
     console.error('[bjl-public-chat] insights fallback error:', error.message);
     return [];
@@ -711,6 +827,32 @@ exports.handler = async (event) => {
     const conversationSynthesis = typeof ctx.conversation_synthesis === 'string'
                                     ? ctx.conversation_synthesis.slice(0, 2000)
                                     : '';
+
+    // ---------------------------------------------------------------
+    // v7.2 — DETERMINISTIC BRAND PRE-CHECK
+    //
+    // Before any LLM call or retrieval, screen against the
+    // bjl_gated_entities list (same 226-name table the publish trigger
+    // uses). On a direct-naming match, short-circuit with the canned
+    // refusal and write the finding immediately. No model, no
+    // retrieval, no drift — and the table-sharing guarantees it stays
+    // in sync with what the publish trigger blocks from going live.
+    // ---------------------------------------------------------------
+    const gatedEntities = await loadGatedEntities();
+    const gatedMatch    = findGatedMatch(question, gatedEntities);
+    if (gatedMatch) {
+      const finding = brandPrecheckFinding(gatedMatch);
+      console.log(
+        '[bjl-public-chat-background] brand pre-check matched entity:', gatedMatch,
+        '— short-circuiting to canned refusal (no retrieval, no model).'
+      );
+      await supabase.from('bjl_query_jobs').update({
+        status:       'complete',
+        finding:      JSON.stringify(finding),
+        completed_at: new Date().toISOString(),
+      }).eq('job_id', jobId);
+      return { statusCode: 200, body: 'ok (gated entity short-circuit)' };
+    }
 
     // Scope classification
     const scope = await classifyScope(question);
