@@ -80,6 +80,56 @@ function sqlEscape(s) {
   return String(s || '').replace(/'/g, "''");
 }
 
+// v7.2.1 — Tolerant LLM JSON parser.
+//
+// The synthesizer is told to return ONLY a JSON object, but Sonnet
+// occasionally leaks a preamble sentence ("Looking at the data..." /
+// "No data on this exact question...") or wraps the JSON in a code
+// fence despite the prompt rule. The strict JSON.parse failed on
+// these turns and the worker would propagate "Unexpected token X in
+// JSON at position 0" up through the status endpoint as an error,
+// which the frontend renders as the "Something hiccuped" bubble.
+//
+// Two recovery attempts:
+//   1. Strip code fences + whitespace, parse directly.
+//   2. Locate the first balanced { ... } block in the text and parse
+//      that. Handles arbitrary preamble or trailing prose.
+// Returns null on total failure; the caller is responsible for the
+// graceful fallback (better than throwing).
+function parseLLMJSON(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return null;
+  const fenced = text
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/```\s*$/i, '')
+    .trim();
+  try { return JSON.parse(fenced); } catch (_) { /* fall through */ }
+  // Walk the string to find the first balanced JSON object. Handles
+  // strings/escapes so a `{` inside a string literal doesn't break
+  // depth counting.
+  const start = fenced.indexOf('{');
+  if (start === -1) return null;
+  let depth = 0;
+  let inString = false;
+  let escape  = false;
+  for (let i = start; i < fenced.length; i++) {
+    const ch = fenced[i];
+    if (escape)         { escape = false; continue; }
+    if (ch === '\\')    { escape = true;  continue; }
+    if (ch === '"')     { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === '{')     { depth++; continue; }
+    if (ch === '}') {
+      depth--;
+      if (depth === 0) {
+        const candidate = fenced.slice(start, i + 1);
+        try { return JSON.parse(candidate); } catch (_) { return null; }
+      }
+    }
+  }
+  return null;
+}
+
 // =============================================================
 // Scope classifier (Haiku) — unchanged behavior from v6
 // =============================================================
@@ -655,8 +705,36 @@ async function composeAnswer({ question, scope, retrieved, conversation_synthesi
     messages: [{ role: 'user', content: userMessage }],
   });
   const text = (rsp.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
-  const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
-  return JSON.parse(cleaned);
+
+  // v7.2.1 — tolerant parse. The strict JSON.parse here was the cause
+  // of intermittent "Something hiccuped" failures: Sonnet occasionally
+  // leaked a preamble sentence before the JSON object, and the worker
+  // surfaced a JSON.parse error up to the frontend instead of an
+  // answer the visitor could read.
+  const parsed = parseLLMJSON(text);
+  if (parsed && typeof parsed === 'object' && typeof parsed.answer === 'string' && parsed.answer.trim().length > 0) {
+    return parsed;
+  }
+
+  // Total parse failure or empty answer. Log the raw output (first 500
+  // chars) so we can diagnose drift, then return a graceful fallback
+  // finding so the visitor still gets a coherent response + the
+  // lead-capture surface. The job completes with status='complete'
+  // rather than 'error' — the frontend renders this as a Path-B-style
+  // bot bubble + the inline lead form, not as a hiccups error.
+  console.error('[bjl-public-chat-background] synthesizer returned unparseable output; falling back to graceful capture. Raw output (first 500 chars):', text.slice(0, 500));
+  return {
+    answer: "PETERMAYER's Brand Joy Lab hit a snag putting that answer together. "
+          + "Want to leave the question with us? The team will take a real look and come back to you.",
+    scope_taken: scope || 'in_corpus_scope',
+    rows_used: [],
+    provenance: [],
+    updated_conversation_synthesis: conversation_synthesis || '',
+    prompt_lead_capture: true,
+    lead_capture_trigger_source: 'no_answer',
+    _synthesizer_parse_failed: true,            // internal diagnostic
+    _synthesizer_raw_head: text.slice(0, 200),  // trim head for trace
+  };
 }
 
 // v6.6: capture-write logic moved out of this endpoint. The frontend now
