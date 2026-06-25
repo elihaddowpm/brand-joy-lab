@@ -75,7 +75,10 @@
     # subdomain naming drops the agency's middle "a" — that's a Webflow
     # quirk, not a typo. Keep this entry while staging-side QA is active;
     # tighten back to peteramayer.com-only at launch if desired.
-    Content-Security-Policy = "frame-ancestors 'self' https://peteramayer.com https://www.peteramayer.com https://petermayer.webflow.io"
+    # v7.5: added https://hello.peteramayer.com so the agency-landing
+    # surface can iframe the chat. Paired with the postMessage + URL-?q=
+    # autofire support in public-chat.html.
+    Content-Security-Policy = "frame-ancestors 'self' https://peteramayer.com https://www.peteramayer.com https://petermayer.webflow.io https://hello.peteramayer.com"
     X-Content-Type-Options  = "nosniff"
 
 # The Webflow embed lands as: <iframe src="https://<joylab>/public-chat.html">
