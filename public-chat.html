@@ -37,6 +37,23 @@
     <button class="sample-chip">How do you keep a brand joyful as it scales?</button>
   </div>
 
+  <!-- v7.6 — Data disclaimer. Shown only in the first-load (.is-empty) state.
+       JS hides it the moment the visitor sends a first question, same way it
+       hides the sample chips. The "send a research request" link opens the
+       existing lightbox lead-capture form (Surface B) so the visitor can
+       drop their question into the lead pipeline without typing it into
+       chat first. -->
+  <aside id="data-disclaimer" class="bjl-disclaimer" aria-label="What this tool can't provide">
+    <p class="bjl-disclaimer-head">This tool can&rsquo;t provide:</p>
+    <ul class="bjl-disclaimer-list">
+      <li>Information related to specific brands</li>
+      <li>Demographic information</li>
+    </ul>
+    <p class="bjl-disclaimer-cta">
+      If you&rsquo;re curious, <a href="#" id="disclaimer-research-link"><strong>send a research request</strong></a> to the Brand Joy Lab team.
+    </p>
+  </aside>
+
   <form id="compose" autocomplete="off">
     <textarea id="question-input" rows="1" placeholder="Ask about consumer joy…" aria-label="Your question"></textarea>
     <button id="send-btn" type="submit" disabled>Send</button>
@@ -120,7 +137,14 @@
   function esc(s){ return String(s).replace(/[&<>"]/g, function(c){
     return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]; }); }
   function scrollLog(){ log.scrollTop = log.scrollHeight; }
-  function beginConversation(){ samples.style.display = "none"; frame.classList.remove("is-empty"); }
+  function beginConversation(){
+    samples.style.display = "none";
+    // v7.6 — hide the disclaimer the moment the visitor starts a turn;
+    // it's an empty-state element, not a persistent footer.
+    var d = document.getElementById("data-disclaimer");
+    if (d) d.style.display = "none";
+    frame.classList.remove("is-empty");
+  }
 
   // ---- bubble factories ---------------------------------------------
   function addUser(text){
@@ -551,6 +575,25 @@
     var chip = e.target.closest(".sample-chip");
     if (chip && !session.pending) ask(chip.textContent);
   });
+
+  // v7.6 — "send a research request" link in the data disclaimer.
+  // Routes through the existing Surface B lightbox so captures land in
+  // bjl_public_questions + Monday via the same path as any other lead.
+  // trigger_source uses 'consecutive_queries' so it slots into the
+  // existing Monday Trigger label map without a new label.
+  var researchLink = document.getElementById("disclaimer-research-link");
+  if (researchLink) {
+    researchLink.addEventListener("click", function(e){
+      e.preventDefault();
+      // Suppression and already-submitted state are irrelevant here —
+      // the visitor explicitly asked for the form. Skip the gating in
+      // openLightbox() by inlining the display path:
+      lightbox.hidden = false;
+      requestAnimationFrame(function(){ lightbox.classList.add("is-open"); });
+      var first = lightbox.querySelector('input[placeholder="First name"]');
+      if (first) setTimeout(function(){ first.focus(); }, 60);
+    });
+  }
 
   log.addEventListener("click", function(e){
     var retry = e.target.closest("[data-retry]");
