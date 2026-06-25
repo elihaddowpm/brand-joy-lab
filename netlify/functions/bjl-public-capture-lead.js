@@ -160,9 +160,28 @@ exports.handler = async (event) => {
     return { statusCode: 500, headers, body: JSON.stringify({ error: 'capture failed', detail: error.message }) };
   }
 
-  // TODO(crm): push to CRM here once Eli confirms target system + field
-  // mapping. For 'submitted' rows: create/merge contact, attach
-  // conversation_synthesis as the lead note.
+  // v7.4 — Fire-and-forget dispatch to the Monday.com push (background
+  // function, 15-min budget; idempotent on bjl_public_questions.monday_item_id).
+  // Only 'submitted' rows go to Monday. Declines stay anonymous in Supabase.
+  // The visitor's response is NOT blocked on the Monday push completing.
+  if (status === 'submitted' && data && data.id) {
+    const host       = (event.headers && (event.headers.host || event.headers.Host)) || '';
+    const siteUrl    = process.env.URL || (host ? `https://${host}` : '');
+    const bgUrl      = siteUrl ? `${siteUrl}/.netlify/functions/bjl-monday-push-background` : null;
+    if (bgUrl) {
+      // Don't await — fire-and-forget. The visitor's response below ships
+      // regardless of how this dispatch fares. If Monday is slow or down,
+      // the capture still landed in Supabase (the durable record); the push
+      // failure surfaces in function logs only.
+      fetch(bgUrl, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ question_row_id: data.id }),
+      }).catch(err => {
+        console.error('[bjl-public-capture-lead] Monday dispatch threw (non-fatal):', err && err.message);
+      });
+    }
+  }
 
   return {
     statusCode: 200,
