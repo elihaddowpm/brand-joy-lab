@@ -160,26 +160,39 @@ exports.handler = async (event) => {
     return { statusCode: 500, headers, body: JSON.stringify({ error: 'capture failed', detail: error.message }) };
   }
 
-  // v7.4 — Fire-and-forget dispatch to the Monday.com push (background
-  // function, 15-min budget; idempotent on bjl_public_questions.monday_item_id).
+  // v7.7.1 — Dispatch to the Monday.com push (background function,
+  // 15-min budget; idempotent on bjl_public_questions.monday_item_id).
   // Only 'submitted' rows go to Monday. Declines stay anonymous in Supabase.
-  // The visitor's response is NOT blocked on the Monday push completing.
+  //
+  // We AWAIT the dispatch call (was fire-and-forget in v7.4). On Netlify,
+  // a non-awaited fetch can be killed by lambda termination before the
+  // request is actually flushed to the routing layer — observed twice in
+  // production where rows landed in Supabase but never reached the push
+  // function. Awaiting blocks the visitor's response only until Netlify
+  // returns 202 from the background dispatch (~50ms typically; the
+  // background work itself does NOT block). The push function still owns
+  // the actual Monday API call and writes monday_item_id back on success.
+  //
+  // The push function is graceful on its own failures (logs + returns 200),
+  // so awaiting here adds reliability without introducing a new failure
+  // path for the visitor.
   if (status === 'submitted' && data && data.id) {
     const host       = (event.headers && (event.headers.host || event.headers.Host)) || '';
     const siteUrl    = process.env.URL || (host ? `https://${host}` : '');
     const bgUrl      = siteUrl ? `${siteUrl}/.netlify/functions/bjl-monday-push-background` : null;
     if (bgUrl) {
-      // Don't await — fire-and-forget. The visitor's response below ships
-      // regardless of how this dispatch fares. If Monday is slow or down,
-      // the capture still landed in Supabase (the durable record); the push
-      // failure surfaces in function logs only.
-      fetch(bgUrl, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ question_row_id: data.id }),
-      }).catch(err => {
+      try {
+        await fetch(bgUrl, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ question_row_id: data.id }),
+        });
+      } catch (err) {
+        // Dispatch threw, but the row is already in Supabase. Log and
+        // ship the visitor's success response anyway — orphan rows can
+        // be retried manually via the same endpoint.
         console.error('[bjl-public-capture-lead] Monday dispatch threw (non-fatal):', err && err.message);
-      });
+      }
     }
   }
 
