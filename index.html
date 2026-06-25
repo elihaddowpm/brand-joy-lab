@@ -4877,7 +4877,16 @@ const PublicCorpusMode = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'update_insight', id, ...patch }),
       }));
-      if (!r.ok) throw new Error(`update failed (${r.status})`);
+      // v7.3 — surface the actual reason a publish/update fails. The DB has
+      // BEFORE-UPDATE triggers that reject rows naming gated entities, plus
+      // backend validators that reject malformed patches. Both return 400
+      // with a structured { error } body; the old `update failed (${r.status})`
+      // wrapper threw that detail away, leaving Eli with no diagnostic.
+      if (!r.ok) {
+        const reason = await r.json().catch(() => null);
+        const detail = reason && reason.error ? `: ${reason.error}` : '';
+        throw new Error(`update failed (${r.status})${detail}`);
+      }
       const j = await r.json();
       setInsights(prev => prev.map(i => i.id === id ? j.insight : i));
       setEditingId(null);
