@@ -151,10 +151,15 @@
    actually fills the iframe. Without these the body collapses to its
    natural content height and the iframe shows blank space below the
    chat content (visible as the parent page's background bleeding
-   through). Margin reset prevents a small gap at the top edge. */
+   through). Margin reset prevents a small gap at the top edge.
+   v7.7: body background matches --surface-page so when the iframe is
+   given a width wider than the chat's tuned design range (e.g. a
+   lightbox/modal embed on hello.peteramayer.com), the centered
+   chat-frame doesn't show a stark white gap on the sides. */
 html, body {
   height: 100%;
   margin: 0;
+  background: #fefff3;
 }
 
 .chat-frame {
@@ -163,6 +168,17 @@ html, body {
   display: flex;
   flex-direction: column;
   height: 100%;                  /* fills the iframe; the iframe owns 640px */
+  /* v7.7: cap the chat surface width regardless of how wide the iframe
+     gets. The design was tuned for 360-720px container widths; above
+     that, sample chips spread out, the intro paragraph wraps too long,
+     and the surface reads scattered. The standard peteramayer.com
+     embed uses iframe max-width 750px so this cap is a no-op there;
+     only wider hosts (e.g. lightbox/modal embeds on
+     hello.peteramayer.com) feel the cap. The iframe parent shows body
+     bg in the side gaps (matched above so it blends seamlessly). */
+  max-width: 720px;
+  margin-left: auto;
+  margin-right: auto;
   min-height: 0;
   box-sizing: border-box;
   background: var(--surface-page);
@@ -763,4 +779,59 @@ html, body {
     padding: var(--space-3) var(--space-4);
     font-size: 0.875rem;
   }
+}
+
+
+/* =====================================================================
+   v7.7 · LEAD-FORM QUESTION FIELD (Surface A + Surface B)
+   New "Your question" textarea above the name/email fields. On the
+   inline form it's pre-filled with the visitor's last question; on the
+   lightbox it's pre-filled when triggered by the 7-query threshold and
+   empty when triggered by the disclaimer "send a research request"
+   link.
+   ===================================================================== */
+
+.lead-form-label {
+  display: block;
+  margin: 0 0 var(--space-1);
+  font-family: var(--font-sans);
+  font-size: 0.75rem;
+  font-weight: var(--fw-bold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.lead-question-input {
+  display: block;
+  width: 100%;
+  resize: vertical;
+  min-height: 64px;
+  max-height: 200px;
+  font-family: var(--font-text);
+  font-size: 0.9375rem;
+  line-height: 1.4;
+  color: var(--text-strong);
+  background: var(--surface-page);
+  border: 1.5px solid var(--hairline);
+  border-radius: var(--chat-field-radius);
+  padding: var(--space-3) var(--space-4);
+  transition: border-color var(--dur-fast) var(--ease-out),
+              box-shadow var(--dur-fast) var(--ease-out);
+}
+.lead-question-input::placeholder { color: var(--text-muted); }
+.lead-question-input:hover { border-color: var(--text-muted); }
+.lead-question-input:focus {
+  outline: none; border-color: var(--text-strong);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--chat-focus) 40%, transparent);
+}
+.lead-question-input[aria-invalid="true"] {
+  border-color: var(--accent-energy);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-energy) 22%, transparent);
+}
+
+/* Surface B (lightbox) gets slightly larger type for the modal context */
+.lead-lightbox .lead-question-input {
+  font-size: 1rem;
+  min-height: 72px;
 }
