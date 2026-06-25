@@ -61,12 +61,21 @@
 
   <p class="footer-note">Answers from <strong>PETERMAYER&rsquo;s Brand Joy Lab</strong> &middot; New Orleans</p>
 
-  <!-- Surface B — lightbox lead form (hidden until ~7 queries) -->
+  <!-- Surface B — lightbox lead form. Opens when:
+       (a) the visitor crosses the 7-query threshold (auto), or
+       (b) the visitor clicks "send a research request" in the
+           disclaimer (manual, v7.6).
+       v7.7: new "Your question" field. Auto-populated from
+       session.lastQuestion when triggered by (a); empty for (b). -->
   <div class="lead-lightbox-backdrop" id="lightbox" role="dialog" aria-modal="true" aria-labelledby="lb-title" hidden>
     <div class="lead-lightbox" id="lightboxInner">
       <p class="bjl-credit">PETERMAYER &middot; Brand Joy Lab</p>
-      <h3 id="lb-title">Let&rsquo;s skip to the good part.</h3>
-      <p>The fastest route to exactly what you need is a direct conversation with PETERMAYER.</p>
+      <h3 id="lb-title">Send a research request.</h3>
+      <p>Specific brands, demographics, anything beyond this tool — tell us what you&rsquo;re after and the Brand Joy Lab will dig in and follow up.</p>
+      <label class="lead-form-label" for="lb-question">Your question</label>
+      <textarea id="lb-question" class="lead-question-input" name="question"
+                placeholder="What would you like the Brand Joy Lab to look into?"
+                aria-label="Your question" rows="2"></textarea>
       <div class="lead-form-row">
         <input type="text" name="first" placeholder="First name" aria-label="First name">
         <input type="text" name="last"  placeholder="Last name"  aria-label="Last name">
@@ -75,7 +84,7 @@
       <input type="text"  name="company" placeholder="Company (optional)"  aria-label="Company (optional)">
       <p class="lead-form-error" hidden></p>
       <div class="lead-lightbox-actions">
-        <button class="bjl-submit"  type="button">Start the conversation</button>
+        <button class="bjl-submit"  type="button">Send research request</button>
         <button class="bjl-decline" type="button">No thanks, I&rsquo;ll keep searching</button>
       </div>
     </div>
@@ -240,11 +249,16 @@
     var lede = triggerSource === "error"
       ? "While we sort that out, want to leave it with us?"
       : "Let\u2019s talk it through.";
+    // v7.7: pre-fill the question textarea with the triggering question
+    // so the visitor sees what we're sending and can edit before submit.
+    var prefill = esc(session.lastQuestion || "");
     var el = document.createElement("div");
     el.className = "msg msg-bot";
     el.innerHTML = botShell(
       '<div class="capture-block" data-trigger="' + triggerSource + '">' +
         '<p class="bjl-capture-lede">' + lede + '</p>' +
+        '<label class="lead-form-label">Your question</label>' +
+        '<textarea class="lead-question-input" placeholder="What would you like the Brand Joy Lab to look into?" aria-label="Your question" rows="2">' + prefill + '</textarea>' +
         '<div class="lead-form-row">' +
           '<input type="text" placeholder="First name" aria-label="First name">' +
           '<input type="text" placeholder="Last name"  aria-label="Last name">' +
@@ -263,23 +277,30 @@
   }
 
   // ---- shared validation (Surface A + Surface B) ---------------------
+  // v7.7: reads the new question textarea too. Both surfaces use the
+  // same .lead-question-input class.
   function readFields(scope){
     return {
       first_name:   (scope.querySelector('input[placeholder="First name"]') || {}).value || "",
       last_name:    (scope.querySelector('input[placeholder="Last name"]')  || {}).value || "",
       email:        (scope.querySelector('input[type="email"]')             || {}).value || "",
       company_name: (scope.querySelector('input[placeholder="Company (optional)"]') || {}).value || "",
+      question:     (scope.querySelector('.lead-question-input')            || {}).value || "",
     };
   }
   function validate(scope){
     var f = readFields(scope);
-    var first = scope.querySelector('input[placeholder="First name"]');
-    var last  = scope.querySelector('input[placeholder="Last name"]');
-    var email = scope.querySelector('input[type="email"]');
-    var errEl = scope.querySelector(".lead-form-error");
-    [first, last, email].forEach(function(x){ if (x) x.removeAttribute("aria-invalid"); });
+    var first    = scope.querySelector('input[placeholder="First name"]');
+    var last     = scope.querySelector('input[placeholder="Last name"]');
+    var email    = scope.querySelector('input[type="email"]');
+    var question = scope.querySelector('.lead-question-input');
+    var errEl    = scope.querySelector(".lead-form-error");
+    [first, last, email, question].forEach(function(x){ if (x) x.removeAttribute("aria-invalid"); });
     var msg = "";
-    if (!f.first_name.trim() || !f.last_name.trim()){
+    if (!f.question.trim()){
+      msg = "Add a quick description of what you\u2019d like us to look into.";
+      if (question) question.setAttribute("aria-invalid","true");
+    } else if (!f.first_name.trim() || !f.last_name.trim()){
       msg = "Please add your first and last name.";
       if (!f.first_name.trim() && first) first.setAttribute("aria-invalid","true");
       if (!f.last_name.trim()  && last)  last.setAttribute("aria-invalid","true");
@@ -294,6 +315,7 @@
       last_name:    f.last_name.trim(),
       email:        f.email.trim(),
       company_name: f.company_name.trim() || null,
+      question:     f.question.trim(),
     };
   }
 
@@ -349,6 +371,10 @@
     payload.last_name    = fields.last_name;
     payload.email        = fields.email;
     payload.company_name = fields.company_name;
+    // v7.7: the typed question overrides the session's last question.
+    // For disclaimer-opened lightboxes session.lastQuestion may be empty;
+    // the textarea value is the only source of truth there.
+    payload.question     = fields.question;
 
     postLead(payload).then(function(r){
       if (!r.ok){
@@ -366,6 +392,17 @@
   }
 
   function declineLead(triggerSource){
+    // v7.7: the disclaimer-opened lightbox may have no question to record.
+    // Backend requires question on every row, so skip the POST when both
+    // sources are empty. Suppression still applies for the chat-triggered
+    // path; the disclaimer-opened path does not suppress (it's an
+    // explicit click, not a threshold trigger).
+    var question = (session.lastQuestion || "").trim();
+    if (!question){
+      // Nothing meaningful to log. Resolve silently — caller still
+      // closes the lightbox.
+      return Promise.resolve();
+    }
     var payload = basePayload(triggerSource);
     payload.status = "declined";
     return postLead(payload).then(function(r){
@@ -403,9 +440,13 @@
   function openLightbox(){
     if (session.leadAlreadySubmitted || session.declinedLightbox) return;
     if (session.queryCount < session.suppressLightboxUntilQuery) return;
+    // v7.7: pre-fill the question textarea with the visitor's most
+    // recent question so they see what's being sent and can edit.
+    var qInput = lightbox.querySelector('.lead-question-input');
+    if (qInput) qInput.value = session.lastQuestion || "";
     lightbox.hidden = false;
     requestAnimationFrame(function(){ lightbox.classList.add("is-open"); });
-    var f = lightbox.querySelector('input[placeholder="First name"]');
+    var f = qInput || lightbox.querySelector('input[placeholder="First name"]');
     if (f) setTimeout(function(){ f.focus(); }, 60);
   }
   function closeLightbox(){
@@ -581,6 +622,8 @@
   // bjl_public_questions + Monday via the same path as any other lead.
   // trigger_source uses 'consecutive_queries' so it slots into the
   // existing Monday Trigger label map without a new label.
+  // v7.7: clears the question textarea on open (no chat happened yet,
+  // so there's nothing to pre-fill — let the placeholder show).
   var researchLink = document.getElementById("disclaimer-research-link");
   if (researchLink) {
     researchLink.addEventListener("click", function(e){
@@ -588,10 +631,12 @@
       // Suppression and already-submitted state are irrelevant here —
       // the visitor explicitly asked for the form. Skip the gating in
       // openLightbox() by inlining the display path:
+      var qInput = lightbox.querySelector('.lead-question-input');
+      if (qInput) qInput.value = "";
       lightbox.hidden = false;
       requestAnimationFrame(function(){ lightbox.classList.add("is-open"); });
-      var first = lightbox.querySelector('input[placeholder="First name"]');
-      if (first) setTimeout(function(){ first.focus(); }, 60);
+      var f = qInput || lightbox.querySelector('input[placeholder="First name"]');
+      if (f) setTimeout(function(){ f.focus(); }, 60);
     });
   }
 
