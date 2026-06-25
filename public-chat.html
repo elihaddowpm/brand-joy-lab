@@ -560,6 +560,82 @@
       ask(session.lastQuestion);
     }
   });
+
+  // ════════════════════════════════════════════════════════════════════
+  // v7.5 — Auto-fire support for embedding pages
+  //
+  // Two ways an external page can drive the chat without manual typing:
+  //   1. URL ?q=<question> param read on page load.
+  //   2. postMessage from an allowlisted embedding parent.
+  // Plus: a "bjl:ready" handshake fired to the embedding parent so it
+  // knows the chat is initialized and queries won't race.
+  //
+  // Security posture:
+  //   - Strict origin allowlist on postMessage (hello.peteramayer.com
+  //     + localhost for dev). Anything else is ignored.
+  //   - Hard 500-char cap on the incoming question.
+  //   - All autofire paths route through ask(), which treats the input
+  //     as plain text — there is no eval, no innerHTML, no HTML render.
+  //   - Ready handshake uses an explicit targetOrigin (NOT '*'), so
+  //     non-allowlisted parents never receive the signal.
+  // ════════════════════════════════════════════════════════════════════
+  var MAX_AUTOFIRE_LENGTH = 500;
+  var ALLOWED_PARENT_ORIGINS = [
+    "https://hello.peteramayer.com",
+  ];
+
+  function isAllowedOrigin(origin){
+    if (!origin || typeof origin !== "string") return false;
+    if (ALLOWED_PARENT_ORIGINS.indexOf(origin) !== -1) return true;
+    // Localhost dev: allow any port on http://localhost
+    if (/^http:\/\/localhost(:\d+)?$/.test(origin)) return true;
+    return false;
+  }
+
+  function safeAutofire(rawQuestion){
+    if (typeof rawQuestion !== "string") return;
+    var q = rawQuestion.trim();
+    if (!q) return;
+    if (q.length > MAX_AUTOFIRE_LENGTH) q = q.slice(0, MAX_AUTOFIRE_LENGTH);
+    ask(q);                       // existing entry point; plain-text only
+  }
+
+  // --- 1. URL ?q= reader ----------------------------------------------
+  // Fires once on script load. URLSearchParams handles decoding +
+  // bracket/space normalization. Malformed URLs swallow silently —
+  // the chat still loads in a normal state.
+  try {
+    var urlParams = new URLSearchParams(window.location.search);
+    var qFromUrl  = urlParams.get("q");
+    if (qFromUrl && qFromUrl.length > 0){
+      safeAutofire(qFromUrl);
+    }
+  } catch (_) { /* malformed URL — ignore */ }
+
+  // --- 2. postMessage listener ----------------------------------------
+  // Expects { type: 'bjl:query', question: '<string>' }. Origin must be
+  // in the allowlist (hello.peteramayer.com or any localhost port).
+  // Anything else is silently ignored.
+  window.addEventListener("message", function(evt){
+    if (!isAllowedOrigin(evt.origin)) return;
+    var data = evt.data;
+    if (!data || typeof data !== "object") return;
+    if (data.type !== "bjl:query") return;
+    if (typeof data.question !== "string") return;
+    safeAutofire(data.question);
+  });
+
+  // --- 3. Ready handshake to embedding parent --------------------------
+  // Tell the embedding page the chat is initialized. Each call uses an
+  // explicit targetOrigin filter, so the message ONLY lands on a parent
+  // whose origin matches that filter. If we're not in an iframe, or
+  // the parent's origin is different, the browser silently drops the
+  // message (no leak to wrong origins).
+  ALLOWED_PARENT_ORIGINS.forEach(function(origin){
+    try {
+      window.parent.postMessage({ type: "bjl:ready" }, origin);
+    } catch (_) { /* parent unreachable — ignore */ }
+  });
 })();
 </script>
 </body>
