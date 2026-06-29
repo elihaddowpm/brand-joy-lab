@@ -105,8 +105,19 @@ ZERO_TO_FIVE_DESC_ANCHORS   = {'not at all', 'describes', 'describes perfectly'}
 ZERO_TO_FIVE_IMP_ANCHORS    = {'not at all important', 'essential', 'important', 'extremely important'}
 ZERO_TO_FIVE_FAM_ANCHORS    = {'not familiar', 'very familiar', 'extremely familiar'}
 
-# 3-pt ordinal: "Very much so / Somewhat / Not at all" — joy variant or generic
-ORDINAL_3PT = {'very much so', 'somewhat', 'not at all'}
+# 3-pt ordinal: "Very much so / Somewhat / Not at all" — joy variant or generic.
+# Real-world data uses several phrasings of the negative pole — "Not really"
+# appears in some batteries alongside the standard "Not at all" in others.
+ORDINAL_3PT = {
+    'very much so', 'somewhat', 'not at all', 'not really',
+    # Capitalization variants normalized by _normalize_label() to lower already
+}
+
+# Joy-keyword detector — when 3-pt ordinal labels appear AND the question
+# text contains a joy-family keyword, classify as joy_scale rather than
+# generic ordinal_scale. This is how the original loader picked joy_scale
+# for questions declared `single_select` whose data was actually 3-pt joy.
+JOY_KEYWORDS = ('joy', 'joyful', 'joyfulness', 'happiness', 'happy', 'enjoy')
 
 # 5-pt likelihood
 LIKELIHOOD_5PT = {
@@ -126,15 +137,87 @@ AGREEMENT_5PT = {
     'disagree', 'strongly disagree',
 }
 
-# Frequency labels (5-pt-ish)
+# Frequency labels (5-pt-ish). Real BJL data uses several phrasings — the
+# "at least once a X, on average" forms appear in the racing/casino/
+# entertainment batteries; the temporal recency forms appear in
+# "When was the last time..." questions.
 FREQUENCY_LABELS = {
-    'daily', 'a few times a week', 'weekly', 'a few times a month',
-    'monthly', 'a few times a year', 'yearly', 'rarely', 'seldom',
-    'never', 'occasionally', 'often', 'always', 'sometimes',
+    # Bare frequency
+    'daily', 'weekly', 'monthly', 'yearly',
+    'rarely', 'seldom', 'never', 'occasionally', 'often', 'always',
+    'sometimes', 'very often',
+    # Multi-word frequency
+    'a few times a week', 'a few times a month', 'a few times a year',
+    'at least once a week', 'at least once a week, on average',
+    'at least once a month', 'at least once a month, on average',
+    'at least once a year', 'at least once a year, on average',
+    'at least twice a month', 'once a month', 'twice a month',
+    # Temporal recency ("When was the last time..." patterns)
+    'today', 'this week', 'this month', 'this year', 'last year',
+    'within the last few months', 'within the last 5 years',
+    'more than a year ago', 'more than 5 years ago',
 }
 
-# Skip values that don't carry analytic meaning
-SKIP_VALUES = {'not applicable', 'n/a', 'na', 'prefer not to answer', '', None}
+# 4-point intensity scale: "How much does X influence you" → A lot / Somewhat
+# / Just a little / Not at all. Maps to 0-3 (or 0-5 to keep parity with
+# joy if needed; I'll use 0-3 to reflect the actual 4-pt nature).
+INTENSITY_4PT = {'a lot!', 'a lot', 'somewhat', 'just a little', 'not at all'}
+
+def make_4pt_intensity_map():
+    return {'not at all': 0.0, 'just a little': 1.0, 'somewhat': 2.0, 'a lot': 3.0, 'a lot!': 3.0}
+
+
+# Comparison-to-prior scales — "more so / less so than a year ago" patterns.
+# Common in trend questions (spending vs last year, news consumption vs last
+# year, etc.). 5-pt and 3-pt variants both appear in BJL data.
+MORE_LESS_5PT = {
+    'much more so than a year ago', 'somewhat more so than a year ago',
+    'about the same as a year ago',
+    'somewhat less so than a year ago', 'much less so than a year ago',
+}
+MORE_LESS_3PT = {
+    'more so than the last year or two', 'about the same as the last year or two',
+    'less so than the last year or two',
+    'more likely than usual to have an alcoholic beverage to unwind',
+    'about the same as usual',
+    'less likely than usual to have an alcoholic beverage to unwind',
+}
+
+def make_more_less_5pt_map():
+    return {
+        'much less so than a year ago': 0.0,
+        'somewhat less so than a year ago': 1.0,
+        'about the same as a year ago': 2.0,
+        'somewhat more so than a year ago': 3.0,
+        'much more so than a year ago': 4.0,
+    }
+
+def make_more_less_3pt_map():
+    return {
+        'less so than the last year or two': 0.0,
+        'less likely than usual to have an alcoholic beverage to unwind': 0.0,
+        'about the same as the last year or two': 1.0,
+        'about the same as usual': 1.0,
+        'more so than the last year or two': 2.0,
+        'more likely than usual to have an alcoholic beverage to unwind': 2.0,
+    }
+
+
+# Count-4pt — "Not at all / Once / Twice / 3 or more times". Used in trip-
+# count questions (in the past year, how many business/personal trips).
+COUNT_4PT = {'not at all', 'once', 'twice', '3 or more times'}
+
+def make_count_4pt_map():
+    return {'not at all': 0.0, 'once': 1.0, 'twice': 2.0, '3 or more times': 3.0}
+
+# Skip values that don't carry analytic meaning. Real-world response sets
+# include several variants — empty string, the canonical N/A, and the
+# longer "Don't know" / "Unfamiliar" markers that respondents use when
+# they didn't know the brand or topic enough to rate it.
+SKIP_VALUES = {
+    'not applicable', 'n/a', 'na', "n/a, don't know", "don't know",
+    'unfamiliar', 'no opinion', 'prefer not to answer', '', None,
+}
 
 # Demographic battery markers — if a question's response set is dominated
 # by these, the whole question is skipped
@@ -204,8 +287,16 @@ def _normalize_label(s: Optional[str]) -> str:
     return s.strip().lower()
 
 
+def _looks_joy_question(question_text: Optional[str]) -> bool:
+    if not question_text:
+        return False
+    qt = question_text.lower()
+    return any(kw in qt for kw in JOY_KEYWORDS)
+
+
 def detect_scale(distinct_raws: set, has_numeric: bool, has_is_selected: bool,
-                 declared_type: Optional[str], declared_scale: Optional[str]) -> tuple:
+                 declared_type: Optional[str], declared_scale: Optional[str],
+                 question_text: Optional[str] = None) -> tuple:
     """
     Returns (question_type, scale_type, label_to_numeric_map_or_None).
 
@@ -232,11 +323,15 @@ def detect_scale(distinct_raws: set, has_numeric: bool, has_is_selected: bool,
 
     # 1. Joy -3 to +5
     if has_numeric:
-        flat = {v.split(' ')[0] if v else v for v in real_labels}  # strip "5 (Maximum Joy!)" → "5"
-        if flat.issubset(JOY_MIN3_TO_5_NUMS) and (real_labels & {'-3', '-2', '-1'} or
-                                                   any('-' in v for v in real_labels) or
-                                                   '-3' in flat or
-                                                   any(v.startswith('-3') or v.startswith('-2') or v.startswith('-1') for v in real_labels)):
+        # Strip anchored text like "5 (Maximum Joy!)" → "5"
+        flat = {v.split(' ')[0] if v else v for v in real_labels}
+        # Allow up to 15% of labels to be unrecognized (stray "Unfamiliar"
+        # or other outliers) — the majority-match makes the classifier
+        # robust to mixed-vocabulary batteries.
+        in_joy = sum(1 for v in flat if v in JOY_MIN3_TO_5_NUMS)
+        joy_share = in_joy / len(flat) if flat else 0
+        has_negative = any(v in {'-3', '-2', '-1'} for v in flat)
+        if joy_share >= 0.85 and has_negative:
             return ('joy_scale', 'ordinal_-3_to_5', None)
         # 0 to 5 anchored — distinguish family
         if flat.issubset(ZERO_TO_FIVE_NUMS | {'0', '1', '2', '3', '4', '5'}) or \
@@ -256,8 +351,15 @@ def detect_scale(distinct_raws: set, has_numeric: bool, has_is_selected: bool,
             return ('ordinal_scale', 'numeric_0_to_5', None)
 
     # 3. Joy 3pt or generic 3pt ordinal — "very much so / somewhat / not at all"
+    # Use question_text inspection to distinguish joy from generic ordinal:
+    # if the question mentions joy/joyful/happiness, the 3-pt is a joy variant.
+    # Falls back to declared_type as the secondary signal.
     if real_labels.issubset(ORDINAL_3PT):
-        if declared_type and declared_type.startswith('joy_scale'):
+        is_joy_question = (
+            _looks_joy_question(question_text)
+            or (declared_type and declared_type.startswith('joy_scale'))
+        )
+        if is_joy_question:
             return ('joy_scale', 'ordinal_3pt_joy', make_3pt_joy_map())
         return ('ordinal_scale', 'very_much_not_at_all', make_3pt_joy_map())
 
@@ -273,9 +375,41 @@ def detect_scale(distinct_raws: set, has_numeric: bool, has_is_selected: bool,
     if real_labels.issubset(AGREEMENT_5PT):
         return ('ordinal_scale', 'agree_disagree_5pt', make_5pt_agreement_map())
 
-    # 4d. Frequency
-    if real_labels.issubset(FREQUENCY_LABELS):
-        return ('likelihood_scale', 'frequency_5pt', make_frequency_map())
+    # 4d. Frequency — allow majority match for robustness
+    freq_match = sum(1 for v in real_labels if v in FREQUENCY_LABELS)
+    if real_labels and freq_match / len(real_labels) >= 0.8 and freq_match >= 3:
+        # Build a richer frequency map covering all observed labels
+        full_freq_map = make_frequency_map()
+        full_freq_map.update({
+            'at least once a week': 3.0, 'at least once a week, on average': 3.0,
+            'at least once a month': 2.0, 'at least once a month, on average': 2.0,
+            'at least once a year': 1.0, 'at least once a year, on average': 1.0,
+            'at least twice a month': 2.5,
+            'twice a month': 2.5,
+            'very often': 4.0,
+            # Temporal recency: more recent = higher value (more frequent activity)
+            'today': 4.0, 'this week': 3.5, 'this month': 3.0, 'this year': 2.0,
+            'last year': 1.5, 'within the last few months': 2.5,
+            'within the last 5 years': 1.0, 'more than a year ago': 0.5,
+            'more than 5 years ago': 0.0,
+        })
+        return ('likelihood_scale', 'frequency_5pt', full_freq_map)
+
+    # 4e. 4-pt intensity ("A lot! / Somewhat / Just a little / Not at all")
+    if real_labels.issubset(INTENSITY_4PT):
+        return ('ordinal_scale', 'intensity_4pt', make_4pt_intensity_map())
+
+    # 4f. Comparison-to-prior 5-pt: "more so / less so than a year ago"
+    if real_labels.issubset(MORE_LESS_5PT):
+        return ('ordinal_scale', 'more_less_year_5pt', make_more_less_5pt_map())
+
+    # 4g. Comparison-to-prior 3-pt
+    if real_labels.issubset(MORE_LESS_3PT):
+        return ('ordinal_scale', 'more_less_year_3pt', make_more_less_3pt_map())
+
+    # 4h. Count-4pt ("Not at all / Once / Twice / 3 or more times")
+    if real_labels.issubset(COUNT_4PT):
+        return ('ordinal_scale', 'count_4pt', make_count_4pt_map())
 
     # 7. Demographic battery — exclusively demographic terms
     if real_labels.issubset(DEMOGRAPHIC_MARKERS | SKIP_VALUES) and len(real_labels) <= 10:
@@ -286,9 +420,17 @@ def detect_scale(distinct_raws: set, has_numeric: bool, has_is_selected: bool,
         if len(real_labels) >= 2:
             return ('select_all', None, None)
 
-    # 6. Open-ended text — many distinct values, no structure
-    if len(real_labels) > 20 and not has_is_selected and not has_numeric:
-        return ('SKIP', 'open_ended_verbatim', None)
+    # 6. Open-ended text — many distinct values, no structure. We also
+    # treat declared single_select / joy_scale (without scale_type) as
+    # verbatim when the data doesn't match any known vocab — these are
+    # usually free-response questions (e.g. "What is joyful about pizza?")
+    # whose data belongs in bjl_verbatims, not bjl_scores.
+    if not has_is_selected and not has_numeric:
+        if len(real_labels) > 20:
+            return ('SKIP', 'open_ended_verbatim', None)
+        # Smaller distinct count but declared as a free-response type
+        if declared_type in ('single_select', 'joy_scale') and not declared_scale:
+            return ('SKIP', 'open_ended_verbatim', None)
 
     # Unclassified — log so the human can extend the classifier
     return ('SKIP', 'unclassified', None)
@@ -472,6 +614,7 @@ def score_question(conn, question_id: int, dry_run: bool = False) -> dict:
     qtype, stype, label_map = detect_scale(
         all_raws, has_numeric, has_is_selected,
         meta.get('question_type'), meta.get('scale_type'),
+        question_text=meta.get('question_text'),
     )
 
     if qtype == 'SKIP':
@@ -630,9 +773,12 @@ def main():
                         help='Cap on number of questions processed (testing).')
     args = parser.parse_args()
 
-    db_url = os.environ.get('SUPABASE_DB_URL')
+    # Accept either var name. The existing .env in this repo uses
+    # DATABASE_URL; run_enrichment.py and run_embeddings.py historically
+    # used SUPABASE_DB_URL. Either works.
+    db_url = os.environ.get('SUPABASE_DB_URL') or os.environ.get('DATABASE_URL')
     if not db_url:
-        print('ERROR: set SUPABASE_DB_URL env var', file=sys.stderr)
+        print('ERROR: set SUPABASE_DB_URL or DATABASE_URL env var', file=sys.stderr)
         sys.exit(1)
 
     with psycopg2.connect(db_url) as conn:

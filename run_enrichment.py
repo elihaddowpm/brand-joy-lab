@@ -202,7 +202,7 @@ def main():
     args = parser.parse_args()
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
-    db_url = os.environ.get("SUPABASE_DB_URL")
+    db_url = (os.environ.get("SUPABASE_DB_URL") or os.environ.get("DATABASE_URL"))
     if not api_key:
         print("ERROR: ANTHROPIC_API_KEY environment variable not set", file=sys.stderr)
         sys.exit(1)
