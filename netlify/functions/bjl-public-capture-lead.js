@@ -117,6 +117,22 @@ exports.handler = async (event) => {
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'query_count must be a positive integer' }) };
   }
 
+  // v8.4: visitor_id ties this capture to a bjl_public_sessions row. We
+  // look it up to stamp session_id on the question and (for submits) flip
+  // session.converted=true so analytics can count lead-conversion rates.
+  const visitorId = typeof body.visitor_id === 'string' && body.visitor_id.trim().length > 0
+                      ? body.visitor_id.trim().slice(0, 64)
+                      : null;
+  let sessionId = null;
+  if (visitorId) {
+    const { data: sess } = await supabase
+      .from('bjl_public_sessions')
+      .select('id')
+      .eq('visitor_id', visitorId)
+      .maybeSingle();
+    if (sess) sessionId = sess.id;
+  }
+
   const row = {
     question,
     conversation_synthesis: synthesis,
@@ -127,6 +143,7 @@ exports.handler = async (event) => {
       ? body.matched_insight_slugs.filter(s => typeof s === 'string').slice(0, 6)
       : [],
     category_guess: clean(body.category_guess, 120),
+    session_id: sessionId,                                          // v8.4
   };
 
   if (status === 'submitted') {
@@ -158,6 +175,19 @@ exports.handler = async (event) => {
   if (error) {
     console.error('[bjl-public-capture-lead] insert error:', error);
     return { statusCode: 500, headers, body: JSON.stringify({ error: 'capture failed', detail: error.message }) };
+  }
+
+  // v8.4: flip session.converted=true on submitted leads so analytics
+  // can compute "% of sessions that converted." Declines don't set this.
+  if (status === 'submitted' && sessionId) {
+    const { error: convErr } = await supabase
+      .from('bjl_public_sessions')
+      .update({ converted: true })
+      .eq('id', sessionId);
+    if (convErr) {
+      // Non-fatal — the lead row landed; the conversion flag is a nice-to-have.
+      console.error('[bjl-public-capture-lead] session converted flip failed:', convErr.message);
+    }
   }
 
   // v7.7.1 — Dispatch to the Monday.com push (background function,

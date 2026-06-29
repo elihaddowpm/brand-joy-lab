@@ -95,9 +95,65 @@ exports.handler = async (event) => {
                                   ? body.conversation_synthesis.slice(0, 2000)
                                   : '';
 
+  // v8.4: visitor_id is a UUID assigned by the frontend on first iframe load
+  // and persisted in localStorage. Same browser across visits = same id.
+  // First chat POST inserts a session row; subsequent posts increment its
+  // query_count and bump last_active_at. Lets analytics distinguish "5
+  // visitors asked 8 questions each" from "40 questions from one person."
+  // Optional from the wire (older clients pre-v8.4 may not send), so this
+  // code path is silent if absent.
+  const visitorId = typeof body.visitor_id === 'string' && body.visitor_id.trim().length > 0
+                      ? body.visitor_id.trim().slice(0, 64)
+                      : null;
+  let sessionId = null;
+  if (visitorId) {
+    // Look up existing session by visitor_id
+    const { data: existing, error: lookupErr } = await supabase
+      .from('bjl_public_sessions')
+      .select('id, query_count')
+      .eq('visitor_id', visitorId)
+      .maybeSingle();
+
+    if (lookupErr) {
+      console.error('[bjl-public-chat] session lookup failed (continuing):', lookupErr.message);
+    } else if (existing) {
+      // Returning visitor — bump query_count and last_active_at
+      sessionId = existing.id;
+      const { error: updErr } = await supabase
+        .from('bjl_public_sessions')
+        .update({
+          query_count:            (existing.query_count || 0) + 1,
+          last_active_at:         new Date().toISOString(),
+          conversation_synthesis: conversationSynthesis,
+        })
+        .eq('id', existing.id);
+      if (updErr) console.error('[bjl-public-chat] session update failed:', updErr.message);
+    } else {
+      // New visitor — insert the session row with query_count=1
+      const { data: created, error: insErr } = await supabase
+        .from('bjl_public_sessions')
+        .insert({
+          visitor_id:             visitorId,
+          started_at:             new Date().toISOString(),
+          last_active_at:         new Date().toISOString(),
+          query_count:            1,
+          conversation_synthesis: conversationSynthesis,
+          converted:              false,
+        })
+        .select('id')
+        .single();
+      if (insErr) {
+        console.error('[bjl-public-chat] session insert failed (continuing):', insErr.message);
+      } else if (created) {
+        sessionId = created.id;
+      }
+    }
+  }
+
   // Insert the job row. auth_user_id=null (visitors aren't logged in).
   // `prompt` is NOT NULL on the table; use the question (truncated to a
-  // safe length) as a human-readable summary.
+  // safe length) as a human-readable summary. session_id (v8.4) goes in
+  // extra_context so analytics can join.
   const { data: job, error: insertErr } = await supabase
     .from('bjl_query_jobs')
     .insert({
@@ -107,6 +163,8 @@ exports.handler = async (event) => {
       extra_context: {
         question,
         conversation_synthesis: conversationSynthesis,
+        visitor_id: visitorId,
+        session_id: sessionId,
       },
     })
     .select('job_id')
