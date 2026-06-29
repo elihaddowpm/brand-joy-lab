@@ -37,27 +37,27 @@
     <button class="sample-chip">How do you keep a brand joyful as it scales?</button>
   </div>
 
-  <!-- v7.6 — Data disclaimer. Shown only in the first-load (.is-empty) state.
-       JS hides it the moment the visitor sends a first question, same way it
-       hides the sample chips. The "send a research request" link opens the
-       existing lightbox lead-capture form (Surface B) so the visitor can
-       drop their question into the lead pipeline without typing it into
-       chat first. -->
-  <aside id="data-disclaimer" class="bjl-disclaimer" aria-label="What this tool can't provide">
-    <p class="bjl-disclaimer-head">This tool can&rsquo;t provide:</p>
-    <ul class="bjl-disclaimer-list">
-      <li>Information related to specific brands</li>
-      <li>Demographic information</li>
-    </ul>
-    <p class="bjl-disclaimer-cta">
-      If you&rsquo;re curious, <a href="#" id="disclaimer-research-link"><strong>send a research request</strong></a> to the Brand Joy Lab team.
-    </p>
-  </aside>
-
+  <!-- v8.1: question bar now sits ABOVE the disclaimer. textarea defaults
+       to 3 rows so the question bar is taller and reads as the primary
+       affordance. -->
   <form id="compose" autocomplete="off">
-    <textarea id="question-input" rows="1" placeholder="Ask about consumer joy…" aria-label="Your question"></textarea>
+    <textarea id="question-input" rows="3" placeholder="Ask about consumer joy…" aria-label="Your question"></textarea>
     <button id="send-btn" type="submit" disabled>Send</button>
   </form>
+
+  <!-- v7.6 / v8.1 — Data disclaimer. Lives BELOW the question bar (v8.1)
+       so it doesn't read as a stop sign. Shown only in the first-load
+       (.is-empty) state; JS hides it the moment the visitor sends a
+       first question. Copy condensed to a single muted line; the
+       "send a research request" link opens the lightbox lead-capture
+       form (Surface B) so the visitor can drop their question into
+       the lead pipeline without typing it into chat first. -->
+  <aside id="data-disclaimer" class="bjl-disclaimer" aria-label="What this tool can't provide">
+    <p class="bjl-disclaimer-cta">
+      Specific brands and demographics aren&rsquo;t covered. If you&rsquo;re after either,
+      <a href="#" id="disclaimer-research-link">send a research request</a>.
+    </p>
+  </aside>
 
   <p class="footer-note">Answers from <strong>PETERMAYER&rsquo;s Brand Joy Lab</strong> &middot; New Orleans</p>
 
@@ -604,7 +604,7 @@
 
   // ---- compose behaviours -------------------------------------------
   function refreshSend(){ sendBtn.disabled = input.value.trim() === ""; }
-  function autoGrow(){ input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 120) + "px"; }
+  function autoGrow(){ input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 160) + "px"; }   // v8.1: matches CSS max-height
 
   input.addEventListener("input", function(){ autoGrow(); refreshSend(); });
   input.addEventListener("keydown", function(e){

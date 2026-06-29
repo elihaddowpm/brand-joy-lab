@@ -439,7 +439,11 @@ html, body {
   border: 1.5px solid var(--hairline);
   border-radius: var(--chat-field-radius);
   padding: var(--space-3) var(--space-4);
-  max-height: 120px;
+  /* v8.1: taller default + still expandable. Min keeps the question bar
+     reading as the primary affordance even when empty; max caps growth
+     so very long pastes don't push the compose row off-screen. */
+  min-height: 84px;
+  max-height: 160px;
   transition: border-color var(--dur-fast) var(--ease-out),
               box-shadow var(--dur-fast) var(--ease-out);
 }
@@ -728,56 +732,48 @@ html, body {
    research request" link routes to the lightbox lead-capture form.
    ===================================================================== */
 
+/* v8.1: disclaimer rewritten as a quiet footnote BELOW the question bar.
+   The previous brick palette + bullet list read as a stop sign; now it's
+   a single muted line that gets out of the way. Joy-yellow underline on
+   the link keeps brand color present without shouting. */
 .bjl-disclaimer {
-  margin: 0 var(--chat-pad) var(--space-4);
-  padding: var(--space-4) var(--chat-bubble-pad-x);
-  background: var(--pm-brick-light);
-  border: 1px solid var(--pm-brick);
-  border-radius: var(--radius-lg);
-  color: var(--pm-brick-dark);
-  font-size: 0.9375rem;
-  line-height: 1.5;
+  margin: 0 var(--chat-pad) var(--space-3);
+  padding: var(--space-3) 0 0;
+  color: var(--text-muted);
+  font-size: 0.8125rem;     /* ~13px */
+  line-height: 1.45;
   text-wrap: pretty;
-}
-.bjl-disclaimer .bjl-disclaimer-head {
-  margin: 0 0 var(--space-2);
-  font-family: var(--font-sans);
-  font-weight: var(--fw-bold);
-  color: var(--pm-brick-dark);
-}
-.bjl-disclaimer .bjl-disclaimer-list {
-  margin: 0 0 var(--space-3);
-  padding-left: 1.15rem;
-  color: var(--pm-brick-dark);
-}
-.bjl-disclaimer .bjl-disclaimer-list li {
-  margin: 0 0 2px;
+  border-top: 1px solid var(--border-subtle);
 }
 .bjl-disclaimer .bjl-disclaimer-cta {
   margin: 0;
-  color: var(--pm-brick-dark);
+  color: var(--text-muted);
 }
 .bjl-disclaimer a {
-  color: var(--pm-brick-dark);
+  color: var(--text-body);
   text-decoration: underline;
+  text-decoration-color: var(--pm-joy);
+  text-decoration-thickness: 2px;
   text-underline-offset: 3px;
-  font-weight: var(--fw-bold);
+  font-weight: var(--fw-medium);
 }
-.bjl-disclaimer a:hover { filter: brightness(0.85); }
+.bjl-disclaimer a:hover {
+  color: var(--text-strong);
+  text-decoration-color: var(--pm-joy-dark);
+}
 .bjl-disclaimer a:focus-visible {
   outline: none; border-radius: 3px;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-energy) 35%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--chat-focus) 40%, transparent);
 }
 
 /* Only show in the first-load empty state, same as #sample-questions */
 .chat-frame:not(.is-empty) .bjl-disclaimer { display: none; }
 
-/* Narrow-viewport refinement: tighter padding on phone-width embeds */
+/* Narrow-viewport refinement: tighter spacing on phone-width embeds */
 @container (max-width: 412px) {
   .bjl-disclaimer {
     margin: 0 var(--space-4) var(--space-3);
-    padding: var(--space-3) var(--space-4);
-    font-size: 0.875rem;
+    font-size: 0.75rem;
   }
 }
 
