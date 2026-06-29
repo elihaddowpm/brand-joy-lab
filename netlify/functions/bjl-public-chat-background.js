@@ -234,7 +234,17 @@ async function retrieveScores(question) {
     console.error('[bjl-public-chat] retrieveScores error:', error.message);
     return [];
   }
-  return (data || []).filter(r => r.hit_count >= STRUCTURED_MIN_HITS);
+  // v8.5: defensive against execute_read_sql returning {error, sqlstate}
+  // when the SQL is malformed or rejected. Array.isArray guard ensures
+  // we silently return [] instead of crashing the worker with
+  // (data || []).filter is not a function.
+  if (!Array.isArray(data)) {
+    if (data && data.error) {
+      console.error('[bjl-public-chat] execute_read_sql returned error:', data.error);
+    }
+    return [];
+  }
+  return data.filter(r => r.hit_count >= STRUCTURED_MIN_HITS);
 }
 
 async function retrieveOrdinal(question) {
@@ -268,7 +278,17 @@ async function retrieveOrdinal(question) {
     console.error('[bjl-public-chat] retrieveOrdinal error:', error.message);
     return [];
   }
-  return (data || []).filter(r => r.hit_count >= STRUCTURED_MIN_HITS);
+  // v8.5: defensive against execute_read_sql returning {error, sqlstate}
+  // when the SQL is malformed or rejected. Array.isArray guard ensures
+  // we silently return [] instead of crashing the worker with
+  // (data || []).filter is not a function.
+  if (!Array.isArray(data)) {
+    if (data && data.error) {
+      console.error('[bjl-public-chat] execute_read_sql returned error:', data.error);
+    }
+    return [];
+  }
+  return data.filter(r => r.hit_count >= STRUCTURED_MIN_HITS);
 }
 
 // v6.4 — bjl_public_agreement: 54 live agreement-battery items.
@@ -304,7 +324,17 @@ async function retrieveAgreement(question) {
     console.error('[bjl-public-chat] retrieveAgreement error:', error.message);
     return [];
   }
-  return (data || []).filter(r => r.hit_count >= STRUCTURED_MIN_HITS);
+  // v8.5: defensive against execute_read_sql returning {error, sqlstate}
+  // when the SQL is malformed or rejected. Array.isArray guard ensures
+  // we silently return [] instead of crashing the worker with
+  // (data || []).filter is not a function.
+  if (!Array.isArray(data)) {
+    if (data && data.error) {
+      console.error('[bjl-public-chat] execute_read_sql returned error:', data.error);
+    }
+    return [];
+  }
+  return data.filter(r => r.hit_count >= STRUCTURED_MIN_HITS);
 }
 
 // v6.4 — bjl_public_distributions: 348 live items, with many rows per
@@ -353,7 +383,17 @@ async function retrieveDistributions(question) {
     console.error('[bjl-public-chat] retrieveDistributions error:', error.message);
     return [];
   }
-  return (data || []).filter(r => r.hit_count >= STRUCTURED_MIN_HITS);
+  // v8.5: defensive against execute_read_sql returning {error, sqlstate}
+  // when the SQL is malformed or rejected. Array.isArray guard ensures
+  // we silently return [] instead of crashing the worker with
+  // (data || []).filter is not a function.
+  if (!Array.isArray(data)) {
+    if (data && data.error) {
+      console.error('[bjl-public-chat] execute_read_sql returned error:', data.error);
+    }
+    return [];
+  }
+  return data.filter(r => r.hit_count >= STRUCTURED_MIN_HITS);
 }
 
 // v6.9 — true global extremes (dedup-aware).
@@ -417,7 +457,7 @@ async function retrieveGlobalExtremes() {
   }
   const highest = [];
   const lowest  = [];
-  for (const r of (data || [])) {
+  for (const r of (Array.isArray(data) ? data : [])) {
     if (r.extreme === 'highest') highest.push(r);
     else if (r.extreme === 'lowest') lowest.push(r);
   }
