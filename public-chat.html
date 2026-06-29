@@ -127,6 +127,38 @@
   var lightbox = document.getElementById("lightbox");
   var frame    = document.getElementById("chatFrame");
 
+  // v8.4: stable visitor identity. The same browser across visits / iframe
+  // reloads keeps the same visitor_id so the backend can count unique
+  // users and per-visitor question volume. UUIDv4 generated client-side,
+  // persisted in localStorage on this iframe's origin (joylab.peteramayer
+  // .com). NOT a tracking cookie — purely a session-grouping key for
+  // analytics; never tied to identity unless the visitor submits the lead
+  // form. Falls back to a fresh per-session UUID if localStorage is
+  // disabled (private browsing) — analytics still works, just can't
+  // collapse repeat visits.
+  var LS_KEY_VISITOR = "bjl_visitor_id";
+  function getOrCreateVisitorId(){
+    function makeUuid(){
+      if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
+      // Fallback for older browsers: v4-like UUID from Math.random
+      return ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, function(c){
+        return (c ^ Math.random() * 16 >> c/4).toString(16);
+      });
+    }
+    try {
+      var existing = window.localStorage.getItem(LS_KEY_VISITOR);
+      if (existing && existing.length >= 16) return existing;
+      var fresh = makeUuid();
+      window.localStorage.setItem(LS_KEY_VISITOR, fresh);
+      return fresh;
+    } catch (_) {
+      // Private browsing / storage disabled — per-load id, no persistence.
+      if (!window.__bjlVisitorIdMem) window.__bjlVisitorIdMem = makeUuid();
+      return window.__bjlVisitorIdMem;
+    }
+  }
+  var VISITOR_ID = getOrCreateVisitorId();
+
   // Session state (lives only as long as the iframe stays open).
   var session = {
     pending:                    false,
@@ -358,6 +390,7 @@
       query_count:            session.queryCount,
       matched_insight_slugs:  session.lastClosestSlugs,
       category_guess:         session.lastCategoryGuess,
+      visitor_id:             VISITOR_ID,                          // v8.4
     };
   }
 
@@ -568,6 +601,7 @@
       body:    JSON.stringify({
         question:               text,
         conversation_synthesis: session.conversationSynthesis,
+        visitor_id:             VISITOR_ID,                       // v8.4
       }),
     }).then(function(rsp){
       if (!rsp.ok){
