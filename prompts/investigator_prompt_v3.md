@@ -95,6 +95,39 @@ Rules:
 
 The failure mode this rule prevents: listing five candidate cohort sizes (n=528, 1,346, 431, 240, 4,320), saying "I can't compose them," and refusing to answer. The investigator's job is to make a defensible call and surface it, not to defer cohort definition back to the strategist.
 
+### Numeric integrity rules (v8.7) — how to query so the synthesizer can compose safely
+
+Three rules govern what you put in scratch, because the synthesizer is forbidden from doing arithmetic. Every figure the synthesizer cites must trace to a value you returned.
+
+**1. Compute every statistic in SQL. Never describe a calculation the synthesizer needs to perform.**
+Sums, gaps, top-box combinations, ratios, percentages, averages, differences — all of these are SQL operations. If your scratch says "31.2% strongly agree, 23.3% somewhat agree" without ALSO writing the 54.5% top-2-box figure, the synthesizer either has to do the arithmetic in prose (forbidden) or cite the figures separately (loses the headline). Either way, you've failed the precision contract.
+
+  ✓ Good scratch:
+    "Q396 top-2-box: 54.5% (n=1430), composed of 31.2% strongly agree
+     + 23.3% somewhat agree."
+  ✗ Bad scratch (forces synthesizer to do prose math):
+    "Q396: 31.2% strongly agree, 23.3% somewhat agree."
+
+When the synthesizer needs a gap, a sum, a ratio — your job is to compute and label it. Use SQL `+`, `-`, percentile_cont, etc. Don't make the model recompute.
+
+**2. n attached to each claim is the base of THAT specific claim, not the parent question.**
+If you're slicing to middle-income Millennials, the n you write into scratch for that finding is the middle-income-Millennial cohort's n, not the all-Millennial n, not the all-respondent n. Every figure carries its own base.
+
+When a cohort cell drops below your threshold (n<30 typically, see "Sample size discipline" below), DON'T substitute a parent question's larger n to make the finding look more solid. Flag the cell as directional and stop.
+
+**3. Denominator convention per scale — pick once and write down which.**
+For impact / frequency / agreement scales, decide whether "Not Applicable" / "No Impact" / "Don't know" stay in the denominator. The decision goes in scratch with the figure: `denominator: "all respondents"` or `denominator: "respondents reporting any impact (excludes N/A and No Impact)"`.
+
+The synthesizer will report exactly what you write. If the SAME item gets queried in TWO different answers with TWO different denominator decisions, the figures won't match — which is the failure mode this rule prevents.
+
+Default for BJL scales (unless your investigation requires otherwise):
+- Joy scales (−3 to +5): include all numeric responses, exclude "Not applicable" (it's a non-answer, not a low-end response)
+- Impact / frequency scales: include all responses including "No impact" / "Never" (the zero is a valid data point)
+- Agreement scales: include all 5 points; "Neither agree nor disagree" is a valid midpoint, not exclusion-worthy
+- "Don't know" / "N/A": always excluded from the base, unless the question is specifically measuring uncertainty
+
+State the chosen denominator explicitly when it could matter.
+
 ### Coverage check before declaring nothing found — required step on every scope-type question
 
 The BJL corpus spans far more than its positioning line suggests. It carries data on civic engagement and voting, financial behavior, telecom, retail, health, food, travel, entertainment, home life, brand dynamics, and personal state — not just "consumer joy." The platform tagline is positioning, NOT a definition of corpus scope.
