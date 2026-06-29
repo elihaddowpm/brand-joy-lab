@@ -4844,7 +4844,7 @@ const JoyMapMode = () => {
  * ========================================================================= */
 
 const PublicCorpusMode = () => {
-  const [tab, setTab] = useState('insights');  // 'insights' | 'questions'
+  const [tab, setTab] = useState('insights');  // 'insights' | 'questions' | 'analytics'
   const [insights, setInsights] = useState([]);
   const [questions, setQuestions] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -4933,6 +4933,9 @@ const PublicCorpusMode = () => {
         <button className={`btn ${tab === 'questions' ? 'primary' : 'ghost'}`} onClick={() => setTab('questions')}>
           Captured questions · {newCount} new
         </button>
+        <button className={`btn ${tab === 'analytics' ? 'primary' : 'ghost'}`} onClick={() => setTab('analytics')}>
+          Analytics
+        </button>
         <button className="btn ghost" onClick={reload} disabled={loading}>{loading ? 'Loading…' : 'Refresh'}</button>
         {tab === 'insights' && (
           <PromoteToPublicButton defaults={{
@@ -4997,9 +5000,145 @@ const PublicCorpusMode = () => {
           ))}
         </div>
       )}
+
+      {tab === 'analytics' && <PublicCorpusAnalytics />}
     </div>
   );
 };
+
+// v8.6 — Public chat analytics tab. Reads the
+// bjl_public_chat_analytics_summary + bjl_public_chat_analytics_daily
+// views via bjl-public-corpus?action=analytics. Lifetime + 7d + 30d
+// rollup tiles on top; daily table below; manual refresh + CSV export.
+const PublicCorpusAnalytics = () => {
+  const [data, setData] = useState({ summary: {}, daily: [] });
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [lastLoad, setLastLoad] = useState(null);
+
+  const reload = async () => {
+    setLoading(true); setError(null);
+    try {
+      const r = await fetch('/.netlify/functions/bjl-public-corpus?action=analytics', authedFetchInit());
+      if (!r.ok) throw new Error(`load failed (${r.status})`);
+      const j = await r.json();
+      setData({ summary: j.summary || {}, daily: j.daily || [] });
+      setLastLoad(new Date());
+    } catch (err) { setError(String(err.message || err)); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { reload(); }, []);
+
+  const fmt = v => (v == null ? '—' : Number(v).toLocaleString());
+  const pct = v => (v == null ? '—' : `${Number(v).toFixed(1)}%`);
+
+  const downloadCsv = () => {
+    if (!data.daily || data.daily.length === 0) return;
+    const header = ['day','unique_visitors','total_queries','converted_visitors','leads_submitted','leads_declined','conversion_rate_pct'];
+    const rows = data.daily.map(d => header.map(k => {
+      const v = d[k];
+      if (v == null) return '';
+      const s = String(v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    }).join(','));
+    const csv = [header.join(','), ...rows].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `bjl-public-chat-analytics-${new Date().toISOString().slice(0,10)}.csv`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  if (error) return <div className="joy-map-error">Error: {error}</div>;
+  if (loading && !lastLoad) return <div className="public-corpus-empty">Loading analytics…</div>;
+
+  const s = data.summary || {};
+
+  return (
+    <div className="public-corpus-analytics">
+      <div className="analytics-toolbar">
+        <span className="analytics-updated">
+          {lastLoad ? `Updated ${lastLoad.toLocaleTimeString()}` : ''}
+        </span>
+        <button className="btn ghost" disabled={loading} onClick={reload}>{loading ? 'Refreshing…' : 'Refresh'}</button>
+        <button className="btn ghost" disabled={!data.daily || data.daily.length === 0} onClick={downloadCsv}>Export CSV</button>
+      </div>
+
+      <div className="analytics-tile-grid">
+        <AnalyticsTile label="Unique visitors" rows={[
+          { k: 'Lifetime', v: fmt(s.lifetime_visitors) },
+          { k: 'Last 30 days', v: fmt(s.visitors_30d) },
+          { k: 'Last 7 days',  v: fmt(s.visitors_7d) },
+        ]} />
+        <AnalyticsTile label="Questions asked" rows={[
+          { k: 'Lifetime', v: fmt(s.lifetime_queries) },
+          { k: 'Last 30 days', v: fmt(s.queries_30d) },
+          { k: 'Last 7 days',  v: fmt(s.queries_7d) },
+        ]} />
+        <AnalyticsTile label="Leads submitted" rows={[
+          { k: 'Lifetime', v: fmt(s.lifetime_leads_submitted) },
+          { k: 'Last 30 days', v: fmt(s.leads_submitted_30d) },
+          { k: 'Last 7 days',  v: fmt(s.leads_submitted_7d) },
+        ]} />
+        <AnalyticsTile label="Conversion rate" rows={[
+          { k: 'Lifetime', v: pct(s.lifetime_conversion_rate_pct) },
+          { k: 'Last 30 days', v: pct(s.conversion_rate_30d_pct) },
+          { k: 'Last 7 days',  v: pct(s.conversion_rate_7d_pct) },
+        ]} />
+        <AnalyticsTile label="Engagement per visitor" rows={[
+          { k: 'Mean questions',   v: fmt(s.mean_queries_per_visitor) },
+          { k: 'Median questions', v: fmt(s.median_queries_per_visitor) },
+          { k: 'Max one visitor',  v: fmt(s.max_queries_one_visitor) },
+        ]} />
+      </div>
+
+      <div className="analytics-section-title">Daily — last 30 days</div>
+      {data.daily.length === 0 ? (
+        <div className="public-corpus-empty">No daily activity yet.</div>
+      ) : (
+        <table className="analytics-daily-table">
+          <thead>
+            <tr>
+              <th>Day</th>
+              <th>Visitors</th>
+              <th>Questions</th>
+              <th>Leads submitted</th>
+              <th>Leads declined</th>
+              <th>Converted</th>
+              <th>Conversion %</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.daily.map(d => (
+              <tr key={d.day}>
+                <td>{d.day}</td>
+                <td>{fmt(d.unique_visitors)}</td>
+                <td>{fmt(d.total_queries)}</td>
+                <td>{fmt(d.leads_submitted)}</td>
+                <td>{fmt(d.leads_declined)}</td>
+                <td>{fmt(d.converted_visitors)}</td>
+                <td>{pct(d.conversion_rate_pct)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+};
+
+const AnalyticsTile = ({ label, rows }) => (
+  <div className="analytics-tile">
+    <div className="analytics-tile-label">{label}</div>
+    {rows.map((r, i) => (
+      <div key={i} className="analytics-tile-row">
+        <span className="analytics-tile-k">{r.k}</span>
+        <span className="analytics-tile-v">{r.v}</span>
+      </div>
+    ))}
+  </div>
+);
 
 const PublicInsightCard = ({ insight, editing, busy, onEdit, onCancelEdit, onSave, onTogglePublish, onDelete }) => {
   const [draft, setDraft] = useState(insight);

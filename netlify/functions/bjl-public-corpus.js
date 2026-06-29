@@ -143,6 +143,23 @@ exports.handler = async (event) => {
         const [insights, questions] = await Promise.all([listInsights(), listQuestions()]);
         return jsonResponse(200, { insights, questions });
       }
+      if (queryAction === 'analytics') {
+        // v8.6 — public chat analytics. Reads the two views created in v8.4.
+        // summary: single-row rollup (lifetime / 7d / 30d).
+        // daily: one row per UTC day for the last 30 days.
+        const [summaryRes, dailyRes] = await Promise.all([
+          supabase.from('bjl_public_chat_analytics_summary').select('*').maybeSingle(),
+          supabase.from('bjl_public_chat_analytics_daily').select('*')
+                  .gte('day', new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10))
+                  .order('day', { ascending: false }),
+        ]);
+        if (summaryRes.error) return jsonResponse(500, { error: 'analytics summary load failed', detail: summaryRes.error.message });
+        if (dailyRes.error)   return jsonResponse(500, { error: 'analytics daily load failed',   detail: dailyRes.error.message });
+        return jsonResponse(200, {
+          summary: summaryRes.data || {},
+          daily:   dailyRes.data || [],
+        });
+      }
       return jsonResponse(400, { error: `unknown GET action: ${queryAction}` });
     } catch (err) {
       console.error('[bjl-public-corpus] GET error:', err);
