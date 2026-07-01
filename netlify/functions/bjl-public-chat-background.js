@@ -1013,6 +1013,10 @@ exports.handler = async (event) => {
       lead_capture_trigger_source:     llmResult.lead_capture_trigger_source || null,
       closest_insight_slugs:           closestInsightSlugs,
       category_guess:                  categoryGuess,
+      // v9.5 — record which answer model actually served the request so we
+      // can distinguish Sonnet vs Opus runs directly in bjl_query_jobs. The
+      // env var BJL_ANSWER_MODEL overrides the default at runtime.
+      model_used:                      ANSWER_MODEL,
       // v9.2 — synthesizer diagnostics preserved to the DB (frontend
       // ignores unknown fields). Lets us inspect parse-failure drift in
       // bjl_query_jobs without digging through Netlify logs.
