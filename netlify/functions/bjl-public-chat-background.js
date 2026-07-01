@@ -43,7 +43,7 @@ const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
 const PROMPTS = require('./_prompts_bundle.json');
 
 const SCOPE_MODEL    = 'claude-haiku-4-5-20251001';
-const ANSWER_MODEL   = 'claude-sonnet-4-6';
+const ANSWER_MODEL   = process.env.BJL_ANSWER_MODEL || 'claude-sonnet-4-6';
 const EMBED_MODEL    = 'text-embedding-3-small';
 
 const SEMANTIC_DISTANCE_THRESHOLD = 0.55;  // cosine distance; lower is closer. tune live.
@@ -299,6 +299,25 @@ function mergeScoreRows(tokenRows, semanticRows) {
     }
   }
   return Array.from(byKey.values()).slice(0, PER_LAYER_LIMITS.scores * 2);
+}
+
+// v9: battery-level retrieval. Pulls the most relevant thematic "why / how
+// important / reasons / describe / how often" grids IN FULL, so the synthesizer
+// can read a whole ranking and call out the high and low ends. This is what
+// item-level retrieval structurally cannot do (the deciding item can rank 100+
+// by similarity). Omnibus joy lists are excluded inside the SQL function.
+async function retrieveThematicBatteries(vecLit) {
+  const sql = `
+    SELECT battery, battery_rank, battery_distance,
+           item_name, joy_index, n, top_response, top_pct, scale_type
+    FROM retrieve_thematic_batteries(${vecLit}, 3, 12)
+  `;
+  const { data, error } = await supabase.rpc('execute_read_sql', { query_text: sql });
+  if (error) {
+    console.error('[bjl-public-chat] retrieveThematicBatteries error:', error.message);
+    return [];
+  }
+  return Array.isArray(data) ? data : [];
 }
 
 async function retrieveOrdinal(question) {
@@ -641,32 +660,53 @@ async function retrieve(question) {
     ? retrieveScoresSemantic(vecLit)
     : Promise.resolve([]);
 
+  // v9: full thematic batteries, the layer that carries cross-item insight.
+  const batteriesPromise = semanticAvailable
+    ? retrieveThematicBatteries(vecLit)
+    : Promise.resolve([]);
+
   const semanticPromises = semanticAvailable
     ? [retrieveLawsSemantic(vecLit), retrieveInsightsSemantic(vecLit), retrieveTruthsSemantic(vecLit)]
     : [Promise.resolve([]), retrieveInsightsTokenFallback(question), Promise.resolve([])];
 
-  const [scoresTok, ordinal, agreement, distributions, globalExtremes, scoresSem, laws, insights, truths] =
-    await Promise.all([...structuredPromises, scoresSemanticPromise, ...semanticPromises]);
+  const [scoresTok, ordinal, agreement, distributions, globalExtremes, scoresSem, batteryRows, laws, insights, truths] =
+    await Promise.all([...structuredPromises, scoresSemanticPromise, batteriesPromise, ...semanticPromises]);
 
   // v9: merge token + semantic score hits into one deduped list, so the
   // synthesizer sees the union of keyword and meaning matches over raw scores.
   const scores = mergeScoreRows(scoresTok, scoresSem);
 
-  // v9: a strong score match now also counts toward clearing the answer
+  // v9: group the flat battery rows into whole batteries, each an ordered
+  // ranking the synthesizer can read top-to-bottom.
+  const batteries = (() => {
+    const groups = new Map();
+    for (const r of (batteryRows || [])) {
+      if (!groups.has(r.battery)) {
+        groups.set(r.battery, { battery: r.battery, rank: r.battery_rank, distance: r.battery_distance, items: [] });
+      }
+      groups.get(r.battery).items.push({
+        item_name: r.item_name, joy_index: r.joy_index, n: r.n,
+        top_response: r.top_response, top_pct: r.top_pct,
+      });
+    }
+    return Array.from(groups.values()).sort((a, b) => a.rank - b.rank);
+  })();
+
+  // v9: a strong score OR battery match counts toward clearing the answer
   // threshold, so the tool answers from raw data instead of deflecting when
   // the corpus can speak to the question.
   const bestSemanticDistance = Math.min(
-    ...[...laws, ...insights, ...truths, ...scoresSem]
-      .map(r => Number(r.distance))
+    ...[...laws, ...insights, ...truths, ...scoresSem, ...(batteryRows || [])]
+      .map(r => Number(r.distance ?? r.battery_distance))
       .filter(d => Number.isFinite(d)),
     Infinity,
   );
   const hasStrongSemantic = bestSemanticDistance <= SEMANTIC_DISTANCE_THRESHOLD;
   const hasStrongStructured =
-    (scores.length + ordinal.length + agreement.length + distributions.length) > 0;
+    (scores.length + ordinal.length + agreement.length + distributions.length + batteries.length) > 0;
 
   return {
-    scores, ordinal, agreement, distributions, laws, insights, truths,
+    scores, ordinal, agreement, distributions, batteries, laws, insights, truths,
     global_extremes: globalExtremes,    // v6.9 — always available; the synthesizer reaches for it on superlative questions
     semantic_available: semanticAvailable,
     best_semantic_distance: Number.isFinite(bestSemanticDistance) ? bestSemanticDistance : null,
@@ -688,6 +728,16 @@ function buildRetrievedPayloadForLLM(retrieved) {
       joy_index: r.joy_index,
       n: r.n,
       question_type: r.question_type,
+    })),
+    batteries: (retrieved.batteries || []).map(b => ({
+      battery: b.battery,
+      items: b.items.map(i => ({
+        item_name: i.item_name,
+        joy_index: i.joy_index,
+        top_response: i.top_response,
+        top_pct: i.top_pct,
+        n: i.n,
+      })),
     })),
     ordinal: retrieved.ordinal.map(r => ({
       item_id: r.item_id,
