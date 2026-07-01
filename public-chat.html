@@ -8,14 +8,32 @@
 <link rel="icon" type="image/png" sizes="64x64" href="assets/bjl_favicon_64x64.png">
 <link rel="apple-touch-icon" href="assets/bjl_favicon_64x64.png">
 <link rel="stylesheet" href="bjl-chat.css">
+<!-- v9.7 — mark this as the standalone surface only when opened directly.
+     Inside the iframe embed (hello.peteramayer.com, etc.) window.self !==
+     window.top, so the class is never added and the embed layout is
+     untouched. bjl-chat.css §13 gates all landing rules on this class. -->
+<script>if (window.self === window.top) document.documentElement.classList.add('bjl-standalone');</script>
 </head>
 <body>
 
 <!-- ════════════════════════════════════════════════════════════════
      PRODUCTION MARKUP — the entire iframe body.
      CSS lives in /bjl-chat.css. Brand assets in /assets and /fonts.
+
+     v9.7: wrapped in .bjl-landing for the standalone surface. In the
+     iframe embed the wrapper collapses to display:contents so this
+     markup renders identically to before.
      ════════════════════════════════════════════════════════════════ -->
-<div class="chat-frame is-empty" id="chatFrame">
+<div class="bjl-landing">
+  <div class="bjl-landing-inner">
+
+    <header class="bjl-landing-head">
+      <img class="bjl-landing-wordmark" src="assets/petermayer-wordmark-black.svg" alt="PETERMAYER">
+      <h1 class="bjl-landing-title">Ask anything about <span class="joy">consumer joy</span>.</h1>
+      <p class="bjl-landing-sub">Straight answers from PETERMAYER&rsquo;s Brand Joy Lab &mdash; why people fall for brands, what joy does for the bottom line, and where it&rsquo;s hiding in a category that feels beige.</p>
+    </header>
+
+    <div class="chat-frame is-empty" id="chatFrame">
 
   <header class="chat-header">
     <img class="bjl-wordmark" src="assets/petermayer-wordmark-black.svg" alt="PETERMAYER">
@@ -89,6 +107,12 @@
     </div>
   </div>
 
+    </div>
+    <!-- END .chat-frame -->
+
+    <p class="bjl-landing-foot">© PETERMAYER · New Orleans · <a href="https://www.peteramayer.com">peteramayer.com</a></p>
+
+  </div>
 </div>
 
 <!-- ════════════════════════════════════════════════════════════════

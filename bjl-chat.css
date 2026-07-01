@@ -831,3 +831,88 @@ html, body {
   font-size: 1rem;
   min-height: 72px;
 }
+
+
+/* =====================================================================
+   13 · STANDALONE LANDING WRAPPER  (v9.7)
+   Dormant by default — the Webflow-embedded iframe never sees these
+   rules take effect. A tiny inline script in public-chat.html adds
+   html.bjl-standalone ONLY when window.self === window.top (i.e. the
+   URL is opened directly, not inside an iframe). In the embed, the
+   wrapper elements collapse to display:contents and the chat-frame
+   fills the iframe exactly as before — the embedded view is unchanged.
+   ===================================================================== */
+
+/* --- EMBED DEFAULT: wrapper is transparent, head/foot hidden -------- */
+.bjl-landing,
+.bjl-landing-inner { display: contents; }
+.bjl-landing-head,
+.bjl-landing-foot { display: none; }
+
+/* --- STANDALONE: a centered card on a signature Fern-light page ---- */
+html.bjl-standalone,
+html.bjl-standalone body { height: auto; min-height: 100%; }
+html.bjl-standalone body {
+  margin: 0;
+  background: var(--pm-fern-light);
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  padding: clamp(28px, 5vh, 64px) clamp(16px, 4vw, 40px);
+  font-family: var(--font-text);
+  -webkit-font-smoothing: antialiased;
+}
+html.bjl-standalone ::selection { background: var(--pm-joy); color: var(--pm-iron); }
+
+html.bjl-standalone .bjl-landing,
+html.bjl-standalone .bjl-landing-inner { display: flex; }
+html.bjl-standalone .bjl-landing-inner {
+  flex-direction: column;
+  width: 100%; max-width: 560px;
+  gap: clamp(20px, 3.4vh, 32px);
+}
+
+/* page-level head — separate from, and above, the in-card chat header */
+html.bjl-standalone .bjl-landing-head { display: block; text-align: left; }
+html.bjl-standalone .bjl-landing-wordmark {
+  height: 18px; width: auto; display: block; margin: 0 0 22px;
+}
+html.bjl-standalone .bjl-landing-title {
+  margin: 0; color: var(--pm-iron);
+  font-family: var(--font-sans); font-weight: var(--fw-bold);
+  font-size: clamp(1.75rem, 5.2vw, 2.5rem); line-height: 1.03;
+  letter-spacing: -0.015em; text-wrap: balance;
+}
+html.bjl-standalone .bjl-landing-title .joy { color: inherit; }
+html.bjl-standalone .bjl-landing-sub {
+  margin: 14px 0 0; max-width: 48ch;
+  color: var(--pm-grey-3);
+  font-size: clamp(1rem, 2.4vw, 1.0625rem); line-height: 1.55; text-wrap: pretty;
+}
+
+/* the chat frame becomes a floating card */
+html.bjl-standalone .chat-frame {
+  flex: 0 0 auto; width: 100%;
+  max-width: 560px;                                /* override the 720 cap for the standalone card */
+  height: min(660px, calc(100dvh - 250px));
+  min-height: 440px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 18px;
+  box-shadow: 0 24px 60px rgba(30,38,32,0.18), 0 2px 6px rgba(30,38,32,0.08);
+  overflow: hidden;
+}
+
+/* page-level credit beneath the card */
+html.bjl-standalone .bjl-landing-foot {
+  display: block; margin: 0; text-align: center;
+  font-size: 0.8125rem; letter-spacing: 0.02em;
+  color: var(--text-muted);
+}
+html.bjl-standalone .bjl-landing-foot a {
+  color: inherit; text-decoration: underline; text-underline-offset: 3px;
+}
+html.bjl-standalone .bjl-landing-foot a:hover { color: var(--text-strong); }
+
+/* tighten the page head on short standalone viewports */
+@media (max-height: 720px) {
+  html.bjl-standalone .bjl-landing-sub { display: none; }
+}
