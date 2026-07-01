@@ -140,7 +140,7 @@ async function classifyScope(question) {
   "scope": "in_corpus_scope" | "brand_specific" | "live_cut_requested" | "out_of_scope"
 
 Rules:
-- "brand_specific": names a specific brand, product, or company and asks for analysis of THAT entity (e.g., "How do Disney visitors feel?"). General category questions are NOT brand_specific.
+- "brand_specific": names a SPECIFIC, real brand/company/product by name AND asks for analysis of THAT named entity (e.g., "How do Disney visitors feel?"). This is narrow. A visitor describing themselves ("I run a CPG brand", "my product", "our company") has NOT named a brand — classify that in_corpus_scope. General category, strategy, positioning, and "how do I..." questions are in_corpus_scope, never brand_specific.
 - "live_cut_requested": custom analysis, cross-tab, or "give me the breakdown by X" request.
 - "out_of_scope": not about consumer joy or behavior at all.
 - "in_corpus_scope": everything else.
@@ -208,25 +208,34 @@ async function retrieveScores(question) {
   const tokens = tokenize(question);
   if (tokens.length === 0) return [];
 
-  // Build OR-of-ILIKE for each token across the three searchable columns.
-  // Score = number of distinct tokens that hit anywhere on the row.
-  // 795 rows total — full scan is fine.
+  // v9: repointed from the curated bjl_public_scores snapshot (795 rows) to the
+  // live public-safe slice of the full scored corpus (bjl_scores_public_safe,
+  // ~1,244 rows and growing). The view is pre-gated, so no public_safe filter is
+  // needed. Searchable surface: item_name, question, category_key.
   const conds = tokens.map(t => {
     const tEsc = sqlEscape(t);
-    return `(item_name ILIKE '%${tEsc}%' OR question_label ILIKE '%${tEsc}%' OR category ILIKE '%${tEsc}%')`;
+    return `(item_name ILIKE '%${tEsc}%' OR question ILIKE '%${tEsc}%' OR category_key ILIKE '%${tEsc}%')`;
   });
   const scoreExpr = tokens.map(t => {
     const tEsc = sqlEscape(t);
-    return `(CASE WHEN (item_name ILIKE '%${tEsc}%' OR question_label ILIKE '%${tEsc}%' OR category ILIKE '%${tEsc}%') THEN 1 ELSE 0 END)`;
+    return `(CASE WHEN (item_name ILIKE '%${tEsc}%' OR question ILIKE '%${tEsc}%' OR category_key ILIKE '%${tEsc}%') THEN 1 ELSE 0 END)`;
   }).join(' + ');
 
+  // DISTINCT ON collapses the same concept appearing under multiple question
+  // batteries; the outer query restores relevance ordering after the dedup.
   const sql = `
-    SELECT item_id, item_name, question_label, category, joy_index, n, question_type,
-           (${scoreExpr})::int AS hit_count
-    FROM bjl_public_scores
-    WHERE public_safe = true
-      AND (${conds.join(' OR ')})
-    ORDER BY hit_count DESC, n DESC NULLS LAST
+    SELECT * FROM (
+      SELECT DISTINCT ON (item_name, joy_index, n)
+             question_id AS item_id, item_name,
+             question AS question_label, category_key AS category,
+             joy_index, n, question_type,
+             (${scoreExpr})::int AS hit_count
+      FROM bjl_scores_public_safe
+      WHERE (${conds.join(' OR ')})
+      ORDER BY item_name, joy_index, n
+    ) d
+    WHERE d.hit_count >= ${STRUCTURED_MIN_HITS}
+    ORDER BY d.hit_count DESC, d.n DESC NULLS LAST
     LIMIT ${PER_LAYER_LIMITS.scores}
   `;
   const { data, error } = await supabase.rpc('execute_read_sql', { query_text: sql });
@@ -245,6 +254,51 @@ async function retrieveScores(question) {
     return [];
   }
   return data.filter(r => r.hit_count >= STRUCTURED_MIN_HITS);
+}
+
+// v9: semantic search over the live public-safe scored corpus. This is the
+// capability the public tool was missing — meaning-based retrieval over raw
+// scores, not token match and not the curated card layer.
+async function retrieveScoresSemantic(vecLit) {
+  const sql = `
+    SELECT * FROM (
+      SELECT DISTINCT ON (item_name, joy_index, n)
+             question_id AS item_id, item_name,
+             question AS question_label, category_key AS category,
+             joy_index, n, question_type,
+             (embedding <=> ${vecLit})::float AS distance
+      FROM bjl_scores_public_safe
+      WHERE embedding IS NOT NULL
+      ORDER BY item_name, joy_index, n, embedding <=> ${vecLit}
+    ) d
+    ORDER BY d.distance
+    LIMIT ${PER_LAYER_LIMITS.scores}
+  `;
+  const { data, error } = await supabase.rpc('execute_read_sql', { query_text: sql });
+  if (error) {
+    console.error('[bjl-public-chat] retrieveScoresSemantic error:', error.message);
+    return [];
+  }
+  return Array.isArray(data) ? data : [];
+}
+
+// v9: union token + semantic score rows, deduped by concept + reading
+// (item_name + joy_index + n). Token rows carry hit_count; semantic-only rows
+// carry distance. Token hits are kept first, then semantic-only additions.
+function mergeScoreRows(tokenRows, semanticRows) {
+  const byKey = new Map();
+  const keyOf = r => `${(r.item_name || '').toLowerCase().trim()}|${r.joy_index}|${r.n}`;
+  for (const r of (tokenRows || [])) byKey.set(keyOf(r), r);
+  for (const r of (semanticRows || [])) {
+    const k = keyOf(r);
+    if (byKey.has(k)) {
+      const existing = byKey.get(k);
+      if (existing.distance == null && r.distance != null) existing.distance = r.distance;
+    } else {
+      byKey.set(k, r);
+    }
+  }
+  return Array.from(byKey.values()).slice(0, PER_LAYER_LIMITS.scores * 2);
 }
 
 async function retrieveOrdinal(question) {
@@ -426,10 +480,10 @@ async function retrieveGlobalExtremes() {
   const sql = `
     WITH deduped AS (
       SELECT DISTINCT ON (LOWER(TRIM(item_name)))
-        item_id, item_name, question_label, category, joy_index, n
-      FROM bjl_public_scores
-      WHERE public_safe = true
-        AND joy_index IS NOT NULL
+        question_id AS item_id, item_name, question AS question_label,
+        category_key AS category, joy_index, n
+      FROM bjl_scores_public_safe
+      WHERE joy_index IS NOT NULL
       ORDER BY LOWER(TRIM(item_name)), n DESC NULLS LAST
     ),
     top_n AS (
@@ -570,6 +624,7 @@ async function retrieveInsightsTokenFallback(question) {
 async function retrieve(question) {
   const queryEmbedding = await embedQuery(question);
   const semanticAvailable = !!queryEmbedding;
+  const vecLit = semanticAvailable ? vectorLiteral(queryEmbedding) : null;
 
   const structuredPromises = [
     retrieveScores(question),
@@ -579,32 +634,29 @@ async function retrieve(question) {
     retrieveGlobalExtremes(),          // v6.9 — always-on top/bottom N for superlative grounding
   ];
 
-  let semanticPromises;
-  if (semanticAvailable) {
-    const vecLit = vectorLiteral(queryEmbedding);
-    semanticPromises = [
-      retrieveLawsSemantic(vecLit),
-      retrieveInsightsSemantic(vecLit),
-      retrieveTruthsSemantic(vecLit),
-    ];
-  } else {
-    // Token fallback for the insights layer only — laws + truths have no
-    // searchable text columns that ILIKE would help on.
-    semanticPromises = [
-      Promise.resolve([]),
-      retrieveInsightsTokenFallback(question),
-      Promise.resolve([]),
-    ];
-  }
+  // v9: semantic search over the live scored corpus runs alongside the existing
+  // semantic layers. Without embeddings, fall back to token retrieval on
+  // insights (laws + truths have no ILIKE-searchable text).
+  const scoresSemanticPromise = semanticAvailable
+    ? retrieveScoresSemantic(vecLit)
+    : Promise.resolve([]);
 
-  const [scores, ordinal, agreement, distributions, globalExtremes, laws, insights, truths] = await Promise.all([
-    ...structuredPromises,
-    ...semanticPromises,
-  ]);
+  const semanticPromises = semanticAvailable
+    ? [retrieveLawsSemantic(vecLit), retrieveInsightsSemantic(vecLit), retrieveTruthsSemantic(vecLit)]
+    : [Promise.resolve([]), retrieveInsightsTokenFallback(question), Promise.resolve([])];
 
-  // Does anything clear the answer threshold?
+  const [scoresTok, ordinal, agreement, distributions, globalExtremes, scoresSem, laws, insights, truths] =
+    await Promise.all([...structuredPromises, scoresSemanticPromise, ...semanticPromises]);
+
+  // v9: merge token + semantic score hits into one deduped list, so the
+  // synthesizer sees the union of keyword and meaning matches over raw scores.
+  const scores = mergeScoreRows(scoresTok, scoresSem);
+
+  // v9: a strong score match now also counts toward clearing the answer
+  // threshold, so the tool answers from raw data instead of deflecting when
+  // the corpus can speak to the question.
   const bestSemanticDistance = Math.min(
-    ...[...laws, ...insights, ...truths]
+    ...[...laws, ...insights, ...truths, ...scoresSem]
       .map(r => Number(r.distance))
       .filter(d => Number.isFinite(d)),
     Infinity,
