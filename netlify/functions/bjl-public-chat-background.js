@@ -840,31 +840,50 @@ async function composeAnswer({ question, scope, retrieved, conversation_synthesi
     JSON.stringify(buildRetrievedPayloadForLLM(retrieved), null, 2),
   ].join('\n');
 
-  const rsp = await anthropic.messages.create({
-    model: ANSWER_MODEL,
-    max_tokens: 900,
-    system: [{ type: 'text', text: systemPrompt }],
-    messages: [{ role: 'user', content: userMessage }],
-  });
-  const text = (rsp.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
+  // v9.2 — one call, one retry on parse failure. Sonnet occasionally leaks
+  // a preamble sentence or emits a fenced code block; the tolerant parser
+  // catches most of it, but not all. The retry pushes the model to emit
+  // pure JSON before we fall back to the capture surface.
+  async function callOnce(strict) {
+    const suffix = strict
+      ? '\n\nCRITICAL: Respond with a SINGLE JSON object and NOTHING ELSE. No preamble, no explanation, no markdown code fences. The first character of your response must be `{` and the last must be `}`.'
+      : '';
+    const rsp = await anthropic.messages.create({
+      model: ANSWER_MODEL,
+      max_tokens: 900,
+      system: [{ type: 'text', text: systemPrompt + suffix }],
+      messages: [{ role: 'user', content: userMessage }],
+    });
+    return (rsp.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
+  }
 
   // v7.2.1 — tolerant parse. The strict JSON.parse here was the cause
   // of intermittent "Something hiccuped" failures: Sonnet occasionally
   // leaked a preamble sentence before the JSON object, and the worker
   // surfaced a JSON.parse error up to the frontend instead of an
   // answer the visitor could read.
+  const text = await callOnce(false);
   const parsed = parseLLMJSON(text);
   if (parsed && typeof parsed === 'object' && typeof parsed.answer === 'string' && parsed.answer.trim().length > 0) {
     return parsed;
   }
 
-  // Total parse failure or empty answer. Log the raw output (first 500
-  // chars) so we can diagnose drift, then return a graceful fallback
-  // finding so the visitor still gets a coherent response + the
-  // lead-capture surface. The job completes with status='complete'
-  // rather than 'error' — the frontend renders this as a Path-B-style
-  // bot bubble + the inline lead form, not as a hiccups error.
-  console.error('[bjl-public-chat-background] synthesizer returned unparseable output; falling back to graceful capture. Raw output (first 500 chars):', text.slice(0, 500));
+  // v9.2 — first attempt unparseable. Log the head, then retry once with
+  // an explicit "JSON only" nudge in the system prompt.
+  console.error('[bjl-public-chat-background] synthesizer output unparseable on attempt 1; retrying with strict JSON directive. Raw head (first 500 chars):', text.slice(0, 500));
+  const text2 = await callOnce(true);
+  const parsed2 = parseLLMJSON(text2);
+  if (parsed2 && typeof parsed2 === 'object' && typeof parsed2.answer === 'string' && parsed2.answer.trim().length > 0) {
+    parsed2._synthesizer_retry_recovered = true;
+    parsed2._synthesizer_raw_head_attempt1 = text.slice(0, 200);
+    return parsed2;
+  }
+
+  // Both attempts failed. Log both raw heads, then return the graceful
+  // fallback finding so the visitor still gets a coherent response + the
+  // lead-capture surface. The job completes with status='complete' —
+  // frontend renders this as a Path-B-style bot bubble + inline lead form.
+  console.error('[bjl-public-chat-background] synthesizer output unparseable on attempt 2 (retry). Raw head (first 500 chars):', text2.slice(0, 500));
   return {
     answer: "PETERMAYER's Brand Joy Lab hit a snag putting that answer together. "
           + "Want to leave the question with us? The team will take a real look and come back to you.",
@@ -874,8 +893,9 @@ async function composeAnswer({ question, scope, retrieved, conversation_synthesi
     updated_conversation_synthesis: conversation_synthesis || '',
     prompt_lead_capture: true,
     lead_capture_trigger_source: 'no_answer',
-    _synthesizer_parse_failed: true,            // internal diagnostic
-    _synthesizer_raw_head: text.slice(0, 200),  // trim head for trace
+    _synthesizer_parse_failed: true,
+    _synthesizer_raw_head_attempt1: text.slice(0, 200),
+    _synthesizer_raw_head_attempt2: text2.slice(0, 200),
   };
 }
 
@@ -986,6 +1006,13 @@ exports.handler = async (event) => {
       lead_capture_trigger_source:     llmResult.lead_capture_trigger_source || null,
       closest_insight_slugs:           closestInsightSlugs,
       category_guess:                  categoryGuess,
+      // v9.2 — synthesizer diagnostics preserved to the DB (frontend
+      // ignores unknown fields). Lets us inspect parse-failure drift in
+      // bjl_query_jobs without digging through Netlify logs.
+      _synthesizer_parse_failed:       !!llmResult._synthesizer_parse_failed,
+      _synthesizer_retry_recovered:    !!llmResult._synthesizer_retry_recovered,
+      _synthesizer_raw_head_attempt1:  llmResult._synthesizer_raw_head_attempt1 || null,
+      _synthesizer_raw_head_attempt2:  llmResult._synthesizer_raw_head_attempt2 || null,
     };
 
     await supabase.from('bjl_query_jobs').update({
