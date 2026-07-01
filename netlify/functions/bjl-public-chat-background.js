@@ -848,9 +848,16 @@ async function composeAnswer({ question, scope, retrieved, conversation_synthesi
     const suffix = strict
       ? '\n\nCRITICAL: Respond with a SINGLE JSON object and NOTHING ELSE. No preamble, no explanation, no markdown code fences. The first character of your response must be `{` and the last must be `}`.'
       : '';
+    // v9.3 — bumped from 900 to 2048. v9.2 diagnostics revealed the
+    // "hit a snag" failure mode was JSON truncation, not preamble
+    // leakage: attempt 2 produced clean `{` … but got cut off before
+    // closing the payload (answer body + rows_used + provenance +
+    // updated_conversation_synthesis in a single JSON blob). The answer
+    // prose is capped by the prompt at ~150 words, so 2048 tokens is
+    // comfortable headroom for the answer + the metadata arrays.
     const rsp = await anthropic.messages.create({
       model: ANSWER_MODEL,
-      max_tokens: 900,
+      max_tokens: 2048,
       system: [{ type: 'text', text: systemPrompt + suffix }],
       messages: [{ role: 'user', content: userMessage }],
     });
