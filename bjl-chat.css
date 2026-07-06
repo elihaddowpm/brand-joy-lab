@@ -410,6 +410,22 @@ html, body {
 .sample-chip:active   { transform: scale(0.96); }
 .sample-chip:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* v9.11 — grounded follow-up chips beneath a bot answer. Aligns like a
+   bot bubble (flex-start) so the visitor's eye reads them as the next
+   move tied to that answer. Tighter top gap than a full turn so they
+   feel attached to the answer, not a new turn. Chips inherit
+   .sample-chip styling; .followup-chip is a size trim + rail-aligned
+   inset to make them read as secondary suggestions rather than
+   primary CTAs. */
+.followup-chips {
+  align-self: flex-start;
+  max-width: 100%;
+  display: flex; flex-wrap: wrap; gap: var(--space-2);
+  margin: calc(var(--chat-turn-gap) * -0.4) 0 0;
+  padding-left: calc(var(--chat-bot-rail) + var(--space-4));
+}
+.followup-chip { font-size: 0.875rem; padding: var(--space-1) var(--space-3); }
+
 /* First-load layout: the empty log is hidden and the chips region becomes
    the (scrollable) body so the compose row stays pinned at the bottom even
    when 5-7 chips overflow a short (480px) frame. JS drops .is-empty once a
