@@ -906,6 +906,35 @@ async function composeAnswer({ question, scope, retrieved, conversation_synthesi
   };
 }
 
+// v9.10: keep only follow-up chips the corpus can actually answer, so a tapped
+// chip never dead-ends. A chip passes if it shares a distinctive word with
+// what we retrieved this turn (that row is in the corpus, so the next turn
+// will find it), otherwise it gets a cheap FTS check against the safe scored
+// corpus. Anything that clears neither is dropped. Caps at three.
+async function groundChips(candidates, retrieved) {
+  const hay = JSON.stringify(buildRetrievedPayloadForLLM(retrieved)).toLowerCase();
+  const STOP = new Set(['what','which','does','do','the','for','and','with','from','that','this','your','you','how','are','is','of','in','to','on','it','joy','people','brand','brands','more','most','when','where','why','who','can','could','would']);
+  const kept = [];
+  const seen = new Set();
+  for (const raw of (Array.isArray(candidates) ? candidates : [])) {
+    if (kept.length >= 3) break;
+    if (typeof raw !== 'string') continue;
+    const chip = raw.trim().replace(/\s+/g, ' ');
+    const key = chip.toLowerCase();
+    if (chip.length < 8 || chip.length > 120 || seen.has(key)) continue;
+    seen.add(key);
+    const words = key.replace(/[^a-z0-9 ]/g, ' ').split(' ').filter(w => w.length > 3 && !STOP.has(w));
+    if (words.some(w => hay.includes(w))) { kept.push(chip); continue; }
+    try {
+      const { data } = await supabase.rpc('execute_read_sql', {
+        query_text: `SELECT 1 FROM public.public_search_scores_fts('${sqlEscape(chip)}', 1) LIMIT 1`,
+      });
+      if (Array.isArray(data) && data.length > 0) kept.push(chip);
+    } catch (_) { /* drop chip on any failure */ }
+  }
+  return kept;
+}
+
 // v6.6: capture-write logic moved out of this endpoint. The frontend now
 // drives lead capture via a dedicated form (inline on no-answer, lightbox
 // after consecutive queries). bjl-public-capture-lead.js is the new
@@ -1003,6 +1032,10 @@ exports.handler = async (event) => {
           .filter(p => p.question || p.item)
       : [];
 
+    // v9.10 — validate synthesizer's follow-up chips against the corpus so a
+    // tapped chip always lands on real data.
+    const chips = await groundChips(llmResult.chips, retrieved);
+
     const finding = {
       answer:                          llmResult.answer || '',
       scope_taken:                     llmResult.scope_taken || scope,
@@ -1013,6 +1046,7 @@ exports.handler = async (event) => {
       lead_capture_trigger_source:     llmResult.lead_capture_trigger_source || null,
       closest_insight_slugs:           closestInsightSlugs,
       category_guess:                  categoryGuess,
+      chips,
       // v9.5 — record which answer model actually served the request so we
       // can distinguish Sonnet vs Opus runs directly in bjl_query_jobs. The
       // env var BJL_ANSWER_MODEL overrides the default at runtime.
