@@ -285,6 +285,30 @@
     log.appendChild(el); scrollLog();
   }
 
+  // v9.11 — render up to three grounded follow-up questions the backend
+  // returned in `chips`. Clicks fire ask() with the chip text; the row
+  // removes itself immediately so chips don't accumulate across turns.
+  // Suppressed when the backend flagged prompt_lead_capture — the
+  // visitor's next move belongs to the form, not to more questions.
+  function addFollowupChips(chips){
+    if (!Array.isArray(chips) || chips.length === 0) return;
+    var el = document.createElement("div");
+    el.className = "followup-chips";
+    chips.forEach(function(text){
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "sample-chip followup-chip";
+      btn.textContent = text;
+      btn.addEventListener("click", function(){
+        if (session.pending) return;
+        if (el.parentNode) el.parentNode.removeChild(el);
+        ask(text);
+      });
+      el.appendChild(btn);
+    });
+    log.appendChild(el); scrollLog();
+  }
+
   function addError(){
     var el = document.createElement("div");
     el.className = "msg msg-error";
@@ -569,13 +593,19 @@
     // Surface A: inline lead form when the backend flags no-answer
     if (data.prompt_lead_capture && !session.leadAlreadySubmitted){
       addInlineLeadForm();
-    } else if (!session.leadAlreadySubmitted
-            && !session.declinedLightbox
-            && session.queryCount >= LIGHTBOX_THRESHOLD_QUERIES
-            && session.queryCount >= session.suppressLightboxUntilQuery
-            && !lightbox.classList.contains("is-open")){
-      // Surface B: lightbox after the consecutive-query threshold
-      setTimeout(openLightbox, 400);
+    } else {
+      // v9.11 — grounded follow-up chips beneath the answer, only when
+      // we're NOT prompting for a lead. Suppressed if the lightbox is
+      // about to open (Surface B) so it doesn't fight the modal.
+      addFollowupChips(Array.isArray(data.chips) ? data.chips : []);
+      if (!session.leadAlreadySubmitted
+          && !session.declinedLightbox
+          && session.queryCount >= LIGHTBOX_THRESHOLD_QUERIES
+          && session.queryCount >= session.suppressLightboxUntilQuery
+          && !lightbox.classList.contains("is-open")){
+        // Surface B: lightbox after the consecutive-query threshold
+        setTimeout(openLightbox, 400);
+      }
     }
 
     session.pending  = false;
