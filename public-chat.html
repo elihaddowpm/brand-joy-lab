@@ -45,7 +45,14 @@
   <div id="chat-log" role="log" aria-live="polite" aria-label="Conversation"></div>
 
   <div id="sample-questions">
-    <p class="bjl-intro">Ask about why people fall for brands, what joy does for the bottom line, or where it&rsquo;s hiding in a category that feels beige. <strong>I&rsquo;ll answer straight.</strong></p>
+    <!-- v9.14 — welcome copy matches the staff Intelligence pane treatment.
+         Headline + tagline anchor the brand promise; the instructional
+         paragraph below tells the visitor what the tool actually answers. -->
+    <header class="bjl-welcome">
+      <h1 class="bjl-welcome-title">Welcome to the Brand Joy Lab.</h1>
+      <p class="bjl-welcome-sub">Built for the curious.</p>
+    </header>
+    <p class="bjl-intro">Ask about why people fall for brands, what joy does for the bottom line, or where it&rsquo;s hiding in a category that feels beige.</p>
     <p class="bjl-prompt">Or start with one of these</p>
     <button class="sample-chip">How does joy drive sales?</button>
     <button class="sample-chip">Where is the unexpected joy in taking a vacation?</button>
@@ -231,15 +238,107 @@
     log.appendChild(el); scrollLog();
   }
 
+  // v9.14 — two-line stage-aware loading bubble. Line 1 anchors the
+  // brand promise ("Thanks for being curious."); line 2 rotates with
+  // the backend pipeline phase surfaced by bjl-public-chat-status.
+  //
+  // Copy map. Every entry keeps line 1 the same and swaps line 2.
+  var LOADING_LINE_2 = {
+    queued:       "The Lab is looking into that\u2026",
+    classifying:  "The Lab is looking into that\u2026",
+    retrieving:   "Reading through what people said\u2026",
+    composing:    "Weighing the sharpest angle\u2026",
+    grounding:    "Weighing the sharpest angle\u2026",
+  };
+  // Minimum time (ms) any given line 2 must stay visible before the UI
+  // is allowed to advance to the next stage. Prevents fast-start
+  // classifying+retrieving from flashing past the reader. Backend
+  // latency is untouched.
+  var LOADING_MIN_DWELL_MS = 2000;
+
+  // Loading-bubble state. Frontend-only; rebuilt each turn.
+  var loadingState = {
+    currentStage: null,
+    lastChangeAt: 0,
+    pendingTimer: null,
+    totalRows:    null,
+  };
+
+  function loadingLine2For(stage, totalRows){
+    var base = LOADING_LINE_2[stage] || LOADING_LINE_2.queued;
+    // Only the composing line has room for a count. Retrieval count
+    // becomes known after retrieve() completes, so we thread it in
+    // once we're actually composing/grounding.
+    if ((stage === "composing" || stage === "grounding")
+        && typeof totalRows === "number" && totalRows > 0){
+      return "Weighing " + totalRows + " findings for the sharpest angle\u2026";
+    }
+    return base;
+  }
+
+  function renderLoadingLine2(){
+    var l = document.getElementById("loading");
+    if (!l) return;
+    var line2El = l.querySelector(".loading-line-2");
+    if (line2El) line2El.textContent = loadingLine2For(loadingState.currentStage, loadingState.totalRows);
+  }
+
   function addLoading(){
+    // Reset state each turn so a previous session's dwell doesn't leak.
+    if (loadingState.pendingTimer){ clearTimeout(loadingState.pendingTimer); loadingState.pendingTimer = null; }
+    loadingState.currentStage = "queued";
+    loadingState.lastChangeAt = Date.now();
+    loadingState.totalRows    = null;
+
     var el = document.createElement("div");
-    el.className = "msg msg-loading";
+    el.className = "msg msg-loading msg-loading--v2";
     el.id = "loading";
     el.setAttribute("aria-label", "Brand Joy Lab is thinking");
-    el.innerHTML = '<span class="dot"></span><span class="dot"></span><span class="dot"></span>';
+    el.innerHTML =
+      '<div class="loading-lines">' +
+        '<div class="loading-line-1">Thanks for being curious.</div>' +
+        '<div class="loading-line-2">' + loadingLine2For("queued", null) + '</div>' +
+      '</div>' +
+      '<div class="loading-dots" aria-hidden="true">' +
+        '<span class="dot"></span><span class="dot"></span><span class="dot"></span>' +
+      '</div>';
     log.appendChild(el); scrollLog();
   }
-  function removeLoading(){ var l = document.getElementById("loading"); if (l) l.remove(); }
+
+  // Called by the poll loop with the latest server-reported stage +
+  // hint. Applies immediately if we've been on the current stage
+  // longer than LOADING_MIN_DWELL_MS; otherwise defers the change
+  // until the dwell has been met, so no state ever blows past the
+  // reader.
+  function updateLoadingStage(stage, hint){
+    var l = document.getElementById("loading");
+    if (!l || !stage) return;
+    if (hint && typeof hint.total_rows === "number") loadingState.totalRows = hint.total_rows;
+
+    if (stage === loadingState.currentStage){
+      renderLoadingLine2();
+      return;
+    }
+    var elapsed = Date.now() - loadingState.lastChangeAt;
+    var applyChange = function(){
+      loadingState.currentStage = stage;
+      loadingState.lastChangeAt = Date.now();
+      loadingState.pendingTimer = null;
+      renderLoadingLine2();
+    };
+    if (loadingState.pendingTimer){ clearTimeout(loadingState.pendingTimer); loadingState.pendingTimer = null; }
+    if (elapsed >= LOADING_MIN_DWELL_MS){
+      applyChange();
+    } else {
+      loadingState.pendingTimer = setTimeout(applyChange, LOADING_MIN_DWELL_MS - elapsed);
+    }
+  }
+
+  function removeLoading(){
+    var l = document.getElementById("loading");
+    if (l) l.remove();
+    if (loadingState.pendingTimer){ clearTimeout(loadingState.pendingTimer); loadingState.pendingTimer = null; }
+  }
 
   function botShell(bodyHTML){
     return '<div class="bjl-credit">' + CREDIT + '</div>' + bodyHTML;
@@ -666,6 +765,11 @@
       }
       // pending / running — check the elapsed clock, schedule the
       // next poll, or give up.
+      // v9.14 — feed the progress fields into the loading bubble so
+      // line 2 tracks the backend phase.
+      if (data && data.progress_stage){
+        updateLoadingStage(data.progress_stage, data.progress_hint);
+      }
       var elapsed = Date.now() - startedAt;
       if (elapsed > POLL_HARD_TIMEOUT_MS){
         throw new Error("hard timeout after " + Math.round(elapsed/1000) + "s");

@@ -73,7 +73,7 @@ exports.handler = async (event) => {
 
   const { data: job, error: loadErr } = await supabase
     .from('bjl_query_jobs')
-    .select('status, finding, error, query_type, created_at, completed_at')
+    .select('status, finding, error, query_type, created_at, completed_at, progress_stage, progress_hint')
     .eq('job_id', jobId)
     .single();
 
@@ -121,13 +121,16 @@ exports.handler = async (event) => {
     };
   }
 
-  // pending / running
+  // pending / running — surface progress fields (v9.14) so the frontend
+  // can render a stage-aware loading bubble.
   return {
     statusCode: 200,
     headers,
     body: JSON.stringify({
-      status:    job.status,
-      queued_at: job.created_at,
+      status:         job.status,
+      queued_at:      job.created_at,
+      progress_stage: job.progress_stage || 'queued',
+      progress_hint:  job.progress_hint || null,
     }),
   };
 };
