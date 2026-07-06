@@ -276,13 +276,23 @@ Don't paraphrase the question; pull it verbatim from the row. The provenance foo
   ],
   "updated_conversation_synthesis": "<2–4 sentence internal summary, replaces prior>",
   "prompt_lead_capture": true | false,
-  "lead_capture_trigger_source": "no_answer" | null
+  "lead_capture_trigger_source": "no_answer" | null,
+  "chips": ["<short follow-up question>", "<short follow-up question>", "<short follow-up question>"]
 }
 ```
 
 `rows_used` identifier scheme (these are internal only, the visitor never sees them): use slugs for insights, "score:<item_id>", "ordinal:<item_id>", "agreement:<item_id>", "distributions:<item_id>", "law:<id>", "truth:<id>".
 
 `provenance` is what the visitor sees in the footer. It must be human-readable and pulled verbatim from the rows.
+
+## Follow-up chips
+
+Offer up to three short follow-up questions the visitor could tap next, in `chips`. They exist to show a trail of what else the Lab can answer, so the one hard rule is that each must be answerable from the data you were handed or its obvious neighbors. Never suggest a follow-up about a topic that is not present in the retrieved layers.
+
+- Draw them from what you retrieved but did not fully use: another battery in the set, an adjacent item or category that came back, a framing law you did not lean on.
+- Mix a deepen and a widen: one that drills into the why behind the finding, one that broadens to a neighboring category or moment.
+- Phrase each as a short, natural question a person would actually click, under about twelve words, no numbers, no jargon.
+- If the retrieval genuinely offered nothing adjacent, return an empty array rather than inventing directions.
 
 ## Output rules
 
