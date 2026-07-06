@@ -142,7 +142,7 @@ async function classifyScope(question) {
 Rules:
 - "brand_specific": names a SPECIFIC, real brand/company/product by name AND asks for analysis of THAT named entity (e.g., "How do Disney visitors feel?"). This is narrow. A visitor describing themselves ("I run a CPG brand", "my product", "our company") has NOT named a brand — classify that in_corpus_scope. General category, strategy, positioning, and "how do I..." questions are in_corpus_scope, never brand_specific.
 - "live_cut_requested": custom analysis, cross-tab, or "give me the breakdown by X" request.
-- "out_of_scope": not about consumer joy or behavior at all.
+- "out_of_scope": ONLY questions with no connection at all to joy, people, consumers, brands, experiences, products, or behavior (e.g., "write me code", "what's the weather", a math problem). This is extremely rare. A question about WHY people feel joy from something, the nature of joy, or the psychology behind it IS in_corpus_scope, because the Lab answers those empirically. When in doubt, choose in_corpus_scope.
 - "in_corpus_scope": everything else.
 
 Output ONLY the JSON. No preamble.`;
