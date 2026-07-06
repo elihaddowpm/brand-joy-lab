@@ -201,6 +201,19 @@
   function esc(s){ return String(s).replace(/[&<>"]/g, function(c){
     return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]; }); }
   function scrollLog(){ log.scrollTop = log.scrollHeight; }
+  // v9.13 — anchor the log so a specific message's top edge sits at
+  // the top of the visible area, with a small breathing gap. Used
+  // for bot answers so the visitor starts reading at the answer's
+  // opening line, not landed at the provenance footer that scrollLog
+  // (bottom-anchored) leaves them at when the answer is tall.
+  function scrollToMsg(el){
+    if (!el || !log) return;
+    requestAnimationFrame(function(){
+      var elRect  = el.getBoundingClientRect();
+      var logRect = log.getBoundingClientRect();
+      log.scrollTop += (elRect.top - logRect.top - 8);
+    });
+  }
   function beginConversation(){
     samples.style.display = "none";
     // v7.6 — hide the disclaimer the moment the visitor starts a turn;
@@ -273,7 +286,24 @@
     );
   }
 
-  function addBotAnswer(text, provenance){
+  // v9.11 — build the follow-up chips block (label + pill row) as an
+  // HTML string so it can be inlined inside the bot bubble between the
+  // answer paragraphs and the provenance. Buttons carry only the chip
+  // text; clicks are wired up after the bubble is appended.
+  function renderFollowupChips(chips){
+    if (!Array.isArray(chips) || chips.length === 0) return "";
+    var buttons = chips.map(function(text){
+      return '<button type="button" class="sample-chip followup-chip">' + esc(text) + '</button>';
+    }).join("");
+    return (
+      '<div class="followup-block">' +
+        '<div class="followup-label">Ask a follow-up</div>' +
+        '<div class="followup-chips">' + buttons + '</div>' +
+      '</div>'
+    );
+  }
+
+  function addBotAnswer(text, provenance, chips){
     var el = document.createElement("div");
     el.className = "msg msg-bot";
     // Wrap each paragraph break (two newlines) into a <p> so the
@@ -281,32 +311,33 @@
     var paragraphs = String(text || "").split(/\n\s*\n/).map(function(p){
       return "<p>" + esc(p.trim()) + "</p>";
     }).join("");
-    el.innerHTML = botShell((paragraphs || "<p>&nbsp;</p>") + renderProvenance(provenance));
-    log.appendChild(el); scrollLog();
-  }
+    // v9.11 — chips sit between the answer body and the provenance
+    // footer, inside the same bubble, so they read as a natural next
+    // move tied to that answer.
+    el.innerHTML = botShell(
+      (paragraphs || "<p>&nbsp;</p>") +
+      renderFollowupChips(chips) +
+      renderProvenance(provenance)
+    );
+    // v9.13 — anchor to the top of the answer, not the bottom of the log.
+    // Bot answers can run tall enough that scrollLog() lands the visitor at
+    // the "What informed this" footer, hiding the actual answer.
+    log.appendChild(el); scrollToMsg(el);
 
-  // v9.11 — render up to three grounded follow-up questions the backend
-  // returned in `chips`. Clicks fire ask() with the chip text; the row
-  // removes itself immediately so chips don't accumulate across turns.
-  // Suppressed when the backend flagged prompt_lead_capture — the
-  // visitor's next move belongs to the form, not to more questions.
-  function addFollowupChips(chips){
-    if (!Array.isArray(chips) || chips.length === 0) return;
-    var el = document.createElement("div");
-    el.className = "followup-chips";
-    chips.forEach(function(text){
-      var btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "sample-chip followup-chip";
-      btn.textContent = text;
-      btn.addEventListener("click", function(){
-        if (session.pending) return;
-        if (el.parentNode) el.parentNode.removeChild(el);
-        ask(text);
+    // Wire chip clicks. One-shot: tapping a chip removes the whole
+    // follow-up block from this bubble (chips don't accumulate on
+    // subsequent answers), then fires ask() with the chip text.
+    var chipButtons = el.querySelectorAll(".followup-chip");
+    if (chipButtons.length){
+      chipButtons.forEach(function(btn){
+        btn.addEventListener("click", function(){
+          if (session.pending) return;
+          var block = btn.closest(".followup-block");
+          if (block && block.parentNode) block.parentNode.removeChild(block);
+          ask(btn.textContent);
+        });
       });
-      el.appendChild(btn);
-    });
-    log.appendChild(el); scrollLog();
+    }
   }
 
   function addError(){
@@ -581,7 +612,14 @@
 
   function handleAnswer(data, originalText){
     removeLoading();
-    addBotAnswer(data.answer || "", data.provenance);
+    // v9.11 — pass chips into the bot bubble so they render between the
+    // answer body and the provenance. Suppress chips when the backend
+    // is prompting for a lead — the visitor's next move belongs to the
+    // form, not more questions.
+    var chipsForBubble = (data.prompt_lead_capture || !Array.isArray(data.chips))
+                           ? []
+                           : data.chips;
+    addBotAnswer(data.answer || "", data.provenance, chipsForBubble);
     if (typeof data.updated_conversation_synthesis === "string"){
       session.conversationSynthesis = data.updated_conversation_synthesis;
     }
@@ -593,19 +631,13 @@
     // Surface A: inline lead form when the backend flags no-answer
     if (data.prompt_lead_capture && !session.leadAlreadySubmitted){
       addInlineLeadForm();
-    } else {
-      // v9.11 — grounded follow-up chips beneath the answer, only when
-      // we're NOT prompting for a lead. Suppressed if the lightbox is
-      // about to open (Surface B) so it doesn't fight the modal.
-      addFollowupChips(Array.isArray(data.chips) ? data.chips : []);
-      if (!session.leadAlreadySubmitted
-          && !session.declinedLightbox
-          && session.queryCount >= LIGHTBOX_THRESHOLD_QUERIES
-          && session.queryCount >= session.suppressLightboxUntilQuery
-          && !lightbox.classList.contains("is-open")){
-        // Surface B: lightbox after the consecutive-query threshold
-        setTimeout(openLightbox, 400);
-      }
+    } else if (!session.leadAlreadySubmitted
+            && !session.declinedLightbox
+            && session.queryCount >= LIGHTBOX_THRESHOLD_QUERIES
+            && session.queryCount >= session.suppressLightboxUntilQuery
+            && !lightbox.classList.contains("is-open")){
+      // Surface B: lightbox after the consecutive-query threshold
+      setTimeout(openLightbox, 400);
     }
 
     session.pending  = false;

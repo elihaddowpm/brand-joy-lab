@@ -410,19 +410,26 @@ html, body {
 .sample-chip:active   { transform: scale(0.96); }
 .sample-chip:disabled { opacity: 0.5; cursor: not-allowed; }
 
-/* v9.11 — grounded follow-up chips beneath a bot answer. Aligns like a
-   bot bubble (flex-start) so the visitor's eye reads them as the next
-   move tied to that answer. Tighter top gap than a full turn so they
-   feel attached to the answer, not a new turn. Chips inherit
-   .sample-chip styling; .followup-chip is a size trim + rail-aligned
-   inset to make them read as secondary suggestions rather than
-   primary CTAs. */
+/* v9.11 — grounded follow-up chips inside the bot bubble, between the
+   answer body and the "What informed this" provenance. The label reads
+   as a small caps prompt (matches .bjl-prompt from the first-load
+   sample block). Chips inherit .sample-chip styling; .followup-chip is
+   a size trim so the follow-ups read as secondary suggestions rather
+   than primary CTAs. */
+.followup-block {
+  margin: var(--space-4) 0 var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px dashed var(--border-subtle);
+}
+.followup-label {
+  margin: 0 0 var(--space-2);
+  font-family: var(--font-sans);
+  font-size: 0.75rem; font-weight: var(--fw-semibold);
+  letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--text-muted);
+}
 .followup-chips {
-  align-self: flex-start;
-  max-width: 100%;
   display: flex; flex-wrap: wrap; gap: var(--space-2);
-  margin: calc(var(--chat-turn-gap) * -0.4) 0 0;
-  padding-left: calc(var(--chat-bot-rail) + var(--space-4));
 }
 .followup-chip { font-size: 0.875rem; padding: var(--space-1) var(--space-3); }
 
