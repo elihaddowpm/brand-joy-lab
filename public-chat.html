@@ -440,6 +440,9 @@
         });
         return;
       }
+      // v9.9 — GA4 lead_submitted fires only on successful POST, from
+      // both Surface A (inline) and Surface B (lightbox) paths.
+      notifyParent("bjl:lead_submitted");
       showThanks(scope, inLightbox);
     }).catch(function(err){
       console.error("lead capture error", err);
@@ -448,6 +451,9 @@
   }
 
   function declineLead(triggerSource){
+    // v9.9 — single fire point for GA4 lead_dismissed. Covers the inline
+    // decline button, lightbox decline button, backdrop click, and ESC.
+    notifyParent("bjl:lead_dismissed");
     // v7.7: the disclaimer-opened lightbox may have no question to record.
     // Backend requires question on every row, so skip the POST when both
     // sources are empty. Suppression still applies for the chat-triggered
@@ -613,6 +619,10 @@
   function ask(text){
     text = (text || "").trim();
     if (!text || session.pending) return;
+    // v9.9 — single fire point for GA4 question_submitted. Every path
+    // (typed submit, Enter, sample chip, bjl:query postMessage, retry)
+    // funnels through ask(), so this covers them all with no double count.
+    notifyParent("bjl:question_submitted");
     beginConversation();
     addUser(text);
     input.value = ""; autoGrow(); refreshSend();
@@ -735,6 +745,27 @@
     // Localhost dev: allow any port on http://localhost
     if (/^http:\/\/localhost(:\d+)?$/.test(origin)) return true;
     return false;
+  }
+
+  // v9.9 — analytics ping to the embedding LP. The LP listens for these
+  // and forwards them to GA4. Origin is locked: we resolve the target
+  // from document.referrer when the referrer is in the allowlist, else
+  // fall back to the first entry. targetOrigin is never '*' so pings
+  // only ever land on the LP. No-ops when the page is standalone.
+  function notifyParent(type, extra){
+    if (window.parent === window) return;                // standalone — nothing to notify
+    var target = ALLOWED_PARENT_ORIGINS[0];
+    try {
+      if (document.referrer){
+        var refOrigin = new URL(document.referrer).origin;
+        if (ALLOWED_PARENT_ORIGINS.indexOf(refOrigin) !== -1) target = refOrigin;
+      }
+    } catch (_) { /* malformed referrer — keep default */ }
+    var payload = { type: type };
+    if (extra && typeof extra === "object"){
+      for (var k in extra) if (Object.prototype.hasOwnProperty.call(extra, k)) payload[k] = extra[k];
+    }
+    try { window.parent.postMessage(payload, target); } catch (_) { /* parent unreachable — ignore */ }
   }
 
   function safeAutofire(rawQuestion){
