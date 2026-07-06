@@ -988,11 +988,39 @@ exports.handler = async (event) => {
                                     ? ctx.conversation_synthesis.slice(0, 2000)
                                     : '';
 
-    // Scope classification
+    // v9.14 — progress streaming. The frontend polls status every 1.5s and
+    // renders the loading bubble based on progress_stage + progress_hint,
+    // so each phase transition is a small DB write. Costs ~200ms total
+    // across the 4 writes, which is invisible next to the LLM latency.
+    const writeStage = (stage, hint) =>
+      supabase.from('bjl_query_jobs').update({
+        progress_stage: stage,
+        progress_hint:  hint || null,
+      }).eq('job_id', jobId);
+
+    await writeStage('classifying', null);
     const scope = await classifyScope(question);
 
     // Retrieve across all seven layers (semantic + structured)
+    await writeStage('retrieving', null);
     const retrieved = await retrieve(question);
+
+    // Total unique rows fed to the synthesizer, surfaced in the composing
+    // loading line ("Weighing 47 findings for the sharpest angle…"). Excludes
+    // global_extremes (metadata, not findings the answer draws from).
+    const batteryItemCount = (retrieved.batteries || []).reduce(
+      (sum, b) => sum + ((b && Array.isArray(b.items)) ? b.items.length : 0), 0);
+    const totalRows =
+      (retrieved.scores        || []).length +
+      (retrieved.ordinal       || []).length +
+      (retrieved.agreement     || []).length +
+      (retrieved.distributions || []).length +
+      batteryItemCount +
+      (retrieved.laws          || []).length +
+      (retrieved.insights      || []).length +
+      (retrieved.truths        || []).length;
+
+    await writeStage('composing', { total_rows: totalRows });
 
     // For decline paths (brand_specific / live_cut_requested / out_of_scope),
     // we still pass retrieved rows so the LLM can offer the nearest thing.
@@ -1000,6 +1028,8 @@ exports.handler = async (event) => {
       question, scope, retrieved,
       conversation_synthesis: conversationSynthesis,
     });
+
+    await writeStage('grounding', { total_rows: totalRows });
 
     // Closest insight slugs the frontend can stash in case the visitor
     // submits the lead form. The form endpoint accepts these and writes
@@ -1061,9 +1091,10 @@ exports.handler = async (event) => {
     };
 
     await supabase.from('bjl_query_jobs').update({
-      status:       'complete',
-      finding:      JSON.stringify(finding),
-      completed_at: new Date().toISOString(),
+      status:         'complete',
+      finding:        JSON.stringify(finding),
+      completed_at:   new Date().toISOString(),
+      progress_stage: 'complete',
     }).eq('job_id', jobId);
 
     return { statusCode: 200, body: 'ok' };
