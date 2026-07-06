@@ -201,6 +201,19 @@
   function esc(s){ return String(s).replace(/[&<>"]/g, function(c){
     return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]; }); }
   function scrollLog(){ log.scrollTop = log.scrollHeight; }
+  // v9.13 — anchor the log so a specific message's top edge sits at
+  // the top of the visible area, with a small breathing gap. Used
+  // for bot answers so the visitor starts reading at the answer's
+  // opening line, not landed at the provenance footer that scrollLog
+  // (bottom-anchored) leaves them at when the answer is tall.
+  function scrollToMsg(el){
+    if (!el || !log) return;
+    requestAnimationFrame(function(){
+      var elRect  = el.getBoundingClientRect();
+      var logRect = log.getBoundingClientRect();
+      log.scrollTop += (elRect.top - logRect.top - 8);
+    });
+  }
   function beginConversation(){
     samples.style.display = "none";
     // v7.6 — hide the disclaimer the moment the visitor starts a turn;
@@ -306,7 +319,10 @@
       renderFollowupChips(chips) +
       renderProvenance(provenance)
     );
-    log.appendChild(el); scrollLog();
+    // v9.13 — anchor to the top of the answer, not the bottom of the log.
+    // Bot answers can run tall enough that scrollLog() lands the visitor at
+    // the "What informed this" footer, hiding the actual answer.
+    log.appendChild(el); scrollToMsg(el);
 
     // Wire chip clicks. One-shot: tapping a chip removes the whole
     // follow-up block from this bubble (chips don't accumulate on
