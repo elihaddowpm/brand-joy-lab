@@ -5499,6 +5499,12 @@ const App = ({ authedUser = null, onSignOut = null } = {}) => {
   // results, etc.) without lifting every piece of state into App.
   const [sessionKey, setSessionKey] = useState(0);
   const newSession = () => {
+    // Drop the persisted session before remounting the mode component,
+    // otherwise the intelligence pane's mount effect reads the stale
+    // session id + turns from URL/localStorage and re-hydrates the
+    // prior conversation.
+    writeSessionToUrl(null);
+    writeSessionLocal(null, []);
     setEvidenceRows([]);
     setSessionKey(k => k + 1);
   };
