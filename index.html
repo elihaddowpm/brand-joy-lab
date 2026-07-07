@@ -1245,6 +1245,9 @@ const investigateQuery = async ({
   // returns it in the enqueue response). Threaded into onDone via the
   // info payload so the caller can stash it in URL + localStorage.
   sessionId = null,
+  // v9.17: Deep Dive toggle. When true the background investigator
+  // runs the mandatory 16-topic coverage scan as its first query.
+  deepCoverageScan = false,
   onStatus = () => {}, onNote = () => {}, onChunk = () => {}, onDone = () => {},
   onError = () => {}, onDebug = () => {}, onEvidence = () => {},
   endpoint = "/api/bjl-query", signal,
@@ -1267,6 +1270,7 @@ const investigateQuery = async ({
         strategistContext: strategistContextStr,
         prior_conversation_context: priorConversationContext,
         session_id: sessionId,
+        deep_coverage_scan: !!deepCoverageScan,
       }),
       signal,
     }));
@@ -2250,6 +2254,19 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
   const [recentSessions, setRecentSessions] = useState([]);
   const [recentMenuOpen, setRecentMenuOpen] = useState(false);
 
+  // v9.17: Deep Dive toggle. When on, the investigator runs the mandatory
+  // 16-topic coverage scan before deep-diving. Persisted per operator via
+  // localStorage; preserved across New Session (it's a preference, not a
+  // session artifact).
+  const [deepDive, setDeepDive] = useState(() => {
+    try { return window.localStorage.getItem("bjl_deep_dive_v1") === "1"; }
+    catch (_) { return false; }
+  });
+  useEffect(() => {
+    try { window.localStorage.setItem("bjl_deep_dive_v1", deepDive ? "1" : "0"); }
+    catch (_) { /* localStorage unavailable */ }
+  }, [deepDive]);
+
   // v7 mount-time restore. Priority: URL > localStorage > server most-
   // recent > fresh. The localStorage path repaints instantly so the
   // strategist doesn't see a flash of empty state; the server fetch
@@ -2442,6 +2459,8 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
       // v7: pass the active session id (null on a fresh conversation;
       // the server creates a session and returns its id in onDone.session_id).
       sessionId: sessionId,
+      // v9.17: operator's Deep Dive preference for this turn.
+      deepCoverageScan: deepDive,
       onStatus: ({ phase }) => setPhase(phase),
       onNote: ({ note }) => setNotes(prev => [...prev, note]),
       onEvidence: ({ rows }) => setEvidenceRows(rows || []),
@@ -2707,6 +2726,19 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
                     </div>
                   )}
                 </div>
+                {/* v9.17 — Deep Dive toggle. Off by default. When on the
+                    investigator runs a mandatory 16-topic coverage scan
+                    before deep-diving. Slower but catches cross-category
+                    patterns that a narrow question would miss. */}
+                <button
+                  type="button"
+                  className={"btn ghost" + (deepDive ? " is-active" : "")}
+                  title="Deep dive: scan all 16 topic centers before investigating. Slower, catches cross-category patterns. Off by default."
+                  onClick={() => setDeepDive(v => !v)}
+                  disabled={running}
+                  aria-pressed={deepDive}
+                  style={deepDive ? { background: "var(--accent, #FF6B00)", color: "#fff" } : undefined}
+                >Deep dive{deepDive ? " · on" : ""}</button>
                 <button className="icon-btn" title="New conversation" onClick={clearConversation} disabled={running || turns.length === 0}><Icon name="regen" /></button>
                 <button className="icon-btn" title="Copy full conversation" onClick={copyConversation} disabled={turns.length === 0}><Icon name="copy" /></button>
                 <button className="btn ghost" onClick={exportPdf} disabled={turns.length === 0}><Icon name="download" size={12} /> Export PDF</button>

@@ -66,6 +66,13 @@ function normalizeRequest(body) {
     ? body.session_id
     : null;
 
+  // v9.17: Deep Dive toggle. Accepts either shape (v1 or v2). When true
+  // the investigator runs the mandatory 16-topic coverage scan as its
+  // first query. Off by default in Intelligence; hardcoded on by the
+  // Audience Map path.
+  const deepCoverageScan = body.deep_coverage_scan === true
+    || body.deepCoverageScan === true;
+
   // V1 shape passthrough
   if (typeof body.prompt === 'string' && body.prompt) {
     return {
@@ -73,7 +80,8 @@ function normalizeRequest(body) {
       query_type: VALID_TYPES.includes(body.query_type) ? body.query_type : 'data_pull',
       extra_context: null,
       prior_conversation_context: priorContext,
-      session_id: sessionId
+      session_id: sessionId,
+      deep_coverage_scan: deepCoverageScan
     };
   }
   // V2 shape translation. The Intelligence-mode client sends `intent`, the
@@ -100,7 +108,8 @@ function normalizeRequest(body) {
       query_type: queryType,
       extra_context: Object.keys(extra).length ? extra : null,
       prior_conversation_context: priorContext,
-      session_id: sessionId
+      session_id: sessionId,
+      deep_coverage_scan: deepCoverageScan
     };
   }
   return null;
@@ -286,7 +295,8 @@ exports.handler = async (event) => {
       extra_context: extraForJob,
       prior_conversation_context: norm.prior_conversation_context,
       auth_user_id: auth.user ? auth.user.id : null,
-      auth_user_email: auth.user ? auth.user.email : null
+      auth_user_email: auth.user ? auth.user.email : null,
+      deep_coverage_scan: !!norm.deep_coverage_scan
     })
     .select('job_id')
     .single();
