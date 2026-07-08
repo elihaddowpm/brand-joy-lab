@@ -94,6 +94,10 @@ const DEPTH_TO_MAX_TURNS = {
 // Run `node bin/build_prompts_bundle.js` from the repo root before each
 // deploy if the .md sources have changed.
 const PROMPTS = require('./_prompts_bundle.json');
+const {
+  runCrossDomainProvenanceGuard,
+  buildRetryAllowlistDigest,
+} = require('./bjl-cross-domain-provenance-guard');
 
 // ============================================================
 // v7 — Session persistence helpers.
@@ -616,6 +620,14 @@ async function runSynthesis(triage, scratch, extraContext) {
     parts.push('[WALDO INTELLIGENCE]\n' + wc);
   }
   parts.push(`Investigator scratch (${scratch.length} entries):\n${JSON.stringify(scratch, null, 2)}\n\nProduce the response now as JSON: {"response_text": "...", "followup_chips": ["...", "...", "..."]}`);
+  // Guard-retry prefix: when the cross-domain provenance guard fails the
+  // first pass, runSynthesisWithGuard re-invokes runSynthesis with an
+  // allowlist digest and a rewrite instruction threaded through
+  // extra_context. Prepending it here so the model sees the retry rules
+  // before the scratch.
+  if (extraContext && typeof extraContext.__guard_retry_prefix === 'string' && extraContext.__guard_retry_prefix.trim()) {
+    parts.unshift(extraContext.__guard_retry_prefix.trim());
+  }
   const userMessage = parts.join('\n\n');
 
   // Output-volume cap: when any single investigator query returned more
@@ -684,6 +696,18 @@ async function runSynthesis(triage, scratch, extraContext) {
       ? followupChipsValue
       : (triage.followup_seeds || []);
 
+    // Cross-domain structured contract (v-guard). Optional fields the
+    // synthesizer emits when it made cross-domain claims. Read via the
+    // normalized reader so case/separator drift doesn't drop them.
+    const crossDomainThreadsValue = read('cross_domain_threads');
+    const homeTopicValue = read('home_topic');
+    const crossDomainThreads = Array.isArray(crossDomainThreadsValue)
+      ? crossDomainThreadsValue
+      : null;
+    const homeTopic = (typeof homeTopicValue === 'string' && homeTopicValue.trim())
+      ? homeTopicValue
+      : (Array.isArray(homeTopicValue) ? homeTopicValue : null);
+
     if (!responseText) {
       // JSON parsed but no recognizable response_text key in any casing.
       // Salvage what we can from the buffer; never expose the raw JSON.
@@ -708,7 +732,9 @@ async function runSynthesis(triage, scratch, extraContext) {
 
     return {
       response_text: responseText,
-      followup_chips: followupChips
+      followup_chips: followupChips,
+      cross_domain_threads: crossDomainThreads,
+      home_topic: homeTopic
     };
   } catch (e) {
     // JSON.parse failed entirely. Three sub-paths, all of which now route
@@ -760,6 +786,97 @@ async function runSynthesis(triage, scratch, extraContext) {
       synth_error: 'parse_failed_unsalvageable'
     };
   }
+}
+
+// Cross-domain provenance guard: retry-once, then drop.
+//
+// After the synthesizer returns, if it emitted structured cross_domain_threads
+// we verify every item, number, thread_tag, and topic against the rows
+// bjl_corpus_threads returned in this turn. On failure we re-invoke the
+// synthesizer once with a strict allowlist digest and a rewrite instruction;
+// on second failure the sidecar is dropped (cross_domain_threads set to []
+// and home_topic nulled) and a synth_warning is attached. response_text is
+// re-authored on the retry so a dropped sidecar does not leave prose asserting
+// items or numbers the guard just failed to ground.
+async function runSynthesisWithGuard(triage, scratch, extraContext) {
+  const initial = await runSynthesis(triage, scratch, extraContext);
+
+  // Nothing to guard against unless the synthesizer emitted structured
+  // cross-domain claims. Bail out fast in the common case.
+  const threads = Array.isArray(initial.cross_domain_threads) ? initial.cross_domain_threads : [];
+  if (threads.length === 0) return initial;
+
+  const firstPass = runCrossDomainProvenanceGuard({
+    threads,
+    home_topic: initial.home_topic,
+    scratch,
+  });
+  if (firstPass.ok) return initial;
+
+  console.warn('[guard] cross-domain provenance failed on first pass. failures:',
+    JSON.stringify(firstPass.failures).slice(0, 800));
+
+  // One retry with the allowlist digest laid out explicitly and a rewrite
+  // instruction. The digest is grouped by thread_tag and lists every
+  // returnable member with its exact joy_index, n, and primary_topic, so the
+  // model can reproduce a strict subset with confidence.
+  const digest = buildRetryAllowlistDigest(scratch);
+  const retryPrefix = [
+    'RETRY WITH ALLOWLIST.',
+    'Your previous response contained cross_domain_threads claims that did not match the rows bjl_corpus_threads returned this turn. The specific failures were:',
+    JSON.stringify(firstPass.failures, null, 2),
+    '',
+    'Regenerate the full response now. Rules for this retry:',
+    '1. cross_domain_threads may only reference the threads and members in the ALLOWLIST DIGEST below. You may drop a thread or a member; you may not add or alter one. Every item_name, joy_index, n, and primary_topic in cross_domain_threads MUST be copied exactly from the digest.',
+    '2. Rewrite response_text so it does not name any cross-domain item or number that is not present in the members you kept. If you drop a thread, remove any prose that leaned on it.',
+    '3. home_topic must equal the primary_topic of the within-category anchors, as before.',
+    '4. followup_chips remain from triage.',
+    '',
+    'ALLOWLIST DIGEST (the only cross-domain claims you may make):',
+    JSON.stringify(digest, null, 2),
+    '',
+    'Return the full JSON response now, following the same schema.',
+  ].join('\n');
+
+  const retryContext = Object.assign({}, extraContext || {}, {
+    __guard_retry_prefix: retryPrefix,
+  });
+
+  // The retry re-runs the full synthesis with the digest prepended to the
+  // user message. runSynthesis is unchanged; the prefix is threaded through
+  // extraContext and picked up below.
+  const retry = await runSynthesis(triage, scratch, retryContext);
+
+  const retryThreads = Array.isArray(retry.cross_domain_threads) ? retry.cross_domain_threads : [];
+  if (retryThreads.length === 0) {
+    // Model dropped the sidecar itself on retry. Ship as-is.
+    return Object.assign({}, retry, { synth_warning: 'cross_domain_guard_dropped_by_model' });
+  }
+
+  const secondPass = runCrossDomainProvenanceGuard({
+    threads: retryThreads,
+    home_topic: retry.home_topic,
+    scratch,
+  });
+  if (secondPass.ok) return retry;
+
+  console.warn('[guard] cross-domain provenance failed on retry. dropping sidecar. failures:',
+    JSON.stringify(secondPass.failures).slice(0, 800));
+
+  // Second failure. Ship the retry's response_text (already rewritten
+  // without cross-domain claims per the retry instruction) with the sidecar
+  // dropped. If the retry text still leans on ungrounded claims that is a
+  // known limitation and gets flagged; further rewriting would require a
+  // separate targeted prose scrub, which we're intentionally not building
+  // here.
+  return {
+    response_text: retry.response_text,
+    followup_chips: retry.followup_chips,
+    cross_domain_threads: [],
+    home_topic: null,
+    synth_warning: 'cross_domain_provenance_failed',
+    synth_warning_detail: secondPass.failures,
+  };
 }
 
 // -------------------------------------------------------------------------
@@ -873,15 +990,43 @@ exports.handler = async (event) => {
       jobId: job.job_id,
     });
 
-    // Stage 3: Synthesis
-    const { response_text, followup_chips } = await runSynthesis(triage, scratch, job.extra_context);
+    // Stage 3: Synthesis (guard-wrapped). The wrapper runs the provenance
+    // guard on any structured cross_domain_threads the synthesizer emits,
+    // retries once on failure with a strict allowlist digest, and drops the
+    // sidecar (empty threads + null home_topic + synth_warning) if the retry
+    // still doesn't verify.
+    const synth = await runSynthesisWithGuard(triage, scratch, job.extra_context);
+    const {
+      response_text,
+      followup_chips,
+      cross_domain_threads,
+      home_topic,
+      synth_warning,
+      synth_warning_detail,
+    } = synth;
+
+    // Cross-domain artifacts persist as a meta entry on scratch so the sidecar
+    // rendering path has them alongside the investigator handoff without
+    // requiring a schema change. When the guard drops, the entry still lands
+    // but with the failure recorded so the UI can render an "answer without
+    // sidecar" state and the log has the offending claims.
+    const guardMeta = (Array.isArray(cross_domain_threads) && cross_domain_threads.length > 0) || home_topic || synth_warning
+      ? [{
+          type: 'cross_domain_output',
+          cross_domain_threads: Array.isArray(cross_domain_threads) ? cross_domain_threads : [],
+          home_topic: home_topic || null,
+          synth_warning: synth_warning || null,
+          synth_warning_detail: synth_warning_detail || null,
+        }]
+      : [];
 
     // Mark complete. If we hit the depth budget without an end_turn,
     // append a meta entry so the synthesizer scratch reflects that state
     // (no dedicated column for it; the scratch is the source of truth).
-    const finalScratch = hit_max_turns
+    const finalScratch = (hit_max_turns
       ? scratch.concat([{ type: 'meta', hit_max_turns: true }])
-      : scratch;
+      : scratch
+    ).concat(guardMeta);
 
     await supabase
       .from('bjl_query_jobs')
