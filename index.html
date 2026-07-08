@@ -2762,6 +2762,19 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
                     </div>
                   )}
                 </div>
+                {/* v9.17 — Deep Dive toggle. Off by default. When on the
+                    investigator runs a mandatory 16-topic coverage scan
+                    before deep-diving. Slower but catches cross-category
+                    patterns that a narrow question would miss. */}
+                <button
+                  type="button"
+                  className={"btn ghost" + (deepDive ? " is-active" : "")}
+                  title="Deep dive: scan all 16 topic centers before investigating. Slower, catches cross-category patterns. Off by default."
+                  onClick={() => setDeepDive(v => !v)}
+                  disabled={running}
+                  aria-pressed={deepDive}
+                  style={deepDive ? { background: "var(--accent, #FF6B00)", color: "#fff" } : undefined}
+                >Deep dive{deepDive ? " · on" : ""}</button>
                 <button className="icon-btn" title="New conversation" onClick={clearConversation} disabled={running || turns.length === 0}><Icon name="regen" /></button>
                 <button className="icon-btn" title="Copy full conversation" onClick={copyConversation} disabled={turns.length === 0}><Icon name="copy" /></button>
                 <button className="btn ghost" onClick={exportPdf} disabled={turns.length === 0}><Icon name="download" size={12} /> Export PDF</button>
