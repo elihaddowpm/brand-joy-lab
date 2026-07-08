@@ -2289,9 +2289,13 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
         }
       }
 
-      // 2. Always try to reconcile against the server. If targetSession
-      //    is set, fetch that one. Else, fetch the user's most-recent
-      //    active session and adopt it.
+      // 2. Reconcile against the server ONLY when we have a specific
+      //    session to load (URL param or a local cache). We used to
+      //    fall through to "adopt the user's most-recent server-side
+      //    session" here, but that made New Session and fresh reloads
+      //    silently re-inflate the prior conversation. If a user wants
+      //    to resume a prior session, they can pick it from the Recent
+      //    dropdown; URL sharing still works via the ?session= param.
       try {
         if (targetSession) {
           const r = await fetch("/.netlify/functions/bjl-sessions-load?session_id=" + encodeURIComponent(targetSession),
@@ -2306,32 +2310,14 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
             writeSessionLocal(j.session.id, t);
           } else if (r.status === 404) {
             // Session in URL/localStorage doesn't belong to this user
-            // (or was deleted). Fall back to most-recent-active.
-            await tryAdoptMostRecent();
+            // (or was deleted). Stay on fresh state; don't auto-adopt.
+            writeSessionToUrl(null);
+            writeSessionLocal(null, []);
           }
-        } else {
-          await tryAdoptMostRecent();
         }
+        // No targetSession → fresh state stays fresh. Prior behavior
+        // called tryAdoptMostRecent() here; removed intentionally.
       } catch (_) { /* non-fatal — UI just stays on fresh / cached */ }
-
-      async function tryAdoptMostRecent() {
-        try {
-          const r = await fetch("/.netlify/functions/bjl-sessions-list?limit=1", authedFetchInit());
-          if (!r.ok || cancelled) return;
-          const j = await r.json();
-          const recent = (j && Array.isArray(j.sessions) && j.sessions[0]) || null;
-          if (!recent) return;
-          const load = await fetch("/.netlify/functions/bjl-sessions-load?session_id=" + encodeURIComponent(recent.id),
-                                   authedFetchInit());
-          if (!load.ok || cancelled) return;
-          const lj = await load.json();
-          const t = serverMessagesToTurns(lj.messages);
-          setSessionId(lj.session.id);
-          setTurns(t);
-          writeSessionToUrl(lj.session.id);
-          writeSessionLocal(lj.session.id, t);
-        } catch (_) { /* non-fatal */ }
-      }
     })();
     return () => { cancelled = true; };
   }, []);
@@ -2624,8 +2610,58 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
         <div className="commission">
           <div className="commission-head">
             <div className="step">Ask the Lab</div>
-            <div className="mono" style={{color: "var(--grey-2)"}}>
-              {intent ? INTEL_CHIPS.find(c => c.k === intent).label.toUpperCase() : "NO TAG"}
+            {/* v9.17.1: Deep dive switch lives here (replacing the old
+                NO TAG / current-tag readout). Toggling flips whether the
+                investigator runs the mandatory 16-topic coverage scan. */}
+            <div
+              role="switch"
+              aria-checked={deepDive}
+              tabIndex={0}
+              onClick={() => { if (!running) setDeepDive(v => !v); }}
+              onKeyDown={(e) => {
+                if (running) return;
+                if (e.key === " " || e.key === "Enter") { e.preventDefault(); setDeepDive(v => !v); }
+              }}
+              title="Deep dive: scan all 16 topic centers before investigating. Slower, catches cross-category patterns."
+              className="mono"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 10,
+                cursor: running ? "not-allowed" : "pointer",
+                opacity: running ? 0.55 : 1,
+                color: "var(--grey-2)",
+                userSelect: "none",
+              }}
+            >
+              <span>DEEP DIVE</span>
+              <span
+                aria-hidden="true"
+                style={{
+                  display: "inline-block",
+                  position: "relative",
+                  width: 32,
+                  height: 18,
+                  borderRadius: 9,
+                  background: deepDive ? "var(--accent, #FF6B00)" : "var(--grey-1, #d8d8d8)",
+                  transition: "background 120ms",
+                }}
+              >
+                <span
+                  style={{
+                    position: "absolute",
+                    top: 2,
+                    left: 2,
+                    width: 14,
+                    height: 14,
+                    borderRadius: "50%",
+                    background: "#fff",
+                    transform: deepDive ? "translateX(14px)" : "translateX(0)",
+                    transition: "transform 120ms",
+                    boxShadow: "0 1px 2px rgba(0,0,0,0.15)",
+                  }}
+                />
+              </span>
             </div>
           </div>
           <div className="intent-chips" style={{display: "flex", flexWrap: "wrap", gap: 8, padding: "12px 16px"}}>
