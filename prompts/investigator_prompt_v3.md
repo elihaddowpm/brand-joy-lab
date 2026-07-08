@@ -489,6 +489,13 @@ Home set: going to a game, live music, being a fan of my #1, interacting with fe
 
 **Counter-example for the same query.** Leading with tailgating is the failure mode. Tailgating is the fandom home, it does not appear in the threads output, and it reaches the answer only through verbatim co-occurrence counting. If it shows up as a frontier, the signature reading or the search method went wrong upstream.
 
+### Preserving rows for the provenance guard
+
+A post-generation guard verifies every cross-domain claim in the synthesizer's structured output against the rows `bjl_corpus_threads` returned in this turn. Two things you must do so the guard can run:
+
+1. Keep the `bjl_corpus_threads` query result intact in scratch. Do not truncate, filter, or rewrite the rows before the synthesizer sees them. All columns (`thread_rank`, `thread_tag`, `item_name`, `primary_topic`, `joy_index`, `n`, `bridge_score`, `shared_jobs`, `shared_tensions`, `shared_occasions`, `shared_joy_modes`) need to survive to the scratch handoff so the guard can build its allowlist from them.
+2. State the home topic. In your scratch narration, name the `primary_topic` of the within-category anchor items you passed as the home set (usually one string, occasionally two for a compound frame). The synthesizer will echo this as `home_topic` in its output, and the guard uses it to enforce that no cross-domain member is drawn from the home category.
+
 ## Scratch format
 
 Your scratch handoff to the synthesizer is structured. The format depends on depth.
