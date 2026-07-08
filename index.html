@@ -2289,9 +2289,13 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
         }
       }
 
-      // 2. Always try to reconcile against the server. If targetSession
-      //    is set, fetch that one. Else, fetch the user's most-recent
-      //    active session and adopt it.
+      // 2. Reconcile against the server ONLY when we have a specific
+      //    session to load (URL param or a local cache). We used to
+      //    fall through to "adopt the user's most-recent server-side
+      //    session" here, but that made New Session and fresh reloads
+      //    silently re-inflate the prior conversation. If a user wants
+      //    to resume a prior session, they can pick it from the Recent
+      //    dropdown; URL sharing still works via the ?session= param.
       try {
         if (targetSession) {
           const r = await fetch("/.netlify/functions/bjl-sessions-load?session_id=" + encodeURIComponent(targetSession),
@@ -2306,32 +2310,14 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
             writeSessionLocal(j.session.id, t);
           } else if (r.status === 404) {
             // Session in URL/localStorage doesn't belong to this user
-            // (or was deleted). Fall back to most-recent-active.
-            await tryAdoptMostRecent();
+            // (or was deleted). Stay on fresh state; don't auto-adopt.
+            writeSessionToUrl(null);
+            writeSessionLocal(null, []);
           }
-        } else {
-          await tryAdoptMostRecent();
         }
+        // No targetSession → fresh state stays fresh. Prior behavior
+        // called tryAdoptMostRecent() here; removed intentionally.
       } catch (_) { /* non-fatal — UI just stays on fresh / cached */ }
-
-      async function tryAdoptMostRecent() {
-        try {
-          const r = await fetch("/.netlify/functions/bjl-sessions-list?limit=1", authedFetchInit());
-          if (!r.ok || cancelled) return;
-          const j = await r.json();
-          const recent = (j && Array.isArray(j.sessions) && j.sessions[0]) || null;
-          if (!recent) return;
-          const load = await fetch("/.netlify/functions/bjl-sessions-load?session_id=" + encodeURIComponent(recent.id),
-                                   authedFetchInit());
-          if (!load.ok || cancelled) return;
-          const lj = await load.json();
-          const t = serverMessagesToTurns(lj.messages);
-          setSessionId(lj.session.id);
-          setTurns(t);
-          writeSessionToUrl(lj.session.id);
-          writeSessionLocal(lj.session.id, t);
-        } catch (_) { /* non-fatal */ }
-      }
     })();
     return () => { cancelled = true; };
   }, []);
