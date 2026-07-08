@@ -81,7 +81,8 @@ TAGGING RULES:
 2. Use empty arrays for items that are not actual joy drivers (political stim text, abstract attitude statements, anchor questions, raw emotion words like "Anxious" or "Stressed").
 3. Pick the modes/jobs that BEST fit, not every plausible one. Tighter tagging produces better retrieval.
 4. Consider the category context: "Hawaii" in travel_destinations vs in food_joy would be tagged differently if applicable.
-5. For select_all items in food_joy, general_joy, or sports_fandom, use minimal tagging (often just 1-2 joy_modes and 1 occasion). These are answer choices, not standalone items.
+5. Select-all items in this queue have already been filtered to real-signal readings (MAX n >= 100). For these, let functional_jobs and tensions flow freely where they genuinely apply — those two frameworks are what the pivot bridges on, so real signal there is valuable. Return empty for options that are truly just answer tokens with no job or tension of their own. Keep joy_modes and occasions tight: assign only when the option itself clearly carries a specific, non-generic value, since those two frameworks are noisy and mostly inherited from the parent question rather than the option.
+6. HARD RULE on tensions: assign a tension only where the item genuinely sits in a conflict between the two poles named. Tensions are sparse by nature. Most items do not sit in a tension, and empty is the correct output for most. Do not force-fill tensions to cover the item. Forced tensions are noise on the dimension we most need clean.
 
 OUTPUT FORMAT:
 {{
@@ -94,26 +95,54 @@ OUTPUT FORMAT:
 The output MUST contain exactly one entry per input item, in the same order. The item_name and category fields in your output MUST match the input exactly so the writeback can match rows."""
 
 
-def get_untagged_items(conn, limit: int) -> list[dict[str, Any]]:
-    """Pull the next batch of untagged (item_name, category) pairs, prioritized by JI and n."""
+def get_untagged_items(conn, limit: int, run_start_ts) -> list[dict[str, Any]]:
+    """Pull the next batch of combos needing enrichment, prioritized by JI and n.
+
+    Fetch key is functional_jobs OR tensions emptiness (the pivot's strongest
+    bridge, and the thinnest layer we have). Note that Postgres
+    array_length('{}',1) returns NULL, so all three empty-shapes have to be
+    caught explicitly.
+
+    Pure select_all combos are admitted only when MAX(n) >= 100 — thin
+    answer-choice tokens are excluded from the queue.
+
+    Scan-status guard: combos already scanned in the current run are excluded
+    via enrichment_updated_at < run_start_ts. Without this, a tensionless item
+    that legitimately gets an empty tensions array would still match the
+    tag-emptiness key and get re-fetched forever, burning API calls to arrive
+    at the same empty answer.
+
+    Future reruns: once every combo has enrichment_updated_at set, callers can
+    switch the fetch entirely to `enrichment_updated_at IS NULL` so items
+    intentionally left empty are not re-pulled between runs.
+    """
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute("""
-            SELECT 
+            SELECT
                 item_name,
                 category,
                 MAX(joy_index)::float AS joy_index,
                 MAX(n) AS n,
                 STRING_AGG(DISTINCT question_type, '|') AS question_types
             FROM bjl_scores
-            WHERE (joy_modes IS NULL OR array_length(joy_modes, 1) = 0)
+            WHERE (
+                    functional_jobs IS NULL
+                    OR array_length(functional_jobs, 1) IS NULL
+                    OR array_length(functional_jobs, 1) = 0
+                    OR tensions IS NULL
+                    OR array_length(tensions, 1) IS NULL
+                    OR array_length(tensions, 1) = 0
+                  )
               AND item_name IS NOT NULL
               AND category IS NOT NULL
             GROUP BY item_name, category
-            ORDER BY 
+            HAVING (bool_or(question_type <> 'select_all') OR MAX(n) >= 100)
+               AND (MAX(enrichment_updated_at) IS NULL OR MAX(enrichment_updated_at) < %s)
+            ORDER BY
                 MAX(joy_index) DESC NULLS LAST,
                 MAX(n) DESC NULLS LAST
             LIMIT %s
-        """, (limit,))
+        """, (run_start_ts, limit))
         return [dict(r) for r in cur.fetchall()]
 
 
@@ -133,7 +162,7 @@ def tag_batch(client: anthropic.Anthropic, items: list[dict]) -> list[dict]:
 
     response = client.messages.create(
         model=MODEL,
-        max_tokens=8000,
+        max_tokens=12000,  # 50 items × ~200 tokens per tagged row + headroom
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_msg}],
     )
@@ -149,44 +178,86 @@ def tag_batch(client: anthropic.Anthropic, items: list[dict]) -> list[dict]:
     return parsed["items"]
 
 
-def writeback(conn, tagged: list[dict], dry_run: bool) -> int:
-    """Write enrichments back to bjl_scores. Returns number of distinct (item, category) pairs updated."""
+def writeback(conn, sources: list[dict], tagged: list[dict], dry_run: bool) -> int:
+    """Write enrichments back to bjl_scores. Returns number of distinct (item, category) pairs updated.
+
+    Pairs each fetched source with the LLM's tag response by position (the
+    prompt contracts for same-order same-length output). Uses the source's
+    item_name/category for the WHERE clause, not the LLM's echo, so Unicode
+    variants the LLM canonicalizes (curly apostrophes → straight, em-dashes →
+    hyphens, non-breaking spaces → spaces) still match the row in the DB.
+    """
     if dry_run:
         print(f"  [DRY RUN] Would update {len(tagged)} (item, category) pairs")
-        for t in tagged[:3]:
-            print(f"    {t['item_name'][:60]} ({t['category']}): joy_modes={t['joy_modes']}")
+        for src, t in list(zip(sources, tagged))[:3]:
+            print(f"    {src['item_name'][:60]} ({src['category']}): joy_modes={t.get('joy_modes')}")
         return 0
 
+    if len(tagged) != len(sources):
+        print(f"  WARN: writeback pairing count mismatch (sources={len(sources)}, tagged={len(tagged)})", file=sys.stderr)
+
+    pair_count = min(len(sources), len(tagged))
     updated = 0
     with conn.cursor() as cur:
-        for t in tagged:
+        for i in range(pair_count):
+            src = sources[i]
+            t = tagged[i]
             # Defensive validation: make sure all values are in the controlled vocab
             joy_modes = [v for v in t.get("joy_modes", []) if v in JOY_MODES]
             occasions = [v for v in t.get("occasions", []) if v in OCCASIONS]
             functional_jobs = [v for v in t.get("functional_jobs", []) if v in FUNCTIONAL_JOBS]
             tensions = [v for v in t.get("tensions", []) if v in TENSIONS]
 
+            # CASE-guard: fill each array only when it is currently empty
+            # (NULL, empty literal {}, or explicit zero-length). Preserves any
+            # tags that are already there. enrichment_updated_at is set on
+            # every scan, including no-op passes, so future reruns can gate on
+            # scan status rather than tag emptiness.
             cur.execute("""
                 UPDATE bjl_scores
-                SET joy_modes = %s,
-                    occasions = %s,
-                    functional_jobs = %s,
-                    tensions = %s,
+                SET joy_modes = CASE
+                        WHEN joy_modes IS NULL
+                             OR array_length(joy_modes, 1) IS NULL
+                             OR array_length(joy_modes, 1) = 0
+                        THEN %s ELSE joy_modes END,
+                    occasions = CASE
+                        WHEN occasions IS NULL
+                             OR array_length(occasions, 1) IS NULL
+                             OR array_length(occasions, 1) = 0
+                        THEN %s ELSE occasions END,
+                    functional_jobs = CASE
+                        WHEN functional_jobs IS NULL
+                             OR array_length(functional_jobs, 1) IS NULL
+                             OR array_length(functional_jobs, 1) = 0
+                        THEN %s ELSE functional_jobs END,
+                    tensions = CASE
+                        WHEN tensions IS NULL
+                             OR array_length(tensions, 1) IS NULL
+                             OR array_length(tensions, 1) = 0
+                        THEN %s ELSE tensions END,
                     enrichment_updated_at = now()
                 WHERE item_name = %s AND category = %s
-            """, (joy_modes, occasions, functional_jobs, tensions, t["item_name"], t["category"]))
+            """, (joy_modes, occasions, functional_jobs, tensions, src["item_name"], src["category"]))
+            if cur.rowcount == 0:
+                # Should not happen with pair-by-position; log so we notice.
+                print(f"  WARN: 0 rows matched for '{src['item_name'][:60]}' ({src['category']})", file=sys.stderr)
             updated += cur.rowcount
     conn.commit()
     return updated
 
 
 def get_progress(conn) -> tuple[int, int]:
+    """Report scan status: how many combos have any enrichment attempt vs total.
+    This tracks the same signal the writeback bumps (enrichment_updated_at), so
+    a run's net delta reflects new scan coverage — not just tag completeness,
+    since tensions and other arrays can be legitimately empty."""
     with conn.cursor() as cur:
         cur.execute("""
-            SELECT 
-                COUNT(DISTINCT (item_name, category)) FILTER (WHERE joy_modes IS NOT NULL AND array_length(joy_modes, 1) > 0) AS tagged,
+            SELECT
+                COUNT(DISTINCT (item_name, category)) FILTER (WHERE enrichment_updated_at IS NOT NULL) AS scanned,
                 COUNT(DISTINCT (item_name, category)) AS total
             FROM bjl_scores
+            WHERE item_name IS NOT NULL AND category IS NOT NULL
         """)
         return cur.fetchone()
 
@@ -213,15 +284,25 @@ def main():
     client = anthropic.Anthropic(api_key=api_key)
     conn = psycopg2.connect(db_url)
 
-    tagged_start, total = get_progress(conn)
-    print(f"Starting state: {tagged_start}/{total} (item, category) combos tagged ({100*tagged_start/total:.1f}%)")
+    scanned_start, total = get_progress(conn)
+    print(f"Starting state: {scanned_start}/{total} (item, category) combos scanned ({100*scanned_start/total:.1f}%)")
+
+    # Capture the run's start timestamp from the database's clock so the
+    # scan-status guard in get_untagged_items uses the same clock the
+    # writeback stamps with (now()). Without this, combos scanned during this
+    # run would keep matching the tag-emptiness fetch key on subsequent
+    # batches whenever the LLM legitimately returned empty arrays.
+    with conn.cursor() as cur:
+        cur.execute("SELECT now()")
+        run_start_ts = cur.fetchone()[0]
+    print(f"Run start timestamp: {run_start_ts.isoformat()}")
 
     batch_num = 0
     rows_updated_total = 0
 
     while batch_num < args.max_batches:
         batch_num += 1
-        items = get_untagged_items(conn, args.limit)
+        items = get_untagged_items(conn, args.limit, run_start_ts)
         if not items:
             print("No untagged items remaining.")
             break
@@ -243,15 +324,15 @@ def main():
         if len(tagged) != len(items):
             print(f"  WARN: input had {len(items)} items, got {len(tagged)} back", file=sys.stderr)
 
-        rows = writeback(conn, tagged, args.dry_run)
+        rows = writeback(conn, items, tagged, args.dry_run)
         rows_updated_total += rows
         print(f"  Updated {rows} rows in bjl_scores")
 
         time.sleep(SLEEP_BETWEEN_CALLS)
 
-    tagged_end, _ = get_progress(conn)
-    print(f"\nFinal state: {tagged_end}/{total} (item, category) combos tagged ({100*tagged_end/total:.1f}%)")
-    print(f"Net new combos this run: {tagged_end - tagged_start}")
+    scanned_end, _ = get_progress(conn)
+    print(f"\nFinal state: {scanned_end}/{total} (item, category) combos scanned ({100*scanned_end/total:.1f}%)")
+    print(f"Net new combos scanned this run: {scanned_end - scanned_start}")
     print(f"Total bjl_scores rows updated: {rows_updated_total}")
 
     conn.close()
