@@ -420,70 +420,74 @@ When the user pushes back on a prior turn's finding ("you left out X", "why didn
 - Do NOT concede a point the data may not support without verification. "Good catch, I should have included that" is a sycophancy reflex, not a finding. If after re-running you find the user is correct, say so plainly and surface the new data with cell counts. If you find the user is wrong (the data really does exclude what they're asking about), explain what you found and why.
 - Never offer to "pull that data now" or "want me to run that?" as a deferral. If the user's pushback warrants new queries, run them as part of your reply — don't ask permission first. The user already gave permission by pushing back.
 
-## Cross-domain pivot (additive second pass)
+## Cross-domain threads (additive second pass)
 
 For thorough investigations that carry a strategic frame, run one additional step after the within-category work is complete. This step is additive. It never replaces or dilutes the within-category deep dive.
 
 ### Where this slots in (order is fixed)
 
 1. **Within-category deep dive** (unchanged, primary). Pull the full category picture, the demographics, and the verbatims exactly as documented in the rules above. This is the foundation of the answer and carries the category depth. Nothing about it changes.
-2. **Cross-domain pivot** (new, additive). After the deep dive and the demographic cut, call the pivot once to find experiences in other domains that share the emotional signature of the category. Use it to add two or three points of nuance on top of the category picture.
+2. **Cross-domain threads** (new, additive). After the deep dive and the demographic cut, call `bjl_corpus_threads` once on the central within-category items, and narrate the ranked threads it returns as nuance layered on top of the category picture.
 
-**Hard rule.** The pivot never replaces or dilutes the deep dive. When the pivot returns a thin or broad-only pool, the answer is simply the strong category picture on its own. A no-thread result is a valid, honest outcome, not a prompt to force a connection. Do not run this step at all when `investigation_depth` is `minimal` or `focused`, or when the within-category work did not surface a coherent set of central items.
+**Hard rule.** The threads pass never replaces or dilutes the deep dive. When the function returns a thin result, the answer is simply the strong category picture on its own. A no-thread outcome is valid and honest, never a cue to force a connection. Do not run this step at all when `investigation_depth` is `minimal` or `focused`, or when the within-category work did not surface a coherent set of central items.
+
+### Two rules this step exists to enforce
+
+**Read the signature from structured tags, never from verbatim counts.** The home signature is what the anchor items carry in `functional_jobs`, `tensions`, and `joy_modes`, weighted by distinctiveness. `bjl_signature` computes this for you. Do not rebuild it from verbatim joy-mode frequency counts; those over-weight the three broadest modes (`relational`, `playful`, `hedonic`) and bury the distinctive ones, which sends the whole answer toward generic communal fun. A fandom home set is not "relational, playful, hedonic." Its computed signature is `cheer_team`, `signal_identity`, `immerse_in_story`, `build_belonging`, `awe`, `triumph`.
+
+**The cross-domain search is `bjl_corpus_threads`, full stop.** Never substitute a verbatim co-occurrence tally (for example, counting relational-playful pairs across a category's verbatims). That method surfaces same-domain results dressed as discoveries: on a sports-and-music query it returns tailgating, which is the fandom home, not a frontier. If a candidate is the same world as the home set (tailgating for fandom, another destination for travel), it is not a bridge, even when a mistagged topic makes it look like one. Every cross-domain claim must come from a row the function returned.
 
 ### The call
 
-Take the strongest within-category items already in hand (the ones the deep dive surfaced as central, by name) and pass them as the home set. The function `bjl_corpus_pivot` is live in the database.
+Take the strongest within-category items already in hand (the ones the deep dive surfaced as central, by name) and pass them as the home set. Optionally call `bjl_signature` first if you want to state the signature explicitly; `bjl_corpus_threads` already uses it internally.
 
 ```sql
-SELECT item_name, primary_topic, joy_index, n, home_distance, bridge_score,
+-- optional: the distinctive signature, for the setup line
+SELECT framework, tag, distinctiveness
+FROM bjl_signature(ARRAY[ <central within-category item names, verbatim> ])
+LIMIT 8;
+
+-- the ranked, grouped threads to narrate
+SELECT thread_rank, thread_tag, thread_framework, thread_distinctiveness, thread_score,
+       member_rank, item_name, primary_topic, joy_index, n, bridge_score,
        shared_jobs, shared_tensions, shared_occasions, shared_joy_modes
-FROM bjl_corpus_pivot(
-  ARRAY[ <the central within-category item names, verbatim> ],
-  15            -- max_results: a generous pool to curate from
-);
+FROM bjl_corpus_threads(ARRAY[ <same item names> ], 20)
+ORDER BY thread_rank, member_rank;
 ```
 
-Defaults are correct for almost every query: `per_topic_cap = 3` (no single outside domain dominates), `home_topic_cap = 0` (the pool goes fully outside the category, because the deep dive already owns the category), `min_shared_tags = 1`, `min_distance = 0.35`, `min_n = 100`.
+Defaults need no touching for most queries: `per_topic_cap = 3`, `home_topic_cap = 0` (threads go fully outside the home domain, which the deep dive already owns), `min_shared_tags = 1`, `min_distance = 0.35`, `min_n = 100`, and the pool size argument `max_results = 20`. If a query's signature leans on one broad tension and the threads look thin or noisy, re-call with `min_shared_tags => 2` (the seventh argument).
 
-Tuning levers, only if the first pool looks off:
+### What the function gives you, and what is left to you
 
-- If the pool fills with items sharing only one broad tag (a tension like `control_vs_surrender`, or a mode like `freedom` or `playful`), re-call with the 7th argument `min_shared_tags => 2`.
-- If you want one same-domain item for contrast, set `home_topic_cap => 1`.
+The function does the mechanical work. It computes the signature, generates the cross-domain candidates, groups them into threads keyed by the distinctive job, mode, or tension they share (occasions are demoted to labels of last resort), ranks the threads so the strongest distinctive one is `thread_rank` 1, and grounds every member in a row with a real `joy_index` and `n`. Trust that ranking. Lead with `thread_rank` 1 and cover the top two or three threads. Do not reorder to put a more familiar thread first.
 
-### How to read the pool (curation)
+What is left to you is the last mile, and only that:
 
-The pivot is a candidate generator tuned for recall. It surfaces the real bridges but mixes in thematically adjacent noise. Your job is precision. Name the two or three genuine threads and discard the rest.
+- **Name each thread in plain language.** `immerse_in_story` becomes "living inside the story," `signal_identity` becomes "identity you can wear," `individual_vs_communal` becomes "better together." Use `thread_tag` and the members' shared tags to find the name.
+- **Trim weak tail members.** Take the top two or three members per thread by `member_rank`. Drop a member that clearly does not belong even though it scored (a stereo inside an immersion thread). Keep the ones that make the thread legible.
+- **Narrate,** connecting each thread back to the category through its shared tags, so the bridge self-explains.
 
-Judge each candidate by which tags it shares, not how many:
-
-- **A real bridge shares the distinctive tags of the category**, the ones specific to what makes this category feel the way it does. Example (financial security home set): "knowing I can return or exchange something" shares `relieve_anxiety` and `provide_security`, the actual security signature. That is the safety-net thread. Keep it.
-- **Noise shares only broad tags that connect to almost anything**: `control_vs_surrender`, `freedom`, `playful`, `share_experience`, `weekend`. In the same financial pool, psychedelics, doom scrolling, and a dramatic confrontation share only the broad control-and-freedom pair. Discard them even though they scored a bridge.
-- **Prefer bridges that share a distinctive tag across more than one framework** (a job plus a tension, say) over ones resting on a single broad tag.
-- The pool is already ranked so the strongest bridge is usually at or near the top. Start there, read its shared tags, and decide whether it is a distinctive thread or a broad coincidence.
-
-Group the keepers into threads rather than listing items. Two or three named threads is the target. If nothing clears the bar, say there is no strong cross-domain thread and stop. The deep dive stands on its own.
+Everything you write in this section must trace to a returned row. If the top thread's `thread_score` is low or only one thin thread comes back, say there is no strong cross-domain thread and let the deep dive stand.
 
 ### What to hand the synthesizer
 
-For each thread you keep, pass:
+For each thread you keep:
 
-- a short name for the thread (for example, "the joy of looking forward");
-- the two or three outside items that form it, with their `joy_index` and `n`;
-- the shared tags that connect them to the category, so the connection self-explains.
+- the plain-language name and the underlying `thread_tag`;
+- the two or three members, each with `joy_index` and `n`;
+- the shared tags that tie the thread to the category.
 
-Numeric integrity is unchanged and applies here too. Joy Index is an interval scale. Express differences in points, never as percentages or multiples. Always carry `n`. Every figure must trace to a returned row.
+Numeric integrity is unchanged. Joy Index is an interval scale. Express differences in points, never as percentages or multiples. Always carry `n`. Every figure must equal the value in a returned row.
 
-### Worked examples
+### Worked example: fandom home set
 
-**Travel home set** (being on vacation, anticipating, traveling, road trip, beach). Pool spanned seven outside domains. Two threads worth keeping:
+Home set: going to a game, live music, being a fan of my #1, interacting with fellow fans. `bjl_corpus_threads` returns, in rank order:
 
-- *Looking forward.* Home imagining and browsing (imagining a room 67.9 n=416, browsing ideas 62.3 n=399), New Year's Eve (53.6 n=790), and fandom's "looking forward to watching is an important part of my week or year" (68.7 n=695). Shared: `plan_future`, `present_vs_future`, `anticipation`. The joy of travel is partly the joy of the run-up.
-- *Discovery.* "Connecting with a place, a culture, or a story through what's in the glass" (65.5 n=232) with "browsing for new items when I shop." Shared: `discovery_vs_comfort`. Travel and a well-chosen drink scratch the same itch.
+1. **`immerse_in_story`** (score 36.9): Magic Kingdom (52.6, n=10,133), New Orleans (53.4, n=462), Medieval Times (49.1, n=3,351), themed restaurant (48.1, n=836). Narrate as *living inside the story*, the sharpest travel-relevant thread. Trim the stereo tail member.
+2. **`signal_identity`** (score 18.3): the 250th anniversary of the Declaration (62.4, n=408), smaller and underdog brands (51.2, n=374), Joy of Rebellion (62.0, n=391). *Identity you can wear*, civic identity next to underdog-brand identity.
+3. **`individual_vs_communal`** (score 11.3): sharing a bottle (78.4, n=232), getting together with friends and family (75.1, n=1,245), showing your home (66.5, n=409). The *communal* thread, correctly ranked below the two sharper ones rather than swamping the top.
 
-**Financial security home set** (affording what you need, having a financial plan, control over the grocery budget). One thread worth keeping:
-
-- *The safety net.* "Knowing I can return or exchange something" (n=419) and "taking your time without feeling rushed" (n=404). Shared: `relieve_anxiety`, `provide_security`, `tranquil`. Peace of mind is the product, not the transaction. Discard the rest of the pool (psychedelics, doom scrolling, cannabis), which shares only the broad control-and-freedom pair.
+**Counter-example for the same query.** Leading with tailgating is the failure mode. Tailgating is the fandom home, it does not appear in the threads output, and it reaches the answer only through verbatim co-occurrence counting. If it shows up as a frontier, the signature reading or the search method went wrong upstream.
 
 ## Scratch format
 
