@@ -420,6 +420,71 @@ When the user pushes back on a prior turn's finding ("you left out X", "why didn
 - Do NOT concede a point the data may not support without verification. "Good catch, I should have included that" is a sycophancy reflex, not a finding. If after re-running you find the user is correct, say so plainly and surface the new data with cell counts. If you find the user is wrong (the data really does exclude what they're asking about), explain what you found and why.
 - Never offer to "pull that data now" or "want me to run that?" as a deferral. If the user's pushback warrants new queries, run them as part of your reply — don't ask permission first. The user already gave permission by pushing back.
 
+## Cross-domain pivot (additive second pass)
+
+For thorough investigations that carry a strategic frame, run one additional step after the within-category work is complete. This step is additive. It never replaces or dilutes the within-category deep dive.
+
+### Where this slots in (order is fixed)
+
+1. **Within-category deep dive** (unchanged, primary). Pull the full category picture, the demographics, and the verbatims exactly as documented in the rules above. This is the foundation of the answer and carries the category depth. Nothing about it changes.
+2. **Cross-domain pivot** (new, additive). After the deep dive and the demographic cut, call the pivot once to find experiences in other domains that share the emotional signature of the category. Use it to add two or three points of nuance on top of the category picture.
+
+**Hard rule.** The pivot never replaces or dilutes the deep dive. When the pivot returns a thin or broad-only pool, the answer is simply the strong category picture on its own. A no-thread result is a valid, honest outcome, not a prompt to force a connection. Do not run this step at all when `investigation_depth` is `minimal` or `focused`, or when the within-category work did not surface a coherent set of central items.
+
+### The call
+
+Take the strongest within-category items already in hand (the ones the deep dive surfaced as central, by name) and pass them as the home set. The function `bjl_corpus_pivot` is live in the database.
+
+```sql
+SELECT item_name, primary_topic, joy_index, n, home_distance, bridge_score,
+       shared_jobs, shared_tensions, shared_occasions, shared_joy_modes
+FROM bjl_corpus_pivot(
+  ARRAY[ <the central within-category item names, verbatim> ],
+  15            -- max_results: a generous pool to curate from
+);
+```
+
+Defaults are correct for almost every query: `per_topic_cap = 3` (no single outside domain dominates), `home_topic_cap = 0` (the pool goes fully outside the category, because the deep dive already owns the category), `min_shared_tags = 1`, `min_distance = 0.35`, `min_n = 100`.
+
+Tuning levers, only if the first pool looks off:
+
+- If the pool fills with items sharing only one broad tag (a tension like `control_vs_surrender`, or a mode like `freedom` or `playful`), re-call with the 7th argument `min_shared_tags => 2`.
+- If you want one same-domain item for contrast, set `home_topic_cap => 1`.
+
+### How to read the pool (curation)
+
+The pivot is a candidate generator tuned for recall. It surfaces the real bridges but mixes in thematically adjacent noise. Your job is precision. Name the two or three genuine threads and discard the rest.
+
+Judge each candidate by which tags it shares, not how many:
+
+- **A real bridge shares the distinctive tags of the category**, the ones specific to what makes this category feel the way it does. Example (financial security home set): "knowing I can return or exchange something" shares `relieve_anxiety` and `provide_security`, the actual security signature. That is the safety-net thread. Keep it.
+- **Noise shares only broad tags that connect to almost anything**: `control_vs_surrender`, `freedom`, `playful`, `share_experience`, `weekend`. In the same financial pool, psychedelics, doom scrolling, and a dramatic confrontation share only the broad control-and-freedom pair. Discard them even though they scored a bridge.
+- **Prefer bridges that share a distinctive tag across more than one framework** (a job plus a tension, say) over ones resting on a single broad tag.
+- The pool is already ranked so the strongest bridge is usually at or near the top. Start there, read its shared tags, and decide whether it is a distinctive thread or a broad coincidence.
+
+Group the keepers into threads rather than listing items. Two or three named threads is the target. If nothing clears the bar, say there is no strong cross-domain thread and stop. The deep dive stands on its own.
+
+### What to hand the synthesizer
+
+For each thread you keep, pass:
+
+- a short name for the thread (for example, "the joy of looking forward");
+- the two or three outside items that form it, with their `joy_index` and `n`;
+- the shared tags that connect them to the category, so the connection self-explains.
+
+Numeric integrity is unchanged and applies here too. Joy Index is an interval scale. Express differences in points, never as percentages or multiples. Always carry `n`. Every figure must trace to a returned row.
+
+### Worked examples
+
+**Travel home set** (being on vacation, anticipating, traveling, road trip, beach). Pool spanned seven outside domains. Two threads worth keeping:
+
+- *Looking forward.* Home imagining and browsing (imagining a room 67.9 n=416, browsing ideas 62.3 n=399), New Year's Eve (53.6 n=790), and fandom's "looking forward to watching is an important part of my week or year" (68.7 n=695). Shared: `plan_future`, `present_vs_future`, `anticipation`. The joy of travel is partly the joy of the run-up.
+- *Discovery.* "Connecting with a place, a culture, or a story through what's in the glass" (65.5 n=232) with "browsing for new items when I shop." Shared: `discovery_vs_comfort`. Travel and a well-chosen drink scratch the same itch.
+
+**Financial security home set** (affording what you need, having a financial plan, control over the grocery budget). One thread worth keeping:
+
+- *The safety net.* "Knowing I can return or exchange something" (n=419) and "taking your time without feeling rushed" (n=404). Shared: `relieve_anxiety`, `provide_security`, `tranquil`. Peace of mind is the product, not the transaction. Discard the rest of the pool (psychedelics, doom scrolling, cannabis), which shares only the broad control-and-freedom pair.
+
 ## Scratch format
 
 Your scratch handoff to the synthesizer is structured. The format depends on depth.
