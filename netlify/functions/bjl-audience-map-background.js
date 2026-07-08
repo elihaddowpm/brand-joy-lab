@@ -53,6 +53,7 @@ const { classifyScaleKind } = require('./bjl-joy-pattern-helper');
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
@@ -61,7 +62,43 @@ const PROMPTS = require('./_prompts_bundle.json');
 
 const ROUTING_MODEL = 'claude-haiku-4-5-20251001';
 const SYNTHESIS_MODEL = 'claude-sonnet-4-6';
+const EMBED_MODEL = 'text-embedding-3-small';
 const MAX_TOKENS = 8000;
+
+// v9.17: Coverage scan is always on for the Audience Map build. We embed
+// the audience description and pull the 16-topic matrix ahead of Pass 3
+// so the synthesis LLM sees cross-topic signal alongside the seed cohort
+// profile. Returns null on failure so synthesis proceeds without it.
+async function embedText(text) {
+  if (!OPENAI_API_KEY || !text) return null;
+  try {
+    const rsp = await fetch('https://api.openai.com/v1/embeddings', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({ model: EMBED_MODEL, input: String(text).slice(0, 8000) }),
+    });
+    if (!rsp.ok) return null;
+    const json = await rsp.json();
+    const vec = json && json.data && json.data[0] && json.data[0].embedding;
+    if (!Array.isArray(vec)) return null;
+    return `[${vec.join(',')}]`;
+  } catch (_) { return null; }
+}
+
+async function runCoverageScan(descriptionText) {
+  const vecLit = await embedText(descriptionText);
+  if (!vecLit) return null;
+  const sql = `SELECT * FROM bjl_coverage_scan('${vecLit}'::vector)`;
+  const { data, error } = await supabase.rpc('execute_read_sql', { query_text: sql });
+  if (error) {
+    console.error('[bjl-audience-map] coverage scan failed:', error.message);
+    return null;
+  }
+  return Array.isArray(data) ? data : null;
+}
 
 const LOW_N_WARN_THRESHOLD = 100;
 const LOW_N_REFUSE_THRESHOLD = 30;
@@ -622,9 +659,21 @@ async function cohortCount(cohortSQL) {
 // Pass 3: Synthesis
 // =====================================================================
 
-async function pass3Synthesis(routing, seedProfile, decisionContextCatalog) {
+async function pass3Synthesis(routing, seedProfile, decisionContextCatalog, coverageMatrix) {
   const systemPrompt = PROMPTS.audienceMapSynthesis;
   if (!systemPrompt) throw new Error('audience_map_synthesis prompt missing from bundle');
+
+  // v9.17: When the coverage scan ran, include the 16-topic matrix. It sits
+  // alongside the seed cohort profile so the synthesizer can factor
+  // cross-topic patterns (a driver ranking unexpectedly high in an
+  // adjacent topic center) into the parameter set and editorial layer.
+  const coverageBlock = Array.isArray(coverageMatrix) && coverageMatrix.length > 0
+    ? [
+        '',
+        'coverage_matrix (all 16 primary_topic centers, semantic-scan against the audience description; use for cross-topic signal — a strong pattern in an adjacent topic is worth naming):',
+        JSON.stringify(coverageMatrix, null, 2),
+      ].join('\n')
+    : '';
 
   const userMessage = [
     'seed_strategy:',
@@ -653,6 +702,7 @@ async function pass3Synthesis(routing, seedProfile, decisionContextCatalog) {
       question_text: b.question_text,
       n_items: b.n_items,
     })), null, 2),
+    coverageBlock,
   ].join('\n');
 
   const rsp = await anthropic.messages.create({
@@ -962,8 +1012,14 @@ exports.handler = async (event) => {
       demographics_for_llm: seedDemoForLLM.rows,
     };
 
+    // v9.17: Coverage scan is always on for the Audience Map build. The
+    // 16-topic matrix is computed from the audience description and
+    // passed into Pass 3 alongside the seed cohort profile. Non-fatal
+    // if the scan fails — synthesis proceeds with the standard payload.
+    const coverageMatrix = await runCoverageScan(description);
+
     // Pass 3: synthesis
-    const synthesis = await pass3Synthesis(routing, seedProfile, decisionContextCatalog);
+    const synthesis = await pass3Synthesis(routing, seedProfile, decisionContextCatalog, coverageMatrix);
     if (!Array.isArray(synthesis.parameters) || synthesis.parameters.length === 0) {
       throw new Error('Pass 3 returned no parameters');
     }

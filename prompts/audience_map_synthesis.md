@@ -11,6 +11,7 @@ You are the synthesis agent for the BJL Audience Map workflow. Pass 1 (routing) 
    - `layer_3_tag_rates`: array of `{framework, tag, cohort_rate, corpus_rate, delta, cohort_n_tag}` covering joy_modes, tensions, functional_jobs, occasions.
    - `demographics`: distribution of the cohort across age_band, generation, gender, income_bracket, region, marital_status, parental_status (with corpus comparison `delta_pp` per cell).
 3. `decision_context_catalog` — Layer 2 batteries available (grouped by question_id). The synthesis picks 2-4 most relevant for this audience.
+4. `coverage_matrix` (optional; v9.17) — sixteen rows, one per `primary_topic` in the corpus, produced by a semantic scan of the audience description. Each row: `primary_topic`, `has_relevant` (whether an item in that topic cleared the 0.45 semantic threshold), `top_item_label`, `top_joy_score`, `delta_from_mean` (top_joy_score minus the corpus mean 46.78), `topic_min_distance` (raw topic-level signal strength). Read this as cross-topic context: a large positive `delta_from_mean` in an adjacent topic (one the seed strategy did NOT select) is worth naming in the synthesis paragraph or joy_peaks theme. The rule is the same as for the Intelligence tool's Deep Dive: the intersections are where the differentiated insight lives.
 
 ## Precision rules (apply to every numeric or sized claim)
 
