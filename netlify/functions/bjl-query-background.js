@@ -630,11 +630,21 @@ async function runSynthesis(triage, scratch, extraContext) {
       : (triage.followup_seeds || []);
 
     // Cross-domain structured contract (v-guard). Optional fields the
-    // synthesizer emits when it made cross-domain claims. Read via the
-    // normalized reader so case/separator drift doesn't drop them.
+    // synthesizer emits when it made cross-category claims. Read via the
+    // normalized reader so case/separator drift doesn't drop them. The
+    // four signature-keyed fields (signature, cross_domain_items,
+    // audience_affinity, audience_profile) come from the corresponding
+    // bjl_* functions in scratch; the guard validates each against its
+    // own allowlist. cross_domain_threads is kept as a legacy field on
+    // the older nested shape.
     const crossDomainThreadsValue = read('cross_domain_threads');
     const homeTopicValue = read('home_topic');
     const cardsValue = read('cards');
+    const signatureValue = read('signature');
+    const crossDomainItemsValue = read('cross_domain_items');
+    const audienceAffinityValue = read('audience_affinity');
+    const audienceProfileValue = read('audience_profile');
+    const audienceSizeValue = read('audience_size');
     const crossDomainThreads = Array.isArray(crossDomainThreadsValue)
       ? crossDomainThreadsValue
       : null;
@@ -642,6 +652,13 @@ async function runSynthesis(triage, scratch, extraContext) {
       ? homeTopicValue
       : (Array.isArray(homeTopicValue) ? homeTopicValue : null);
     const cards = Array.isArray(cardsValue) ? cardsValue : null;
+    const signature = Array.isArray(signatureValue) ? signatureValue : null;
+    const crossDomainItems = Array.isArray(crossDomainItemsValue) ? crossDomainItemsValue : null;
+    const audienceAffinity = Array.isArray(audienceAffinityValue) ? audienceAffinityValue : null;
+    const audienceProfile = Array.isArray(audienceProfileValue) ? audienceProfileValue : null;
+    const audienceSize = (typeof audienceSizeValue === 'number' && Number.isFinite(audienceSizeValue))
+      ? Math.trunc(audienceSizeValue)
+      : null;
 
     if (!responseText) {
       // JSON parsed but no recognizable response_text key in any casing.
@@ -670,7 +687,12 @@ async function runSynthesis(triage, scratch, extraContext) {
       followup_chips: followupChips,
       cross_domain_threads: crossDomainThreads,
       home_topic: homeTopic,
-      cards
+      cards,
+      signature,
+      cross_domain_items: crossDomainItems,
+      audience_affinity: audienceAffinity,
+      audience_profile: audienceProfile,
+      audience_size: audienceSize,
     };
   } catch (e) {
     // JSON.parse failed entirely. Three sub-paths, all of which now route
@@ -737,16 +759,27 @@ async function runSynthesis(triage, scratch, extraContext) {
 async function runSynthesisWithGuard(triage, scratch, extraContext) {
   const initial = await runSynthesis(triage, scratch, extraContext);
 
-  const threads = Array.isArray(initial.cross_domain_threads) ? initial.cross_domain_threads : [];
-  const cards   = Array.isArray(initial.cards) ? initial.cards : [];
+  const structured = {
+    threads:            Array.isArray(initial.cross_domain_threads) ? initial.cross_domain_threads : [],
+    cards:              Array.isArray(initial.cards) ? initial.cards : [],
+    signature:          Array.isArray(initial.signature) ? initial.signature : [],
+    cross_domain_items: Array.isArray(initial.cross_domain_items) ? initial.cross_domain_items : [],
+    audience_affinity:  Array.isArray(initial.audience_affinity) ? initial.audience_affinity : [],
+    audience_profile:   Array.isArray(initial.audience_profile) ? initial.audience_profile : [],
+  };
   // Nothing to guard against unless the synthesizer emitted structured
   // claims. Bail out fast in the common case.
-  if (threads.length === 0 && cards.length === 0) return initial;
+  const anyStructured = Object.values(structured).some(a => a.length > 0);
+  if (!anyStructured) return initial;
 
   const firstPass = runProvenanceGuard({
-    threads,
-    cards,
-    home_topic: initial.home_topic,
+    threads:            structured.threads,
+    cards:              structured.cards,
+    signature:          structured.signature,
+    cross_domain_items: structured.cross_domain_items,
+    audience_affinity:  structured.audience_affinity,
+    audience_profile:   structured.audience_profile,
+    home_topic:         initial.home_topic,
     scratch,
   });
   if (firstPass.ok) return initial;
@@ -785,13 +818,23 @@ async function runSynthesisWithGuard(triage, scratch, extraContext) {
   // user message. runSynthesis is unchanged; the prefix is threaded through
   // extraContext and picked up in the userMessage build.
   const retry = await runSynthesis(triage, scratch, retryContext);
-  const retryThreads = Array.isArray(retry.cross_domain_threads) ? retry.cross_domain_threads : [];
-  const retryCards   = Array.isArray(retry.cards) ? retry.cards : [];
+  const retryStructured = {
+    threads:            Array.isArray(retry.cross_domain_threads) ? retry.cross_domain_threads : [],
+    cards:              Array.isArray(retry.cards) ? retry.cards : [],
+    signature:          Array.isArray(retry.signature) ? retry.signature : [],
+    cross_domain_items: Array.isArray(retry.cross_domain_items) ? retry.cross_domain_items : [],
+    audience_affinity:  Array.isArray(retry.audience_affinity) ? retry.audience_affinity : [],
+    audience_profile:   Array.isArray(retry.audience_profile) ? retry.audience_profile : [],
+  };
 
   const secondPass = runProvenanceGuard({
-    threads: retryThreads,
-    cards: retryCards,
-    home_topic: retry.home_topic,
+    threads:            retryStructured.threads,
+    cards:              retryStructured.cards,
+    signature:          retryStructured.signature,
+    cross_domain_items: retryStructured.cross_domain_items,
+    audience_affinity:  retryStructured.audience_affinity,
+    audience_profile:   retryStructured.audience_profile,
+    home_topic:         retry.home_topic,
     scratch,
   });
   if (secondPass.ok) return retry;
@@ -800,19 +843,24 @@ async function runSynthesisWithGuard(triage, scratch, extraContext) {
     JSON.stringify(secondPass.failures).slice(0, 800));
 
   // Second failure. Drop the specific surface(s) that failed, keep the ones
-  // that verified. Threads and cards fail independently — a bad card
-  // shouldn't cost us the threads sidecar, and vice versa.
-  const threadsFailed = secondPass.failures.some(f => f.surface === 'threads');
-  const cardsFailed   = secondPass.failures.some(f => f.surface === 'cards');
+  // that verified. Each surface fails independently — a bad audience_profile
+  // row shouldn't cost us the cross_domain_items sidecar, and so on.
+  const failedSurfaces = new Set(secondPass.failures.map(f => f.surface));
+  const outThreads            = failedSurfaces.has('threads')            ? [] : retryStructured.threads;
+  const outSignature          = failedSurfaces.has('signature')          ? [] : retryStructured.signature;
+  const outCrossDomainItems   = failedSurfaces.has('cross_domain_items') ? [] : retryStructured.cross_domain_items;
+  const outAudienceAffinity   = failedSurfaces.has('audience_affinity')  ? [] : retryStructured.audience_affinity;
+  const outAudienceProfile    = failedSurfaces.has('audience_profile')   ? [] : retryStructured.audience_profile;
+  // home_topic is coupled to threads + cross_domain_items — drop it only
+  // when everything that referenced it failed.
+  const outHomeTopic = (failedSurfaces.has('threads') && failedSurfaces.has('cross_domain_items'))
+    ? null
+    : retry.home_topic;
 
-  const outThreads = threadsFailed ? [] : retryThreads;
-  const outHomeTopic = threadsFailed ? null : retry.home_topic;
-  // For cards, drop the specific cards that failed rather than all of them,
-  // when we can attribute failures to a card_index. Keep the ones that
-  // passed. If any card failure has no card_index (e.g. a global
-  // 'no_scratch_rows_for_cards'), drop the whole card list.
-  let outCards = retryCards;
-  if (cardsFailed) {
+  // Cards: drop specific failed cards when card_index is known, otherwise
+  // (global card failure) drop the whole list.
+  let outCards = retryStructured.cards;
+  if (failedSurfaces.has('cards')) {
     const globalCardFail = secondPass.failures.some(f =>
       f.surface === 'cards' && (!f.claim || typeof f.claim.card_index !== 'number')
     );
@@ -824,7 +872,7 @@ async function runSynthesisWithGuard(triage, scratch, extraContext) {
           .filter(f => f.surface === 'cards' && f.claim && typeof f.claim.card_index === 'number')
           .map(f => f.claim.card_index)
       );
-      outCards = retryCards.filter((_, i) => !failedCardIndices.has(i));
+      outCards = retryStructured.cards.filter((_, i) => !failedCardIndices.has(i));
     }
   }
 
@@ -834,6 +882,11 @@ async function runSynthesisWithGuard(triage, scratch, extraContext) {
     cross_domain_threads: outThreads,
     home_topic: outHomeTopic,
     cards: outCards,
+    signature: outSignature,
+    cross_domain_items: outCrossDomainItems,
+    audience_affinity: outAudienceAffinity,
+    audience_profile: outAudienceProfile,
+    audience_size: retry.audience_size,
     synth_warning: 'provenance_failed',
     synth_warning_detail: secondPass.failures,
   };
@@ -961,6 +1014,11 @@ exports.handler = async (event) => {
       cross_domain_threads,
       home_topic,
       cards,
+      signature,
+      cross_domain_items,
+      audience_affinity,
+      audience_profile,
+      audience_size,
       synth_warning,
       synth_warning_detail,
     } = synth;
@@ -971,15 +1029,20 @@ exports.handler = async (event) => {
     // still lands but with the failure recorded so the UI can render an
     // "answer without that sidecar" state and the log has the offending
     // claims.
-    const hasThreads = Array.isArray(cross_domain_threads) && cross_domain_threads.length > 0;
-    const hasCards   = Array.isArray(cards) && cards.length > 0;
-    const guardMeta = (hasThreads || hasCards || home_topic || synth_warning)
+    const anyStructured = [cross_domain_threads, cards, signature, cross_domain_items, audience_affinity, audience_profile]
+      .some(a => Array.isArray(a) && a.length > 0);
+    const guardMeta = (anyStructured || home_topic || audience_size !== null || synth_warning)
       ? [{
           type: 'structured_synth_output',
           cross_domain_threads: Array.isArray(cross_domain_threads) ? cross_domain_threads : [],
-          cards: Array.isArray(cards) ? cards : [],
-          home_topic: home_topic || null,
-          synth_warning: synth_warning || null,
+          cards:                Array.isArray(cards) ? cards : [],
+          signature:            Array.isArray(signature) ? signature : [],
+          cross_domain_items:   Array.isArray(cross_domain_items) ? cross_domain_items : [],
+          audience_affinity:    Array.isArray(audience_affinity) ? audience_affinity : [],
+          audience_profile:     Array.isArray(audience_profile) ? audience_profile : [],
+          audience_size:        audience_size ?? null,
+          home_topic:           home_topic || null,
+          synth_warning:        synth_warning || null,
           synth_warning_detail: synth_warning_detail || null,
         }]
       : [];

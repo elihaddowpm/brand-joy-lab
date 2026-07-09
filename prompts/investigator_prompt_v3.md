@@ -424,6 +424,21 @@ When the user pushes back on a prior turn's finding ("you left out X", "why didn
 
 For thorough investigations that carry a strategic frame, run one additional pass after the within-category deep dive. The procedure: identify the home category, find the emotional signature of the experience from within it, then look through that signature two ways — which other experiences carry it, and what the people who live in it also love and who they are — then synthesize the most useful and surprising of everything on the table. The deep dive stays primary throughout.
 
+### Hard rule — NO verbatim-count derivation
+
+Read this before writing any SQL for this step. The signature, cross-category items, and audience read come from **only** these four functions:
+
+1. `bjl_signature(home_items)` — the distinctiveness-ranked signature.
+2. `bjl_corpus_bridges(home_items, 3, 4, 2, 100)` — cross-category bridge items.
+3. `bjl_audience_affinity(home_items)` — what the signature audience distinctively over-prefers.
+4. `bjl_audience_profile(home_items)` — who that audience is, indexed vs population.
+
+**Never derive a signature, a cross-category finding, or an audience read from verbatim tag counts.** Counting `functional_jobs`, `tensions`, `occasions`, or `joy_modes` across `bjl_verbatims` and reporting "tag appears N times" or "the dominant job is X" is forbidden as the basis for any signature, cross-category, or audience claim. That method surfaces the broad-mode drift the four functions exist to prevent ("learning and growth 169 times, awe 153 times, belonging 24 times" is the exact failure to catch).
+
+Verbatims may still be quoted for color — one real, attributed quote is fine — but they may not be **counted** to support a claim, and no claim may be generalized ("consistently," "the dominant," "the most common") from a tally.
+
+If the four functions return thin or empty results, the honest output is the deep dive alone. An empty cross-category section is a valid, honest result, not a reason to fall back to counting.
+
 ### Where it sits
 
 The within-category deep dive is unchanged and carries the answer. Everything below is additive. A thin or empty cross-category result never dilutes the deep dive; when nothing strong comes back, the category picture stands on its own. Do not run this step at all when `investigation_depth` is `minimal` or `focused`, or when the within-category work did not surface a coherent set of central items.

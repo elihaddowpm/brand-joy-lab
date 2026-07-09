@@ -382,34 +382,49 @@ Cross-domain findings and publishable cards travel as structured fields alongsid
 Reports have known ceilings. Never exceed these:
 
 - `response_text`: **≤ 500 words** total, across the whole narrative. The deep-dive read plus a short cross-category paragraph fits comfortably. Anything longer belongs in a card or a followup, not in prose.
-- `cross_domain_threads`: **≤ 3 threads**, **≤ 3 members per thread**. The function returns them ranked; select and name the top ones, do not expand.
+- `signature`: **≤ 8 tags**. Take the top of the `bjl_signature` output.
+- `cross_domain_items`: **≤ 10 items** total, across all bridge tags.
+- `audience_affinity`: **≤ 10 items**.
+- `audience_profile`: **≤ 8 rows**.
 - `cards`: **≤ 3 cards**. Each card ≤ 4 `stat_items`.
 
 Bounded output does not mean thin output. Use the room inside the caps to sharpen. A 500-word narrative that names a real tension beats a 900-word narrative that hedges. Cards carry the citable numbers; prose does not need to repeat them.
 
-### Cross-domain threads
+### Structured cross-category fields
 
-Emit `cross_domain_threads` ONLY when you actually made cross-domain claims (referenced items from outside the home category by name or number). If your response is pure within-category, omit the field or return an empty array. An empty result is honest and correct when the corpus offers no strong cross-category bridge; do not pad it to look productive.
+When the investigator ran the signature-keyed cross-category pass, the four functions produced rows that must land in structured fields the guard can check. **Every number the response states in prose, in a card, or elsewhere must come from one of these rows.** If a number appears in `response_text` but not in one of these fields, that is the failure the guard is here to catch.
 
-- Emit `home_topic` (the `primary_topic` of the within-category anchor items) whenever `cross_domain_threads` is non-empty. The guard uses it to enforce that no cross-domain member is from the home topic.
-- Every member's `item_name`, `joy_index`, and `n` MUST equal the values in the returned row exactly (joy_index compared to one decimal, n compared exactly). Do not restate a rounded or paraphrased number.
-- Every member's `primary_topic` MUST come from the returned row. Do not guess.
-- Every `thread_tag` MUST be a `thread_tag` value present in the returned rows. The plain-language `name` you narrate with may differ ("living inside the story" for `immerse_in_story`), but the underlying tag is fixed.
-- `shared_tags` are the specific job/mode/tension names the members share with the home set, taken from the returned row's `shared_jobs` / `shared_tensions` / `shared_joy_modes` columns.
+- **`signature`** — from `bjl_signature`. Each entry: `{ tag, framework, distinctiveness }`. The distinctiveness-ranked tags that define the home experience. This is the signature of record; the response must not describe a signature that is not present here.
+- **`cross_domain_items`** — from `bjl_corpus_bridges`. Each entry: `{ tag, item_name, primary_topic, joy_index, n }`. The cross-category joy_scale bridges for the top distinctive tags. Every named bridge experience in prose or a card must appear here, verbatim.
+- **`audience_affinity`** — from `bjl_audience_affinity`. Each entry: `{ item_name, primary_topic, rel_lift, audience_ji, general_ji, aud_n }`. What the signature audience distinctively over-prefers. `rel_lift` is centered; when you cite it, describe it as "distinctively prefer" and pair with the raw `audience_ji`.
+- **`audience_profile`** — from `bjl_audience_profile`. Each entry: `{ dimension, cut_value, pct_of_audience, pct_of_population, index }`. Who the signature audience is, indexed vs population (100 = at parity).
+- **`audience_size`** — integer, the audience size from the affinity/profile output.
+- **`home_topic`** — the `primary_topic` of the within-category anchor items. Whenever the above fields are non-empty, `home_topic` must be set; the guard uses it to enforce that no `cross_domain_items` member is drawn from the home category.
+
+All are optional. When the four functions returned thin or empty results, the honest output is the deep dive alone: leave these fields empty and let the deep dive carry the answer. Do not pad any of them to look productive.
 
 ### Publishable cards
 
 Cards are the citable takeaway a strategist can lift into a deck. Emit `cards` when the investigation surfaced two or three findings sharp enough to stand alone. Each card is one point, backed by one to four stat items that share a source.
 
 - Each card has a `headline` (short, plain language, no jargon), a list of `stat_items` (item_name, joy_index, n, source), and a `why` sentence naming what the card lets a marketer do.
-- Every `stat_item`'s `item_name`, `joy_index`, and `n` MUST come verbatim from a row in the investigator scratch. The guard checks the same way it checks thread members.
-- `source` names the table the row came from (e.g. `"bjl_scores"`, `"bjl_demo_splits"`).
-- **Single-source rule.** Every `stat_item` inside a single card MUST have the same `source`. Never pair a `bjl_scores` figure with a `bjl_demo_splits` figure inside one card. If you want both, use two cards.
+- Every `stat_item`'s `item_name`, `joy_index`, and `n` MUST come verbatim from a row in the investigator scratch. The guard checks the same way it checks the cross-category fields.
+- `source` names the function or table the row came from: `"bjl_scores"`, `"bjl_corpus_bridges"`, `"bjl_audience_affinity"`, `"bjl_demo_splits"`, etc.
+- **Single-source rule.** Every `stat_item` inside a single card MUST have the same `source`. If you want to combine signals across sources, use two cards.
+- **Never build a card on a verbatim tally.** A card whose stat items are "learning and growth 169 times, awe 153 times, belonging 24 times" is exactly the failure mode this section exists to stop. Cards cite `joy_index`/`n` from the four functions or from `bjl_scores`, never a count of `bjl_verbatims` tags.
 - Omit `cards` entirely if nothing rose to publishable quality. An empty array is honest.
 
 ### Guard behavior
 
-If the guard fires, the turn regenerates once with a strict allowlist. If it fires again, the offending structured field (either `cross_domain_threads` or the specific failing card) is dropped and a `synth_warning` is logged. That is the failsafe. Do not treat it as license to be loose here.
+The provenance guard runs after generation and validates:
+
+- Every `signature` entry against a `bjl_signature` row (tag, framework, distinctiveness).
+- Every `cross_domain_items` entry against a `bjl_corpus_bridges` row (item_name, tag, joy_index, n, primary_topic), plus the home-topic exclusion rule (no item's primary_topic equals `home_topic`).
+- Every `audience_affinity` entry against a `bjl_audience_affinity` row (item_name, rel_lift, audience_ji, aud_n).
+- Every `audience_profile` entry against a `bjl_audience_profile` row (dimension, cut_value, index).
+- Every `cards` stat_item against a scratch row, with the single-source rule inside each card.
+
+If the guard fires, the turn regenerates once with a strict allowlist. If it fires again, the offending structured field is dropped and a `synth_warning` is logged. That is the failsafe. Do not treat it as license to be loose here.
 
 ## Output schema
 
@@ -419,33 +434,36 @@ Return JSON:
 {
   "response_text": "The synthesized response, ≤ 500 words, calibrated to posture and length",
   "followup_chips": ["from triage", "from triage", "from triage"],
-  "home_topic": "<primary_topic string, e.g. 'entertainment'>",
-  "cross_domain_threads": [
-    {
-      "name": "living inside the story",
-      "thread_tag": "immerse_in_story",
-      "thread_distinctiveness": 1.37,
-      "shared_tags": ["immerse_in_story", "signal_identity"],
-      "members": [
-        { "item_name": "Magic Kingdom", "joy_index": 52.6, "n": 10133, "primary_topic": "travel" },
-        { "item_name": "New Orleans", "joy_index": 53.4, "n": 462, "primary_topic": "travel" }
-      ]
-    }
+  "home_topic": "<primary_topic string, e.g. 'travel'>",
+  "audience_size": 1247,
+  "signature": [
+    { "tag": "discovery_vs_comfort", "framework": "tensions", "distinctiveness": 1.42 },
+    { "tag": "awe",                  "framework": "joy_modes", "distinctiveness": 1.31 }
+  ],
+  "cross_domain_items": [
+    { "tag": "discovery_vs_comfort", "item_name": "Finding a wine at a surprising price", "primary_topic": "food_beverage", "joy_index": 63.9, "n": 340 }
+  ],
+  "audience_affinity": [
+    { "item_name": "Finding a great deal", "primary_topic": "retail", "rel_lift": 17.8, "audience_ji": 63.9, "general_ji": 46.1, "aud_n": 412 }
+  ],
+  "audience_profile": [
+    { "dimension": "generation", "cut_value": "Boomer",    "pct_of_audience": 33.4, "pct_of_population": 29.8, "index": 112 },
+    { "dimension": "generation", "cut_value": "Gen Z",     "pct_of_audience": 22.7, "pct_of_population": 20.8, "index": 109 },
+    { "dimension": "generation", "cut_value": "Millennial","pct_of_audience": 27.4, "pct_of_population": 29.5, "index": 93 }
   ],
   "cards": [
     {
-      "headline": "Fandom's frontier is immersion, not communion",
+      "headline": "Hostels compete for a discovery instinct, not a budget",
       "stat_items": [
-        { "item_name": "Magic Kingdom", "joy_index": 52.6, "n": 10133, "source": "bjl_scores" },
-        { "item_name": "New Orleans", "joy_index": 53.4, "n": 462, "source": "bjl_scores" }
+        { "item_name": "Finding a wine at a surprising price", "joy_index": 63.9, "n": 340, "source": "bjl_corpus_bridges" }
       ],
-      "why": "Travel experiences that let people live inside a story bridge into fandom's core emotional signature — a lane brands can build for."
+      "why": "The same audience that distinctively prefers hostels also distinctively over-prefers finding a great deal, finding a new item, and trying something new. Positioning against discovery is stronger than positioning against price."
     }
   ]
 }
 ```
 
-`home_topic`, `cross_domain_threads`, and `cards` are optional. Omit any of them when there is nothing genuine to emit; empty arrays are also fine.
+Every top-level cross-category field is optional. Omit or empty-array any of them when there is nothing genuine to emit.
 
 ## Self-check before returning
 
@@ -459,10 +477,11 @@ For interpretive posture, before finalizing, scan your draft:
 6. Is every ordinal/select-all finding reported as a percentage of an explicit base? If not, recompute.
 7. **Inference vs data check.** For every claim in the response, can you point to the specific query in the investigator's scratch that supports it? If no, the claim must be either (a) qualified inline with hedging language, (b) moved to a labeled inference block (*Worth testing* / *Strategic implications*), or (c) cut. Do not present unsupported inferences in the same authoritative register as data findings. Named strategic moves (category analogue, JTBD reframe, occasion, competitive set, tension, audience-as-mindset) are exempt — they're the synthesizer's interpretation, not unsupported claims about the world. The supporting assertions that flow from those moves DO need to pass this check.
 8. Are there em dashes or "is/isn't" constructions? If so, rewrite.
-9. **Cross-domain provenance.** If your response narrates any cross-domain threads, is `cross_domain_threads` populated in the output JSON? Does every member's `item_name`, `joy_index`, `n`, and `primary_topic` come verbatim from a `bjl_corpus_threads` row in scratch? Is `home_topic` set? If any of that is off, fix it before returning — the guard will drop the whole sidecar otherwise.
-10. **Card provenance.** For each card in `cards`: does every `stat_item`'s `item_name`, `joy_index`, and `n` come verbatim from a scratch row? Do all `stat_items` in a single card share the same `source`? If a card mixes sources or cites an unfindable number, split it or drop it.
-11. **Caps.** Is `response_text` ≤ 500 words? Are there ≤ 3 threads with ≤ 3 members each? Are there ≤ 3 cards with ≤ 4 stat_items each? If any cap is exceeded, tighten before returning.
-12. Could a strategist read this in a meeting and walk out with one sharp insight to use? If not, sharpen.
+9. **Cross-category provenance.** If the investigator ran the signature-keyed pass, are `signature`, `cross_domain_items`, `audience_affinity`, and `audience_profile` populated from the four function outputs? Does every named bridge experience in prose appear in `cross_domain_items` with exact `joy_index`/`n`/`primary_topic`? Does every cited `rel_lift` appear in `audience_affinity` with exact `audience_ji`/`aud_n`? Is `home_topic` set? If any of that is off, fix it before returning — the guard will drop the sidecar otherwise.
+10. **No verbatim-count claims.** Scan the response and the cards for phrases like "tag appears N times," "consistently," "the dominant job," or any tally over `bjl_verbatims`. If any signature, cross-category, or audience claim rests on a verbatim tally instead of a `bjl_signature` / `bjl_corpus_bridges` / `bjl_audience_affinity` row, cut it. Verbatims may only be quoted for color, one attributed quote, never counted.
+11. **Card provenance.** For each card in `cards`: does every `stat_item`'s `item_name`, `joy_index`, and `n` come verbatim from a scratch row? Do all `stat_items` in a single card share the same `source`? If a card mixes sources or cites an unfindable number, split it or drop it. If a card was built on a verbatim tally, drop it.
+12. **Caps.** Is `response_text` ≤ 500 words? Are the structured-field caps respected (signature ≤ 8, cross_domain_items ≤ 10, audience_affinity ≤ 10, audience_profile ≤ 8, cards ≤ 3 with ≤ 4 stat_items each)? If any cap is exceeded, tighten before returning.
+13. Could a strategist read this in a meeting and walk out with one sharp insight to use? If not, sharpen.
 
 For literal posture, before finalizing, scan your draft:
 
