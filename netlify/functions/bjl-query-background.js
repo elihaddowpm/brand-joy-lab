@@ -44,11 +44,19 @@ const SONNET_MODEL = 'claude-sonnet-4-6';
 // produced 13-18 query investigations running 5-13 minutes. The investigator
 // prompt now asks the model to pick the ONE central sub-question and surface
 // the others as followup chips; the lowered hard cap forces the discipline.
+//
+// 2026-07-09: raised thorough from 12 to 16. The signature-keyed
+// cross-category arm adds four function calls (bjl_signature,
+// bjl_corpus_bridges, bjl_audience_affinity, bjl_audience_profile) on top
+// of the deep dive + demographic cut. The HI USA run at 12 turns reached
+// bjl_signature only on turn 11 and hit_max_turns before the remaining
+// three could run. 16 gives real headroom (~5-6 deep-dive queries +
+// 4 function calls + demo + one retry).
 const DEPTH_TO_MAX_TURNS = {
   none: 0,
   minimal: 4,    // 1-2 queries
   focused: 10,   // 3-5 queries
-  thorough: 12   // target 6-8 queries
+  thorough: 16   // deep dive + demographic cut + 4 cross-category function calls
 };
 
 // -------------------------------------------------------------------------
