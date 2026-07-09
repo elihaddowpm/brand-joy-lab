@@ -9,26 +9,36 @@
  * Called from bjl-query-background.js after runSynthesis and before persisting
  * the answer. Pure function: no I/O, no side effects, easy to test.
  *
- * Two surfaces are guarded on the same code path:
+ * Six surfaces are guarded on the same code path:
  *
- * A) Cross-domain threads (cross_domain_threads). Allowlist is the rows
- *    returned by bjl_corpus_bridges (current item lens), bjl_corpus_threads,
- *    or bjl_corpus_pivot in scratch. Checks:
- *      1. Item provenance: member.item_name matches a returned row.
- *      2. Number provenance: joy_index equal to one decimal, n exact.
- *      3. Thread provenance: thread_tag is one of the returned tags.
- *      4. Home-topic exclusion: member.primary_topic is not a home topic.
- *
- * B) Publishable cards (cards). Allowlist is the broader index of any
- *    row returned by any SELECT in scratch, tagged with the source table
- *    inferred from the query's FROM clause. Checks:
+ * A) signature. Allowlist: rows from bjl_signature.
+ *    Check: every {tag, framework} appears in a returned row.
+ * B) cross_domain_items. Allowlist: rows from bjl_corpus_bridges (item lens),
+ *    plus the legacy bjl_corpus_threads / bjl_corpus_pivot names. Checks:
+ *      1. Item provenance: item_name matches a returned row.
+ *      2. Number provenance: joy_index (1 decimal), n (exact).
+ *      3. Tag provenance: tag is one of the returned tags.
+ *      4. Home-topic exclusion: primary_topic is not a home topic.
+ * C) audience_affinity. Allowlist: rows from bjl_audience_affinity. Checks:
+ *      1. Item provenance: item_name matches a returned row.
+ *      2. Metric provenance: rel_lift (1 decimal), audience_ji (1 decimal),
+ *         aud_n (exact) all match.
+ * D) audience_profile. Allowlist: rows from bjl_audience_profile. Checks:
+ *      1. Row provenance: {dimension, cut_value} matches a returned row.
+ *      2. Index provenance: index (integer) matches.
+ * E) cross_domain_threads (legacy nested shape). Kept for back-compat with
+ *    already-deployed surfaces. Same checks as (B) but on the older
+ *    {thread_tag, members[]} shape.
+ * F) cards. Allowlist: any row from any SELECT in scratch, tagged with the
+ *    source table inferred from the query's FROM clause. Checks:
  *      1. Item provenance: stat_item.item_name matches a returned row.
- *      2. Number provenance: joy_index equal to one decimal, n exact.
- *      3. Source provenance: stat_item.source equals the row's source table.
- *      4. Single-source rule: every stat_item inside a card shares a source.
+ *      2. Number provenance: joy_index (1 decimal), n (exact).
+ *      3. Source provenance: stat_item.source equals row's source.
+ *      4. Single-source rule: every stat_item in a card shares a source.
  *
  * Returns { ok, failures } where failures is [] on success and an array of
- * { claim, reason } objects on failure. The caller decides retry/drop policy.
+ * { surface, claim, reason } objects on failure. The caller decides
+ * retry/drop policy.
  */
 
 // Curly / smart punctuation to straight, plus casing + trim. Same
@@ -180,6 +190,83 @@ function buildCardAllowlist(scratch) {
 }
 
 /**
+ * Function-based allowlist builders. Each recognizes scratch entries whose
+ * SQL text contains a specific function name and collects the returned rows.
+ * These four surfaces (signature, cross_domain_items, audience_affinity,
+ * audience_profile) map 1:1 to bjl_signature / bjl_corpus_bridges /
+ * bjl_audience_affinity / bjl_audience_profile respectively.
+ */
+function collectRowsFromFn(scratch, fnNames) {
+  const out = [];
+  const entries = Array.isArray(scratch) ? scratch : [];
+  for (const entry of entries) {
+    if (!entry || typeof entry !== 'object') continue;
+    const q = typeof entry.query === 'string' ? entry.query.toLowerCase() : '';
+    const alt = [entry.sql, entry.query_text]
+      .filter(v => typeof v === 'string')
+      .map(v => v.toLowerCase());
+    const hay = [q, ...alt].join(' ');
+    if (!fnNames.some(name => hay.includes(name + '('))) continue;
+    const rows = Array.isArray(entry.result) ? entry.result
+               : Array.isArray(entry.rows)   ? entry.rows
+               : [];
+    for (const row of rows) if (row && typeof row === 'object') out.push(row);
+  }
+  return out;
+}
+
+function buildSignatureAllowlist(scratch) {
+  const rows = collectRowsFromFn(scratch, ['bjl_signature']);
+  // Set of "framework|tag" strings; tag alone as fallback since framework is
+  // optional in the claim.
+  const byTag = new Map();
+  for (const r of rows) {
+    if (typeof r.tag !== 'string' || !r.tag) continue;
+    const framework = typeof r.framework === 'string' ? r.framework : null;
+    const distinctiveness = r.distinctiveness == null ? null : Number(r.distinctiveness);
+    if (!byTag.has(r.tag)) byTag.set(r.tag, []);
+    byTag.get(r.tag).push({ framework, distinctiveness });
+  }
+  return byTag;
+}
+
+function buildAudienceAffinityAllowlist(scratch) {
+  const rows = collectRowsFromFn(scratch, ['bjl_audience_affinity']);
+  const byItem = new Map();
+  for (const r of rows) {
+    const key = normalizeItemName(r.item_name);
+    if (!key) continue;
+    if (!byItem.has(key)) byItem.set(key, []);
+    byItem.get(key).push({
+      rel_lift:    r.rel_lift == null ? null : Math.round(Number(r.rel_lift) * 10) / 10,
+      audience_ji: r.audience_ji == null ? null : Math.round(Number(r.audience_ji) * 10) / 10,
+      general_ji:  r.general_ji == null ? null : Math.round(Number(r.general_ji) * 10) / 10,
+      aud_n:       toInt(r.aud_n),
+      primary_topic: typeof r.primary_topic === 'string' ? r.primary_topic : null,
+    });
+  }
+  return byItem;
+}
+
+function buildAudienceProfileAllowlist(scratch) {
+  const rows = collectRowsFromFn(scratch, ['bjl_audience_profile']);
+  const byKey = new Map();
+  for (const r of rows) {
+    const dim = typeof r.dimension === 'string' ? r.dimension : null;
+    const cut = typeof r.cut_value === 'string' ? r.cut_value : (r.cut_value == null ? null : String(r.cut_value));
+    if (!dim || cut === null) continue;
+    const key = `${dim}|${cut}`.toLowerCase();
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push({
+      index:             r.index == null ? null : Math.round(Number(r.index)),
+      pct_of_audience:   r.pct_of_audience == null ? null : Math.round(Number(r.pct_of_audience) * 10) / 10,
+      pct_of_population: r.pct_of_population == null ? null : Math.round(Number(r.pct_of_population) * 10) / 10,
+    });
+  }
+  return byKey;
+}
+
+/**
  * Coerce home_topic (string or string[]) into a normalized Set<string>.
  * Everything is lowercased for comparison, since primary_topic values are
  * lowercase in the corpus.
@@ -209,12 +296,29 @@ function buildHomeTopicSet(home_topic) {
  * @param {string|string[]} [args.home_topic] — from synth output
  * @param {Array}  args.scratch       — investigator scratch (for allowlists)
  */
-function runProvenanceGuard({ threads, cards, home_topic, scratch }) {
-  const threadFailures = runThreadsGuard({ threads, home_topic, scratch });
-  const cardFailures   = runCardsGuard({ cards, scratch });
+function runProvenanceGuard({
+  threads,
+  cards,
+  signature,
+  cross_domain_items,
+  audience_affinity,
+  audience_profile,
+  home_topic,
+  scratch,
+}) {
   const failures = [
-    ...threadFailures.map(f => Object.assign({ surface: 'threads' }, f)),
-    ...cardFailures.map(f => Object.assign({ surface: 'cards' }, f)),
+    ...runSignatureGuard({ signature, scratch })
+      .map(f => Object.assign({ surface: 'signature' }, f)),
+    ...runCrossDomainItemsGuard({ cross_domain_items, home_topic, scratch })
+      .map(f => Object.assign({ surface: 'cross_domain_items' }, f)),
+    ...runAudienceAffinityGuard({ audience_affinity, scratch })
+      .map(f => Object.assign({ surface: 'audience_affinity' }, f)),
+    ...runAudienceProfileGuard({ audience_profile, scratch })
+      .map(f => Object.assign({ surface: 'audience_profile' }, f)),
+    ...runThreadsGuard({ threads, home_topic, scratch })
+      .map(f => Object.assign({ surface: 'threads' }, f)),
+    ...runCardsGuard({ cards, scratch })
+      .map(f => Object.assign({ surface: 'cards' }, f)),
   ];
   return { ok: failures.length === 0, failures };
 }
@@ -341,6 +445,225 @@ function runThreadsGuard({ threads, home_topic, scratch }) {
     }
   }
 
+  return failures;
+}
+
+/**
+ * Signature guard. Every claimed {tag, framework, distinctiveness?} must
+ * appear in a bjl_signature row. Distinctiveness match is 2-decimal-tolerant
+ * (0.01 slack) since the model may restate it truncated.
+ */
+function runSignatureGuard({ signature, scratch }) {
+  const failures = [];
+  const list = Array.isArray(signature) ? signature : [];
+  if (list.length === 0) return failures;
+
+  const byTag = buildSignatureAllowlist(scratch);
+  if (byTag.size === 0) {
+    failures.push({
+      claim: null,
+      reason: 'no_signature_rows_in_scratch',
+      detail: 'signature was populated but bjl_signature did not run this turn',
+    });
+    return failures;
+  }
+
+  for (const s of list) {
+    if (!s || typeof s !== 'object' || typeof s.tag !== 'string') {
+      failures.push({ claim: s, reason: 'malformed_signature_entry' });
+      continue;
+    }
+    const bucket = byTag.get(s.tag);
+    if (!bucket || bucket.length === 0) {
+      failures.push({ claim: { tag: s.tag }, reason: 'signature_tag_not_in_allowlist' });
+      continue;
+    }
+    const claimFramework = typeof s.framework === 'string' ? s.framework.toLowerCase() : null;
+    const claimDist = s.distinctiveness == null ? null : Number(s.distinctiveness);
+    let matched = false;
+    for (const row of bucket) {
+      const frameworkOk = claimFramework === null || row.framework === null || claimFramework === (row.framework || '').toLowerCase();
+      const distOk = claimDist === null || row.distinctiveness === null
+        || Math.abs(claimDist - row.distinctiveness) <= 0.01;
+      if (frameworkOk && distOk) { matched = true; break; }
+    }
+    if (!matched) {
+      failures.push({
+        claim: { tag: s.tag, framework: s.framework, distinctiveness: s.distinctiveness },
+        reason: 'signature_row_mismatch',
+      });
+    }
+  }
+  return failures;
+}
+
+/**
+ * Cross_domain_items guard (flat shape from bjl_corpus_bridges). Runs the
+ * same four checks as the legacy threads guard: item, joy_index, n,
+ * primary_topic (from bridges rows) + home-topic exclusion.
+ */
+function runCrossDomainItemsGuard({ cross_domain_items, home_topic, scratch }) {
+  const failures = [];
+  const list = Array.isArray(cross_domain_items) ? cross_domain_items : [];
+  if (list.length === 0) return failures;
+
+  const { itemIndex, threadTags } = buildAllowlist(scratch);
+  const homeTopics = buildHomeTopicSet(home_topic);
+
+  if (itemIndex.size === 0 && threadTags.size === 0) {
+    failures.push({
+      claim: null,
+      reason: 'no_bridges_rows_in_scratch',
+      detail: 'cross_domain_items was populated but bjl_corpus_bridges did not run this turn or returned no rows',
+    });
+    return failures;
+  }
+
+  for (const m of list) {
+    if (!m || typeof m !== 'object' || typeof m.item_name !== 'string') {
+      failures.push({ claim: m, reason: 'malformed_cross_domain_item' });
+      continue;
+    }
+    // Tag check (from bridges rows).
+    if (typeof m.tag !== 'string' || !threadTags.has(m.tag)) {
+      failures.push({ claim: { item_name: m.item_name, tag: m.tag }, reason: 'cross_domain_tag_not_in_allowlist' });
+    }
+    const key = normalizeItemName(m.item_name);
+    const bucket = itemIndex.get(key);
+    if (!bucket || bucket.length === 0) {
+      failures.push({ claim: { item_name: m.item_name, tag: m.tag }, reason: 'cross_domain_item_not_in_allowlist' });
+      continue;
+    }
+    const claimJoy   = roundJoy(m.joy_index);
+    const claimN     = toInt(m.n);
+    const claimTopic = typeof m.primary_topic === 'string' ? m.primary_topic.toLowerCase() : null;
+    let matched = false;
+    let closest = { joy: null, n: null, topic: null };
+    for (const row of bucket) {
+      const joyOk   = claimJoy === row.joy_index;
+      const nOk     = claimN === row.n;
+      const topicOk = claimTopic === (row.primary_topic ? row.primary_topic.toLowerCase() : null);
+      if (joyOk && nOk && topicOk) { matched = true; break; }
+      if (!joyOk   && closest.joy   === null) closest.joy   = { claim: claimJoy, allowlist: row.joy_index };
+      if (!nOk     && closest.n     === null) closest.n     = { claim: claimN, allowlist: row.n };
+      if (!topicOk && closest.topic === null) closest.topic = { claim: claimTopic, allowlist: row.primary_topic };
+    }
+    if (!matched) {
+      if (closest.joy)   failures.push({ claim: { item_name: m.item_name, joy_index: m.joy_index }, reason: 'cross_domain_joy_mismatch', detail: closest.joy });
+      else if (closest.n)   failures.push({ claim: { item_name: m.item_name, n: m.n }, reason: 'cross_domain_n_mismatch', detail: closest.n });
+      else if (closest.topic) failures.push({ claim: { item_name: m.item_name, primary_topic: m.primary_topic }, reason: 'cross_domain_topic_mismatch', detail: closest.topic });
+    }
+    if (claimTopic && homeTopics.has(claimTopic)) {
+      failures.push({
+        claim: { item_name: m.item_name, primary_topic: m.primary_topic },
+        reason: 'cross_domain_home_topic_bleed',
+        detail: { home_topics: Array.from(homeTopics) },
+      });
+    }
+  }
+  return failures;
+}
+
+/**
+ * Audience affinity guard. Every claimed {item_name, rel_lift, audience_ji,
+ * aud_n} must appear in a bjl_audience_affinity row. Numeric comparisons
+ * are 1-decimal for joy/lift, exact for n.
+ */
+function runAudienceAffinityGuard({ audience_affinity, scratch }) {
+  const failures = [];
+  const list = Array.isArray(audience_affinity) ? audience_affinity : [];
+  if (list.length === 0) return failures;
+
+  const byItem = buildAudienceAffinityAllowlist(scratch);
+  if (byItem.size === 0) {
+    failures.push({
+      claim: null,
+      reason: 'no_audience_affinity_rows_in_scratch',
+      detail: 'audience_affinity was populated but bjl_audience_affinity did not run this turn',
+    });
+    return failures;
+  }
+
+  for (const m of list) {
+    if (!m || typeof m !== 'object' || typeof m.item_name !== 'string') {
+      failures.push({ claim: m, reason: 'malformed_audience_affinity_entry' });
+      continue;
+    }
+    const key = normalizeItemName(m.item_name);
+    const bucket = byItem.get(key);
+    if (!bucket || bucket.length === 0) {
+      failures.push({ claim: { item_name: m.item_name }, reason: 'audience_item_not_in_allowlist' });
+      continue;
+    }
+    const claimLift  = m.rel_lift == null ? null : Math.round(Number(m.rel_lift) * 10) / 10;
+    const claimJI    = m.audience_ji == null ? null : Math.round(Number(m.audience_ji) * 10) / 10;
+    const claimN     = toInt(m.aud_n);
+    let matched = false;
+    let closest = { lift: null, ji: null, n: null };
+    for (const row of bucket) {
+      const liftOk = claimLift === null || row.rel_lift === null || claimLift === row.rel_lift;
+      const jiOk   = claimJI === null || row.audience_ji === null || claimJI === row.audience_ji;
+      const nOk    = claimN === null || row.aud_n === null || claimN === row.aud_n;
+      if (liftOk && jiOk && nOk) { matched = true; break; }
+      if (!liftOk && closest.lift === null) closest.lift = { claim: claimLift, allowlist: row.rel_lift };
+      if (!jiOk   && closest.ji   === null) closest.ji   = { claim: claimJI, allowlist: row.audience_ji };
+      if (!nOk    && closest.n    === null) closest.n    = { claim: claimN, allowlist: row.aud_n };
+    }
+    if (!matched) {
+      if (closest.lift) failures.push({ claim: { item_name: m.item_name, rel_lift: m.rel_lift }, reason: 'audience_rel_lift_mismatch', detail: closest.lift });
+      else if (closest.ji) failures.push({ claim: { item_name: m.item_name, audience_ji: m.audience_ji }, reason: 'audience_ji_mismatch', detail: closest.ji });
+      else if (closest.n) failures.push({ claim: { item_name: m.item_name, aud_n: m.aud_n }, reason: 'audience_n_mismatch', detail: closest.n });
+    }
+  }
+  return failures;
+}
+
+/**
+ * Audience profile guard. Every claimed {dimension, cut_value, index} must
+ * appear in a bjl_audience_profile row. Index is exact-integer.
+ */
+function runAudienceProfileGuard({ audience_profile, scratch }) {
+  const failures = [];
+  const list = Array.isArray(audience_profile) ? audience_profile : [];
+  if (list.length === 0) return failures;
+
+  const byKey = buildAudienceProfileAllowlist(scratch);
+  if (byKey.size === 0) {
+    failures.push({
+      claim: null,
+      reason: 'no_audience_profile_rows_in_scratch',
+      detail: 'audience_profile was populated but bjl_audience_profile did not run this turn',
+    });
+    return failures;
+  }
+
+  for (const m of list) {
+    if (!m || typeof m !== 'object' || typeof m.dimension !== 'string' || m.cut_value == null) {
+      failures.push({ claim: m, reason: 'malformed_audience_profile_entry' });
+      continue;
+    }
+    const key = `${m.dimension}|${m.cut_value}`.toLowerCase();
+    const bucket = byKey.get(key);
+    if (!bucket || bucket.length === 0) {
+      failures.push({ claim: { dimension: m.dimension, cut_value: m.cut_value }, reason: 'audience_profile_row_not_in_allowlist' });
+      continue;
+    }
+    const claimIndex = m.index == null ? null : Math.round(Number(m.index));
+    let matched = false;
+    let closest = null;
+    for (const row of bucket) {
+      const indexOk = claimIndex === null || row.index === null || claimIndex === row.index;
+      if (indexOk) { matched = true; break; }
+      if (closest === null) closest = { claim: claimIndex, allowlist: row.index };
+    }
+    if (!matched) {
+      failures.push({
+        claim: { dimension: m.dimension, cut_value: m.cut_value, index: m.index },
+        reason: 'audience_profile_index_mismatch',
+        detail: closest,
+      });
+    }
+  }
   return failures;
 }
 
@@ -515,6 +838,9 @@ module.exports = {
   runCrossDomainProvenanceGuard,   // back-compat alias
   buildRetryAllowlistDigest,
   buildCardAllowlist,
+  buildSignatureAllowlist,
+  buildAudienceAffinityAllowlist,
+  buildAudienceProfileAllowlist,
   // Exported for tests + reuse.
   normalizeItemName,
   roundJoy,
