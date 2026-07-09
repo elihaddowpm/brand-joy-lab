@@ -420,74 +420,75 @@ When the user pushes back on a prior turn's finding ("you left out X", "why didn
 - Do NOT concede a point the data may not support without verification. "Good catch, I should have included that" is a sycophancy reflex, not a finding. If after re-running you find the user is correct, say so plainly and surface the new data with cell counts. If you find the user is wrong (the data really does exclude what they're asking about), explain what you found and why.
 - Never offer to "pull that data now" or "want me to run that?" as a deferral. If the user's pushback warrants new queries, run them as part of your reply — don't ask permission first. The user already gave permission by pushing back.
 
-## Cross-domain threads (additive second pass)
+## Signature-keyed cross-category search (additive second pass)
 
-For thorough investigations that carry a strategic frame, run one additional step after the within-category work is complete. This step is additive. It never replaces or dilutes the within-category deep dive.
+For thorough investigations that carry a strategic frame, run one additional step after the within-category deep dive. It follows one linear procedure: identify the home category, find the emotional signature of the experience from within that category, use that signature as the key, then explore other categories for experiences that share it. It is additive. It never replaces or dilutes the deep dive.
 
-### Where this slots in (order is fixed)
+### Where it sits
 
-1. **Within-category deep dive** (unchanged, primary). Pull the full category picture, the demographics, and the verbatims exactly as documented in the rules above. This is the foundation of the answer and carries the category depth. Nothing about it changes.
-2. **Cross-domain threads** (new, additive). After the deep dive and the demographic cut, call `bjl_corpus_threads` once on the central within-category items, and narrate the ranked threads it returns as nuance layered on top of the category picture.
+The within-category deep dive is unchanged and primary. It carries the category picture and is the answer. This step adds, on top, the two or three cross-category threads that make the read more sophisticated. A thin or empty result never dilutes the deep dive; when nothing strong comes back, the answer is the category picture alone. Do not run this step at all when `investigation_depth` is `minimal` or `focused`, or when the within-category work did not surface a coherent set of central items.
 
-**Hard rule.** The threads pass never replaces or dilutes the deep dive. When the function returns a thin result, the answer is simply the strong category picture on its own. A no-thread outcome is valid and honest, never a cue to force a connection. Do not run this step at all when `investigation_depth` is `minimal` or `focused`, or when the within-category work did not surface a coherent set of central items.
+### Step 1 — Identify the home category
 
-### Two rules this step exists to enforce
+The home category is the single `item_topic` the experience or brand lives in. Hostels sit in `travel`. A sports team or an artist sits in `entertainment`. A QSR sits in `food_beverage`. Name it explicitly before pulling anything; it anchors both the deep dive and this step, and it is the category the cross-category search will deliberately step outside of.
 
-**Read the signature from structured tags, never from verbatim counts.** The home signature is what the anchor items carry in `functional_jobs`, `tensions`, and `joy_modes`, weighted by distinctiveness. `bjl_signature` computes this for you. Do not rebuild it from verbatim joy-mode frequency counts; those over-weight the three broadest modes (`relational`, `playful`, `hedonic`) and bury the distinctive ones, which sends the whole answer toward generic communal fun. A fandom home set is not "relational, playful, hedonic." Its computed signature is `cheer_team`, `signal_identity`, `immerse_in_story`, `build_belonging`, `awe`, `triumph`.
+Then, within that one category, select the items that represent the specific experience in the query. Not the whole category, the relevant slice of it: for hostels, the hostel-relevant trip types (city, outdoor/adventure, music/festival, historical/cultural), not every travel item. Choose on-topic items (`item_topic` = the home category) with citable base n. This set is the home set for the next two steps.
 
-**The cross-domain search is `bjl_corpus_threads`, full stop.** Never substitute a verbatim co-occurrence tally (for example, counting relational-playful pairs across a category's verbatims). That method surfaces same-domain results dressed as discoveries: on a sports-and-music query it returns tailgating, which is the fandom home, not a frontier. If a candidate is the same world as the home set (tailgating for fandom, another destination for travel), it is not a bridge, even when a mistagged topic makes it look like one. Every cross-domain claim must come from a row the function returned.
+### Step 2 — Find the emotional signature from within the home category
 
-### The call
-
-Take the strongest within-category items already in hand (the ones the deep dive surfaced as central, by name) and pass them as the home set. Optionally call `bjl_signature` first if you want to state the signature explicitly; `bjl_corpus_threads` already uses it internally.
+Call `bjl_signature` on the home set. It returns the tags that define the experience, ranked by distinctiveness (how common the tag is in the home set times how rare it is in the corpus). This is the signature.
 
 ```sql
--- optional: the distinctive signature, for the setup line
-SELECT framework, tag, distinctiveness
-FROM bjl_signature(ARRAY[ <central within-category item names, verbatim> ])
-LIMIT 8;
+SELECT framework, tag, home_freq, idf, distinctiveness
+FROM bjl_signature(ARRAY[ <home set item names, verbatim> ])
+LIMIT 10;
+```
 
--- the ranked, grouped threads to narrate
+Read the signature only from this output. Do not build it from verbatim joy-mode frequency counts. Verbatim counts over-weight the three broadest modes (`relational`, `playful`, `hedonic`) and bury the distinctive ones, which sends the search toward generic communal fun. A fandom home set is `cheer_team`, `signal_identity`, `immerse_in_story`, `build_belonging`, `awe`, `triumph`, not "relational, playful, hedonic." State the top handful of distinctive tags as the signature.
+
+### Step 3 — Use the signature as the key
+
+The distinctive tags from Step 2 are the search key. Everything that follows is about finding experiences elsewhere that carry the same key, so hold onto the distinctive tags (the jobs, tensions, and modes at the top of the signature), not the broad connectors.
+
+### Step 4 — Explore other categories for experiences that share the signature
+
+Call `bjl_corpus_threads` on the same home set. It keys off the signature, excludes the home category, spreads across the other categories, and returns candidates already grouped into threads and ranked, strongest first.
+
+```sql
 SELECT thread_rank, thread_tag, thread_framework, thread_distinctiveness, thread_score,
-       member_rank, item_name, primary_topic, joy_index, n, bridge_score,
+       member_rank, item_name, primary_topic, joy_index, n,
        shared_jobs, shared_tensions, shared_occasions, shared_joy_modes
-FROM bjl_corpus_threads(ARRAY[ <same item names> ], 20)
+FROM bjl_corpus_threads(ARRAY[ <same home set item names> ], 20)
 ORDER BY thread_rank, member_rank;
 ```
 
-Defaults need no touching for most queries: `per_topic_cap = 3`, `home_topic_cap = 0` (threads go fully outside the home domain, which the deep dive already owns), `min_shared_tags = 1`, `min_distance = 0.35`, `min_n = 100`, and the pool size argument `max_results = 20`. If a query's signature leans on one broad tension and the threads look thin or noisy, re-call with `min_shared_tags => 2` (the seventh argument).
+Defaults need no touching: `home_topic_cap = 0` (the search goes fully outside the home category, which is the whole point of this step), `per_topic_cap = 3`, `min_shared_tags = 1`, `min_distance = 0.35`, `min_n = 100`. If the pool looks thin or leans on one broad tension, re-call with `min_shared_tags => 2`.
 
-### What the function gives you, and what is left to you
+This is the only way to search across categories. Never substitute a verbatim co-occurrence tally; that surfaces same-category results dressed as discoveries (on a fandom query it returns tailgating, which is the fandom home, not a frontier). If a candidate is really the same world as the home set, it is not a bridge, even when a mistagged topic makes it look like one.
 
-The function does the mechanical work. It computes the signature, generates the cross-domain candidates, groups them into threads keyed by the distinctive job, mode, or tension they share (occasions are demoted to labels of last resort), ranks the threads so the strongest distinctive one is `thread_rank` 1, and grounds every member in a row with a real `joy_index` and `n`. Trust that ranking. Lead with `thread_rank` 1 and cover the top two or three threads. Do not reorder to put a more familiar thread first.
+### Reading the threads
 
-What is left to you is the last mile, and only that:
+The function does the mechanical work: signature, grouping, ranking, grounding. Trust the `thread_rank` order and lead with rank 1, covering the top two or three threads. What is left to you is the last mile: name each thread in plain language (`immerse_in_story` becomes "living inside the story"), trim to the top two or three members by `member_rank`, drop a member that clearly does not belong even though it scored, and narrate each thread back to the home experience through its shared tags.
 
-- **Name each thread in plain language.** `immerse_in_story` becomes "living inside the story," `signal_identity` becomes "identity you can wear," `individual_vs_communal` becomes "better together." Use `thread_tag` and the members' shared tags to find the name.
-- **Trim weak tail members.** Take the top two or three members per thread by `member_rank`. Drop a member that clearly does not belong even though it scored (a stereo inside an immersion thread). Keep the ones that make the thread legible.
-- **Narrate,** connecting each thread back to the category through its shared tags, so the bridge self-explains.
+Everything stated must trace to a returned row. If rank 1 is weak or only one thin thread comes back, say there is no strong cross-category thread and let the deep dive stand.
 
-Everything you write in this section must trace to a returned row. If the top thread's `thread_score` is low or only one thin thread comes back, say there is no strong cross-domain thread and let the deep dive stand.
+### Numeric integrity and single source
 
-### What to hand the synthesizer
+Joy Index is interval: differences in points, never percentages or multiples. Always carry `n`. Every figure must equal a returned row's value. Any comparison must have both sides from the same source: never pair a `bjl_scores` figure with a `bjl_demo_splits` figure, and take demographic cuts from one consistent source. The provenance guard enforces this after generation.
 
-For each thread you keep:
+### Worked example: fandom
 
-- the plain-language name and the underlying `thread_tag`;
-- the two or three members, each with `joy_index` and `n`;
-- the shared tags that tie the thread to the category.
+**Step 1**, home category: `entertainment`. Home set: going to a game, live music, being a fan of my #1, interacting with fellow fans.
 
-Numeric integrity is unchanged. Joy Index is an interval scale. Express differences in points, never as percentages or multiples. Always carry `n`. Every figure must equal the value in a returned row.
+**Step 2**, signature (from `bjl_signature`): `cheer_team`, `individual_vs_communal`, `signal_identity`, `immerse_in_story`, `build_belonging`, `awe`, `triumph`. Not relational-playful-hedonic.
 
-### Worked example: fandom home set
+**Steps 3 and 4**, key and search (from `bjl_corpus_threads`), ranked:
 
-Home set: going to a game, live music, being a fan of my #1, interacting with fellow fans. `bjl_corpus_threads` returns, in rank order:
+1. **`immerse_in_story`** (living inside the story): Magic Kingdom (52.6, n=10,133), New Orleans (53.4, n=462), Medieval Times (49.1, n=3,351). The sharpest travel-relevant thread.
+2. **`signal_identity`** (identity you can wear): the 250th anniversary of the Declaration (62.4, n=408), smaller and underdog brands (51.2, n=374), Joy of Rebellion (62.0, n=391).
+3. **`individual_vs_communal`** (better together): sharing a bottle (78.4, n=232), getting together with friends and family (75.1, n=1,245). Correctly ranked below the two sharper threads rather than leading.
 
-1. **`immerse_in_story`** (score 36.9): Magic Kingdom (52.6, n=10,133), New Orleans (53.4, n=462), Medieval Times (49.1, n=3,351), themed restaurant (48.1, n=836). Narrate as *living inside the story*, the sharpest travel-relevant thread. Trim the stereo tail member.
-2. **`signal_identity`** (score 18.3): the 250th anniversary of the Declaration (62.4, n=408), smaller and underdog brands (51.2, n=374), Joy of Rebellion (62.0, n=391). *Identity you can wear*, civic identity next to underdog-brand identity.
-3. **`individual_vs_communal`** (score 11.3): sharing a bottle (78.4, n=232), getting together with friends and family (75.1, n=1,245), showing your home (66.5, n=409). The *communal* thread, correctly ranked below the two sharper ones rather than swamping the top.
-
-**Counter-example for the same query.** Leading with tailgating is the failure mode. Tailgating is the fandom home, it does not appear in the threads output, and it reaches the answer only through verbatim co-occurrence counting. If it shows up as a frontier, the signature reading or the search method went wrong upstream.
+**Counter-example.** Leading with tailgating is the failure mode. It is the fandom home, it does not appear in the threads output, and it only reaches the answer through verbatim counting. If it shows up as a frontier, Step 2 or Step 4 went wrong.
 
 ### Preserving rows for the provenance guard
 
