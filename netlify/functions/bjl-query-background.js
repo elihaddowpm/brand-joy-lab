@@ -63,7 +63,7 @@ const DEPTH_TO_MAX_TURNS = {
 // deploy if the .md sources have changed.
 const PROMPTS = require('./_prompts_bundle.json');
 const {
-  runCrossDomainProvenanceGuard,
+  runProvenanceGuard,
   buildRetryAllowlistDigest,
 } = require('./bjl-cross-domain-provenance-guard');
 
@@ -398,10 +398,18 @@ followup_seeds:  ${JSON.stringify(triage.followup_seeds || [])}
 // dense responses. The "user sees raw JSON" pattern was partially driven
 // by mid-object truncation that didn't trip the truncation heuristic
 // cleanly; more room reduces the frequency.
+//
+// Immediate stop-the-bleed: three recent reports (a fandom follow-up, two
+// HI USA runs) cut off mid-card at the medium ceiling. The medium cap is
+// raised with real headroom so a full response (deep-dive prose +
+// structured cross_domain_threads + structured cards) fits with room to
+// spare while the bounded output contract lands. The contract itself
+// (caps on word count, thread count, card count) is the real fix; this is
+// insurance until it takes effect.
 const LENGTH_TO_MAX_TOKENS = {
   short:  2000,
-  medium: 6000,
-  long:   20000
+  medium: 12000,
+  long:   24000
 };
 
 // Heuristic for distinguishing truncation from other JSON-parse failures.
@@ -626,12 +634,14 @@ async function runSynthesis(triage, scratch, extraContext) {
     // normalized reader so case/separator drift doesn't drop them.
     const crossDomainThreadsValue = read('cross_domain_threads');
     const homeTopicValue = read('home_topic');
+    const cardsValue = read('cards');
     const crossDomainThreads = Array.isArray(crossDomainThreadsValue)
       ? crossDomainThreadsValue
       : null;
     const homeTopic = (typeof homeTopicValue === 'string' && homeTopicValue.trim())
       ? homeTopicValue
       : (Array.isArray(homeTopicValue) ? homeTopicValue : null);
+    const cards = Array.isArray(cardsValue) ? cardsValue : null;
 
     if (!responseText) {
       // JSON parsed but no recognizable response_text key in any casing.
@@ -659,7 +669,8 @@ async function runSynthesis(triage, scratch, extraContext) {
       response_text: responseText,
       followup_chips: followupChips,
       cross_domain_threads: crossDomainThreads,
-      home_topic: homeTopic
+      home_topic: homeTopic,
+      cards
     };
   } catch (e) {
     // JSON.parse failed entirely. Three sub-paths, all of which now route
@@ -713,49 +724,52 @@ async function runSynthesis(triage, scratch, extraContext) {
   }
 }
 
-// Cross-domain provenance guard: retry-once, then drop.
+// Provenance guard: retry-once, then drop.
 //
 // After the synthesizer returns, if it emitted structured cross_domain_threads
-// we verify every item, number, thread_tag, and topic against the rows
-// bjl_corpus_threads returned in this turn. On failure we re-invoke the
-// synthesizer once with a strict allowlist digest and a rewrite instruction;
-// on second failure the sidecar is dropped (cross_domain_threads set to []
-// and home_topic nulled) and a synth_warning is attached. response_text is
-// re-authored on the retry so a dropped sidecar does not leave prose asserting
-// items or numbers the guard just failed to ground.
+// or cards we verify every item, number, thread_tag, source, and topic against
+// the rows in scratch. On failure we re-invoke the synthesizer once with a
+// strict allowlist digest and a rewrite instruction. On second failure the
+// offending surface(s) are dropped — threads and cards drop independently, so
+// a failing card doesn't take the threads sidecar down with it — and a
+// synth_warning is attached. response_text is re-authored on the retry so a
+// dropped structured field doesn't leave prose asserting the failed claims.
 async function runSynthesisWithGuard(triage, scratch, extraContext) {
   const initial = await runSynthesis(triage, scratch, extraContext);
 
-  // Nothing to guard against unless the synthesizer emitted structured
-  // cross-domain claims. Bail out fast in the common case.
   const threads = Array.isArray(initial.cross_domain_threads) ? initial.cross_domain_threads : [];
-  if (threads.length === 0) return initial;
+  const cards   = Array.isArray(initial.cards) ? initial.cards : [];
+  // Nothing to guard against unless the synthesizer emitted structured
+  // claims. Bail out fast in the common case.
+  if (threads.length === 0 && cards.length === 0) return initial;
 
-  const firstPass = runCrossDomainProvenanceGuard({
+  const firstPass = runProvenanceGuard({
     threads,
+    cards,
     home_topic: initial.home_topic,
     scratch,
   });
   if (firstPass.ok) return initial;
 
-  console.warn('[guard] cross-domain provenance failed on first pass. failures:',
+  console.warn('[guard] provenance failed on first pass. failures:',
     JSON.stringify(firstPass.failures).slice(0, 800));
 
   // One retry with the allowlist digest laid out explicitly and a rewrite
-  // instruction. The digest is grouped by thread_tag and lists every
-  // returnable member with its exact joy_index, n, and primary_topic, so the
-  // model can reproduce a strict subset with confidence.
+  // instruction. The digest groups threads by thread_tag with their exact
+  // numbers, so the model can reproduce a strict subset with confidence.
   const digest = buildRetryAllowlistDigest(scratch);
   const retryPrefix = [
     'RETRY WITH ALLOWLIST.',
-    'Your previous response contained cross_domain_threads claims that did not match the rows bjl_corpus_threads returned this turn. The specific failures were:',
+    'Your previous response contained structured claims (cross_domain_threads and/or cards) that did not match the rows in scratch. The specific failures were:',
     JSON.stringify(firstPass.failures, null, 2),
     '',
     'Regenerate the full response now. Rules for this retry:',
-    '1. cross_domain_threads may only reference the threads and members in the ALLOWLIST DIGEST below. You may drop a thread or a member; you may not add or alter one. Every item_name, joy_index, n, and primary_topic in cross_domain_threads MUST be copied exactly from the digest.',
-    '2. Rewrite response_text so it does not name any cross-domain item or number that is not present in the members you kept. If you drop a thread, remove any prose that leaned on it.',
-    '3. home_topic must equal the primary_topic of the within-category anchors, as before.',
-    '4. followup_chips remain from triage.',
+    '1. cross_domain_threads may only reference the threads and members in the ALLOWLIST DIGEST below. You may drop a thread or a member; you may not add or alter one. Every item_name, joy_index, n, and primary_topic MUST be copied exactly from the digest.',
+    '2. cards may only cite item_name / joy_index / n values that come verbatim from a row in the investigator scratch, and every stat_item in one card MUST share the same source. If a card cannot be grounded that cleanly, drop the card.',
+    '3. Rewrite response_text so it does not name any item or number that is not present in the structured fields you kept. If you drop a thread or a card, remove any prose that leaned on it.',
+    '4. home_topic must equal the primary_topic of the within-category anchors, as before.',
+    '5. followup_chips remain from triage.',
+    '6. Respect the caps: response_text ≤ 500 words, ≤ 3 threads (≤ 3 members each), ≤ 3 cards (≤ 4 stat_items each).',
     '',
     'ALLOWLIST DIGEST (the only cross-domain claims you may make):',
     JSON.stringify(digest, null, 2),
@@ -769,37 +783,58 @@ async function runSynthesisWithGuard(triage, scratch, extraContext) {
 
   // The retry re-runs the full synthesis with the digest prepended to the
   // user message. runSynthesis is unchanged; the prefix is threaded through
-  // extraContext and picked up below.
+  // extraContext and picked up in the userMessage build.
   const retry = await runSynthesis(triage, scratch, retryContext);
-
   const retryThreads = Array.isArray(retry.cross_domain_threads) ? retry.cross_domain_threads : [];
-  if (retryThreads.length === 0) {
-    // Model dropped the sidecar itself on retry. Ship as-is.
-    return Object.assign({}, retry, { synth_warning: 'cross_domain_guard_dropped_by_model' });
-  }
+  const retryCards   = Array.isArray(retry.cards) ? retry.cards : [];
 
-  const secondPass = runCrossDomainProvenanceGuard({
+  const secondPass = runProvenanceGuard({
     threads: retryThreads,
+    cards: retryCards,
     home_topic: retry.home_topic,
     scratch,
   });
   if (secondPass.ok) return retry;
 
-  console.warn('[guard] cross-domain provenance failed on retry. dropping sidecar. failures:',
+  console.warn('[guard] provenance failed on retry. dropping offending surfaces. failures:',
     JSON.stringify(secondPass.failures).slice(0, 800));
 
-  // Second failure. Ship the retry's response_text (already rewritten
-  // without cross-domain claims per the retry instruction) with the sidecar
-  // dropped. If the retry text still leans on ungrounded claims that is a
-  // known limitation and gets flagged; further rewriting would require a
-  // separate targeted prose scrub, which we're intentionally not building
-  // here.
+  // Second failure. Drop the specific surface(s) that failed, keep the ones
+  // that verified. Threads and cards fail independently — a bad card
+  // shouldn't cost us the threads sidecar, and vice versa.
+  const threadsFailed = secondPass.failures.some(f => f.surface === 'threads');
+  const cardsFailed   = secondPass.failures.some(f => f.surface === 'cards');
+
+  const outThreads = threadsFailed ? [] : retryThreads;
+  const outHomeTopic = threadsFailed ? null : retry.home_topic;
+  // For cards, drop the specific cards that failed rather than all of them,
+  // when we can attribute failures to a card_index. Keep the ones that
+  // passed. If any card failure has no card_index (e.g. a global
+  // 'no_scratch_rows_for_cards'), drop the whole card list.
+  let outCards = retryCards;
+  if (cardsFailed) {
+    const globalCardFail = secondPass.failures.some(f =>
+      f.surface === 'cards' && (!f.claim || typeof f.claim.card_index !== 'number')
+    );
+    if (globalCardFail) {
+      outCards = [];
+    } else {
+      const failedCardIndices = new Set(
+        secondPass.failures
+          .filter(f => f.surface === 'cards' && f.claim && typeof f.claim.card_index === 'number')
+          .map(f => f.claim.card_index)
+      );
+      outCards = retryCards.filter((_, i) => !failedCardIndices.has(i));
+    }
+  }
+
   return {
     response_text: retry.response_text,
     followup_chips: retry.followup_chips,
-    cross_domain_threads: [],
-    home_topic: null,
-    synth_warning: 'cross_domain_provenance_failed',
+    cross_domain_threads: outThreads,
+    home_topic: outHomeTopic,
+    cards: outCards,
+    synth_warning: 'provenance_failed',
     synth_warning_detail: secondPass.failures,
   };
 }
@@ -925,19 +960,24 @@ exports.handler = async (event) => {
       followup_chips,
       cross_domain_threads,
       home_topic,
+      cards,
       synth_warning,
       synth_warning_detail,
     } = synth;
 
-    // Cross-domain artifacts persist as a meta entry on scratch so the sidecar
+    // Structured artifacts persist as a meta entry on scratch so the sidecar
     // rendering path has them alongside the investigator handoff without
-    // requiring a schema change. When the guard drops, the entry still lands
-    // but with the failure recorded so the UI can render an "answer without
-    // sidecar" state and the log has the offending claims.
-    const guardMeta = (Array.isArray(cross_domain_threads) && cross_domain_threads.length > 0) || home_topic || synth_warning
+    // requiring a schema change. When the guard drops a surface, the entry
+    // still lands but with the failure recorded so the UI can render an
+    // "answer without that sidecar" state and the log has the offending
+    // claims.
+    const hasThreads = Array.isArray(cross_domain_threads) && cross_domain_threads.length > 0;
+    const hasCards   = Array.isArray(cards) && cards.length > 0;
+    const guardMeta = (hasThreads || hasCards || home_topic || synth_warning)
       ? [{
-          type: 'cross_domain_output',
+          type: 'structured_synth_output',
           cross_domain_threads: Array.isArray(cross_domain_threads) ? cross_domain_threads : [],
+          cards: Array.isArray(cards) ? cards : [],
           home_topic: home_topic || null,
           synth_warning: synth_warning || null,
           synth_warning_detail: synth_warning_detail || null,
