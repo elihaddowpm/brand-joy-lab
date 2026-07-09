@@ -1,21 +1,30 @@
 /**
- * Cross-domain provenance guard.
+ * Provenance guard for structured synthesizer output.
  *
- * Post-generation check that binds the synthesizer's cross-domain claims to
- * the rows bjl_corpus_threads (or bjl_corpus_pivot) actually returned in the
- * same turn. Prompt guidance asks; this guard decides. If a claim can't be
- * grounded in a returned row, the sidecar gets dropped rather than shipped.
+ * Post-generation check that binds the synthesizer's structured claims to the
+ * rows the investigator actually returned in the same turn. Prompt guidance
+ * asks; this guard decides. If a claim can't be grounded in a returned row,
+ * the offending structured field gets dropped rather than shipped.
  *
  * Called from bjl-query-background.js after runSynthesis and before persisting
  * the answer. Pure function: no I/O, no side effects, easy to test.
  *
- * Four checks:
- *   1. Item provenance: every member's item_name matches a returned row (name
- *      normalized against curly quotes and casing).
- *   2. Number provenance: joy_index equal to one decimal, n exact.
- *   3. Thread provenance: every thread_tag is one of the tags in the returned
- *      rows.
- *   4. Home-topic exclusion: no member's primary_topic is a home topic.
+ * Two surfaces are guarded on the same code path:
+ *
+ * A) Cross-domain threads (cross_domain_threads). Allowlist is the rows
+ *    returned by bjl_corpus_threads / bjl_corpus_pivot in scratch. Checks:
+ *      1. Item provenance: member.item_name matches a returned row.
+ *      2. Number provenance: joy_index equal to one decimal, n exact.
+ *      3. Thread provenance: thread_tag is one of the returned tags.
+ *      4. Home-topic exclusion: member.primary_topic is not a home topic.
+ *
+ * B) Publishable cards (cards). Allowlist is the broader index of any
+ *    row returned by any SELECT in scratch, tagged with the source table
+ *    inferred from the query's FROM clause. Checks:
+ *      1. Item provenance: stat_item.item_name matches a returned row.
+ *      2. Number provenance: joy_index equal to one decimal, n exact.
+ *      3. Source provenance: stat_item.source equals the row's source table.
+ *      4. Single-source rule: every stat_item inside a card shares a source.
  *
  * Returns { ok, failures } where failures is [] on success and an array of
  * { claim, reason } objects on failure. The caller decides retry/drop policy.
@@ -107,6 +116,58 @@ function buildAllowlist(scratch) {
 }
 
 /**
+ * Infer the source table from a SQL string by looking at the first FROM
+ * clause. Function-based calls (bjl_corpus_threads, bjl_corpus_pivot) are
+ * mapped to bjl_scores since those functions read from bjl_scores. Returns
+ * null when the SQL has no recognizable FROM.
+ */
+function inferSourceTable(sql) {
+  if (typeof sql !== 'string') return null;
+  const m = sql.match(/\bfrom\s+(?:public\.)?([a-z_][a-z0-9_]*)/i);
+  if (!m) return null;
+  const raw = m[1].toLowerCase();
+  if (raw === 'bjl_corpus_threads' || raw === 'bjl_corpus_pivot') return 'bjl_scores';
+  return raw;
+}
+
+/**
+ * Build the card allowlist from investigator scratch. Broader than the
+ * threads allowlist: indexes every row from any SELECT with an item_name,
+ * tagged with the source table inferred from the query's FROM clause.
+ *
+ * Returns Map<normalized_item_name, Array<{joy_index, n, source}>>.
+ */
+function buildCardAllowlist(scratch) {
+  const itemIndex = new Map();
+  const entries = Array.isArray(scratch) ? scratch : [];
+  for (const entry of entries) {
+    if (!entry || typeof entry !== 'object') continue;
+    const rawSql = typeof entry.query === 'string' ? entry.query
+                 : typeof entry.sql === 'string' ? entry.sql
+                 : typeof entry.query_text === 'string' ? entry.query_text
+                 : '';
+    const source = inferSourceTable(rawSql);
+    if (!source) continue;
+    const rows = Array.isArray(entry.result) ? entry.result
+               : Array.isArray(entry.rows)   ? entry.rows
+               : [];
+    for (const row of rows) {
+      if (!row || typeof row !== 'object') continue;
+      const key = normalizeItemName(row.item_name);
+      if (!key) continue;
+      const bucket = itemIndex.get(key) || [];
+      bucket.push({
+        joy_index: roundJoy(row.joy_index),
+        n: toInt(row.n),
+        source,
+      });
+      itemIndex.set(key, bucket);
+    }
+  }
+  return itemIndex;
+}
+
+/**
  * Coerce home_topic (string or string[]) into a normalized Set<string>.
  * Everything is lowercased for comparison, since primary_topic values are
  * lowercase in the corpus.
@@ -122,20 +183,41 @@ function buildHomeTopicSet(home_topic) {
 }
 
 /**
- * The four checks. Returns { ok, failures } and does not throw.
+ * The provenance guard entry point. Returns { ok, failures } and does not
+ * throw. Runs both surfaces (threads + cards) on the same call so the
+ * caller can retry once and drop the offending field(s) on second failure.
+ *
+ * Failures carry a `surface` field ('threads' or 'cards') so the caller
+ * can drop only what actually failed rather than the whole structured
+ * output.
  *
  * @param {object} args
- * @param {Array}  args.threads       — cross_domain_threads from synth output
- * @param {string|string[]} args.home_topic — from synth output
- * @param {Array}  args.scratch       — investigator scratch (for allowlist)
+ * @param {Array}  [args.threads]     — cross_domain_threads from synth output
+ * @param {Array}  [args.cards]       — cards from synth output
+ * @param {string|string[]} [args.home_topic] — from synth output
+ * @param {Array}  args.scratch       — investigator scratch (for allowlists)
  */
-function runCrossDomainProvenanceGuard({ threads, home_topic, scratch }) {
+function runProvenanceGuard({ threads, cards, home_topic, scratch }) {
+  const threadFailures = runThreadsGuard({ threads, home_topic, scratch });
+  const cardFailures   = runCardsGuard({ cards, scratch });
+  const failures = [
+    ...threadFailures.map(f => Object.assign({ surface: 'threads' }, f)),
+    ...cardFailures.map(f => Object.assign({ surface: 'cards' }, f)),
+  ];
+  return { ok: failures.length === 0, failures };
+}
+
+// Back-compat alias so existing callers importing runCrossDomainProvenanceGuard
+// keep working. Internally delegates to the unified guard.
+function runCrossDomainProvenanceGuard(args) {
+  return runProvenanceGuard(args);
+}
+
+function runThreadsGuard({ threads, home_topic, scratch }) {
   const failures = [];
 
   const list = Array.isArray(threads) ? threads : [];
-  // Nothing to guard. Trivially ok: guard fires only when the model made
-  // structured cross-domain claims.
-  if (list.length === 0) return { ok: true, failures };
+  if (list.length === 0) return failures;
 
   const { itemIndex, threadTags } = buildAllowlist(scratch);
   const homeTopics = buildHomeTopicSet(home_topic);
@@ -148,7 +230,7 @@ function runCrossDomainProvenanceGuard({ threads, home_topic, scratch }) {
       reason: 'no_threads_rows_in_scratch',
       detail: 'bjl_corpus_threads / bjl_corpus_pivot did not run this turn or returned no rows, but cross_domain_threads was populated',
     });
-    return { ok: false, failures };
+    return failures;
   }
 
   for (const t of list) {
@@ -247,7 +329,119 @@ function runCrossDomainProvenanceGuard({ threads, home_topic, scratch }) {
     }
   }
 
-  return { ok: failures.length === 0, failures };
+  return failures;
+}
+
+/**
+ * Card provenance guard. Applies the four checks (item, joy_index, n, source)
+ * to each stat_item, and enforces the single-source rule (all stat_items in
+ * one card share a source). Returns a bare failures array; the unified
+ * guard tags them with surface='cards'.
+ */
+function runCardsGuard({ cards, scratch }) {
+  const failures = [];
+  const list = Array.isArray(cards) ? cards : [];
+  if (list.length === 0) return failures;
+
+  const itemIndex = buildCardAllowlist(scratch);
+
+  // No allowlist rows at all. Any card is off-source.
+  if (itemIndex.size === 0) {
+    failures.push({
+      claim: null,
+      reason: 'no_scratch_rows_for_cards',
+      detail: 'cards was populated but the scratch has no queryable rows to ground them in',
+    });
+    return failures;
+  }
+
+  for (let ci = 0; ci < list.length; ci++) {
+    const card = list[ci];
+    if (!card || typeof card !== 'object') {
+      failures.push({ claim: { card_index: ci }, reason: 'malformed_card' });
+      continue;
+    }
+    const statItems = Array.isArray(card.stat_items) ? card.stat_items : [];
+    if (statItems.length === 0) {
+      failures.push({
+        claim: { card_index: ci, headline: card.headline },
+        reason: 'card_has_no_stat_items',
+      });
+      continue;
+    }
+
+    const seenSources = new Set();
+    for (let si = 0; si < statItems.length; si++) {
+      const s = statItems[si];
+      if (!s || typeof s !== 'object' || typeof s.item_name !== 'string') {
+        failures.push({
+          claim: { card_index: ci, stat_index: si, headline: card.headline },
+          reason: 'malformed_stat_item',
+        });
+        continue;
+      }
+
+      const key = normalizeItemName(s.item_name);
+      const bucket = itemIndex.get(key);
+      if (!bucket || bucket.length === 0) {
+        failures.push({
+          claim: { card_index: ci, item_name: s.item_name, headline: card.headline },
+          reason: 'card_item_not_in_allowlist',
+        });
+        continue;
+      }
+
+      const claimJoy    = roundJoy(s.joy_index);
+      const claimN      = toInt(s.n);
+      const claimSource = typeof s.source === 'string' ? s.source.toLowerCase() : null;
+      if (claimSource) seenSources.add(claimSource);
+
+      // A row matches when joy_index, n, and source all agree. Multiple
+      // rows can exist per item; accept the stat item if any row agrees.
+      let matched = false;
+      let closest = { joy: null, n: null, source: null };
+      for (const row of bucket) {
+        const joyOk    = claimJoy === null || row.joy_index === null || claimJoy === row.joy_index;
+        const nOk      = claimN === null || row.n === null || claimN === row.n;
+        const sourceOk = claimSource === null || claimSource === row.source;
+        if (joyOk && nOk && sourceOk) { matched = true; break; }
+        if (!joyOk    && closest.joy    === null) closest.joy    = { claim: claimJoy, allowlist: row.joy_index };
+        if (!nOk      && closest.n      === null) closest.n      = { claim: claimN, allowlist: row.n };
+        if (!sourceOk && closest.source === null) closest.source = { claim: claimSource, allowlist: row.source };
+      }
+      if (!matched) {
+        if (closest.joy) {
+          failures.push({
+            claim: { card_index: ci, item_name: s.item_name, joy_index: s.joy_index },
+            reason: 'card_joy_index_mismatch',
+            detail: closest.joy,
+          });
+        } else if (closest.n) {
+          failures.push({
+            claim: { card_index: ci, item_name: s.item_name, n: s.n },
+            reason: 'card_n_mismatch',
+            detail: closest.n,
+          });
+        } else if (closest.source) {
+          failures.push({
+            claim: { card_index: ci, item_name: s.item_name, source: s.source },
+            reason: 'card_source_mismatch',
+            detail: closest.source,
+          });
+        }
+      }
+    }
+
+    // Single-source rule: all stat_items in one card share a source.
+    if (seenSources.size > 1) {
+      failures.push({
+        claim: { card_index: ci, headline: card.headline, sources: Array.from(seenSources) },
+        reason: 'card_mixed_sources',
+      });
+    }
+  }
+
+  return failures;
 }
 
 /**
@@ -299,10 +493,13 @@ function buildRetryAllowlistDigest(scratch) {
 }
 
 module.exports = {
-  runCrossDomainProvenanceGuard,
+  runProvenanceGuard,
+  runCrossDomainProvenanceGuard,   // back-compat alias
   buildRetryAllowlistDigest,
-  // Exported for tests + reuse when cards are added.
+  buildCardAllowlist,
+  // Exported for tests + reuse.
   normalizeItemName,
   roundJoy,
   buildAllowlist,
+  inferSourceTable,
 };
