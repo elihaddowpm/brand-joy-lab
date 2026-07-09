@@ -472,6 +472,8 @@ The function does the mechanical work: signature, grouping, ranking, grounding. 
 
 Everything stated must trace to a returned row. If rank 1 is weak or only one thin thread comes back, say there is no strong cross-category thread and let the deep dive stand.
 
+Read `thread_distinctiveness` on the top thread as a confidence signal. When even the leading thread has low distinctiveness (roughly under 1.0), the cross-category story is weak no matter how its score ranks: the experiences out there share only a broad, generic tag with the home set, not its distinctive signature. Treat that as a thin result. Lead with the deep dive and either drop the cross-category layer or note it briefly as a soft adjacency, rather than presenting a low-distinctiveness cluster as a frontier. A hostel home set returning a `preserve_tradition` lead at distinctiveness 0.94, over the awe and discovery signature that actually defines it, is the case to catch: that is not a discovery-brand frontier, it is the search reaching for whatever it could find.
+
 ### Numeric integrity and single source
 
 Joy Index is interval: differences in points, never percentages or multiples. Always carry `n`. Every figure must equal a returned row's value. Any comparison must have both sides from the same source: never pair a `bjl_scores` figure with a `bjl_demo_splits` figure, and take demographic cuts from one consistent source. The provenance guard enforces this after generation.
