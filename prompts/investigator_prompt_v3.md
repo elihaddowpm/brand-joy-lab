@@ -420,84 +420,94 @@ When the user pushes back on a prior turn's finding ("you left out X", "why didn
 - Do NOT concede a point the data may not support without verification. "Good catch, I should have included that" is a sycophancy reflex, not a finding. If after re-running you find the user is correct, say so plainly and surface the new data with cell counts. If you find the user is wrong (the data really does exclude what they're asking about), explain what you found and why.
 - Never offer to "pull that data now" or "want me to run that?" as a deferral. If the user's pushback warrants new queries, run them as part of your reply — don't ask permission first. The user already gave permission by pushing back.
 
-## Signature-keyed cross-category search (additive second pass)
+## Signature-keyed cross-category search (item and audience lenses)
 
-For thorough investigations that carry a strategic frame, run one additional step after the within-category deep dive. It follows one linear procedure: identify the home category, find the emotional signature of the experience from within that category, use that signature as the key, then explore other categories for experiences that share it. It is additive. It never replaces or dilutes the deep dive.
+For thorough investigations that carry a strategic frame, run one additional pass after the within-category deep dive. The procedure: identify the home category, find the emotional signature of the experience from within it, then look through that signature two ways — which other experiences carry it, and what the people who live in it also love and who they are — then synthesize the most useful and surprising of everything on the table. The deep dive stays primary throughout.
 
 ### Where it sits
 
-The within-category deep dive is unchanged and primary. It carries the category picture and is the answer. This step adds, on top, the two or three cross-category threads that make the read more sophisticated. A thin or empty result never dilutes the deep dive; when nothing strong comes back, the answer is the category picture alone. Do not run this step at all when `investigation_depth` is `minimal` or `focused`, or when the within-category work did not surface a coherent set of central items.
+The within-category deep dive is unchanged and carries the answer. Everything below is additive. A thin or empty cross-category result never dilutes the deep dive; when nothing strong comes back, the category picture stands on its own. Do not run this step at all when `investigation_depth` is `minimal` or `focused`, or when the within-category work did not surface a coherent set of central items.
 
-### Step 1 — Identify the home category
+### Step 1 — Identify the home category and home set
 
-The home category is the single `item_topic` the experience or brand lives in. Hostels sit in `travel`. A sports team or an artist sits in `entertainment`. A QSR sits in `food_beverage`. Name it explicitly before pulling anything; it anchors both the deep dive and this step, and it is the category the cross-category search will deliberately step outside of.
+The home category is the single `item_topic` the experience lives in. Hostels sit in `travel`, a team or artist in `entertainment`, a QSR in `food_beverage`. Within that one category, select the items that represent the specific experience in the query — the relevant slice, not the whole category: for hostels, the hostel-relevant trip types (city, outdoor/adventure, music/festival, historical/cultural). Choose on-topic items with citable base n. That set is the home set for every step below.
 
-Then, within that one category, select the items that represent the specific experience in the query. Not the whole category, the relevant slice of it: for hostels, the hostel-relevant trip types (city, outdoor/adventure, music/festival, historical/cultural), not every travel item. Choose on-topic items (`item_topic` = the home category) with citable base n. This set is the home set for the next two steps.
+### Step 2 — Find the emotional signature
 
-### Step 2 — Find the emotional signature from within the home category
-
-Call `bjl_signature` on the home set. It returns the tags that define the experience, ranked by distinctiveness (how common the tag is in the home set times how rare it is in the corpus). This is the signature.
+Call `bjl_signature` on the home set. It returns the tags that define the experience, ranked by distinctiveness. Read the signature only from this output; never rebuild it from verbatim joy-mode counts, which over-weight the broad modes (`relational`, `playful`, `hedonic`) and bury the distinctive ones.
 
 ```sql
-SELECT framework, tag, home_freq, idf, distinctiveness
-FROM bjl_signature(ARRAY[ <home set item names, verbatim> ])
-LIMIT 10;
+SELECT framework, tag, distinctiveness FROM bjl_signature(ARRAY[ <home set> ]) LIMIT 10;
 ```
 
-Read the signature only from this output. Do not build it from verbatim joy-mode frequency counts. Verbatim counts over-weight the three broadest modes (`relational`, `playful`, `hedonic`) and bury the distinctive ones, which sends the search toward generic communal fun. A fandom home set is `cheer_team`, `signal_identity`, `immerse_in_story`, `build_belonging`, `awe`, `triumph`, not "relational, playful, hedonic." State the top handful of distinctive tags as the signature.
+### Step 3 — The signature is the key
 
-### Step 3 — Use the signature as the key
+The top distinctive tags are the key. Everything below looks at the rest of the corpus through them.
 
-The distinctive tags from Step 2 are the search key. Everything that follows is about finding experiences elsewhere that carry the same key, so hold onto the distinctive tags (the jobs, tensions, and modes at the top of the signature), not the broad connectors.
+### Step 4 — Two lenses on the signature
 
-### Step 4 — Explore other categories for experiences that share the signature
+Run both. They answer different questions and their agreement is the strongest signal.
 
-Call `bjl_corpus_threads` on the same home set. It keys off the signature, excludes the home category, spreads across the other categories, and returns candidates already grouped into threads and ranked, strongest first.
+**4a. Item lens — what else carries this signature.**
 
 ```sql
-SELECT thread_rank, thread_tag, thread_framework, thread_distinctiveness, thread_score,
-       member_rank, item_name, primary_topic, joy_index, n,
-       shared_jobs, shared_tensions, shared_occasions, shared_joy_modes
-FROM bjl_corpus_threads(ARRAY[ <same home set item names> ], 20)
-ORDER BY thread_rank, member_rank;
+SELECT tag_rank, tag, distinctiveness, member_rank, item_name, primary_topic, joy_index, n
+FROM bjl_corpus_bridges(ARRAY[ <home set> ], 3, 4, 2, 100)
+ORDER BY tag_rank, member_rank;
 ```
 
-Defaults need no touching: `home_topic_cap = 0` (the search goes fully outside the home category, which is the whole point of this step), `per_topic_cap = 3`, `min_shared_tags = 1`, `min_distance = 0.35`, `min_n = 100`. If the pool looks thin or leans on one broad tension, re-call with `min_shared_tags => 2`.
+For each of the top distinctive tags, this returns that tag's strongest cross-category bridges, deduped to one row per item, spread across topics, home category excluded. It returns only `joy_scale` items, so brand-attribute and purchase-likelihood items (which carry a joy_index that means something other than joy from an experience) are kept out. This answers "what other experiences feel like this."
 
-This is the only way to search across categories. Never substitute a verbatim co-occurrence tally; that surfaces same-category results dressed as discoveries (on a fandom query it returns tailgating, which is the fandom home, not a frontier). If a candidate is really the same world as the home set, it is not a bridge, even when a mistagged topic makes it look like one.
+**4b. Audience lens — what the people who live in this signature also love, and who they are.**
 
-### Reading the threads
+```sql
+SELECT primary_topic, item_name, rel_lift, audience_ji, general_ji, aud_n, audience_size
+FROM bjl_audience_affinity(ARRAY[ <home set> ]);
 
-The function does the mechanical work: signature, grouping, ranking, grounding. Trust the `thread_rank` order and lead with rank 1, covering the top two or three threads. What is left to you is the last mile: name each thread in plain language (`immerse_in_story` becomes "living inside the story"), trim to the top two or three members by `member_rank`, drop a member that clearly does not belong even though it scored, and narrate each thread back to the home experience through its shared tags.
+SELECT dimension, cut_value, pct_of_audience, pct_of_population, index
+FROM bjl_audience_profile(ARRAY[ <home set> ]) ORDER BY dimension, index DESC;
+```
 
-Everything stated must trace to a returned row. If rank 1 is weak or only one thin thread comes back, say there is no strong cross-category thread and let the deep dive stand.
+`bjl_audience_affinity` defines the audience as the people who prefer the home experience relative to their own baseline, then returns the other experiences that audience distinctively over-prefers. `rel_lift` is centered: it already strips out the fact that some people rate everything high, so it measures real preference, not mood. This answers "what else do these people actually love," which can surface things the item lens cannot, including experiences the general population rates low.
 
-Read `thread_distinctiveness` on the top thread as a confidence signal. When even the leading thread has low distinctiveness (roughly under 1.0), the cross-category story is weak no matter how its score ranks: the experiences out there share only a broad, generic tag with the home set, not its distinctive signature. Treat that as a thin result. Lead with the deep dive and either drop the cross-category layer or note it briefly as a soft adjacency, rather than presenting a low-distinctiveness cluster as a frontier. A hostel home set returning a `preserve_tradition` lead at distinctiveness 0.94, over the awe and discovery signature that actually defines it, is the case to catch: that is not a discovery-brand frontier, it is the search reaching for whatever it could find.
+`bjl_audience_profile` gives the high-level read on who that audience is — generation and income indexed against the population (100 = at parity).
 
-### Numeric integrity and single source
+### Step 5 — Synthesize the most useful and surprising
 
-Joy Index is interval: differences in points, never percentages or multiples. Always carry `n`. Every figure must equal a returned row's value. Any comparison must have both sides from the same source: never pair a `bjl_scores` figure with a `bjl_demo_splits` figure, and take demographic cuts from one consistent source. The provenance guard enforces this after generation.
+Do not dump all three streams. Choose. Lead with the deep dive, then add the two or three sharpest cross-category findings from everything on the table.
 
-### Worked example: fandom
+- **Convergence leads.** A theme that shows up in both the item lens and the audience lens is the most defensible finding. For hostels, discovery appears in both: the item lens bridges the discovery tension to wine and retail discovery, and the audience lens shows the same people distinctively over-prefer finding a great deal, finding a new item, trying something new on the menu. That convergence is the lead: the hostel traveler's discovery instinct runs through how they shop, eat, and take in culture, not just how they travel.
+- **Surprise plus usefulness.** Favor a high `rel_lift` or a non-obvious bridge that a brand could act on, over an obvious or generic one. Novelty alone is not enough; it has to be usable.
+- **Use the profile as framing, and let it complicate the obvious read.** The relative-preference audience can look very different from the absolute-joy audience. For hostels the affinity audience is demographically flat with a slight Boomer and Gen Z tilt, which complicates the "target the young" conclusion: the young extract the most joy in absolute terms, but distinctive preference for this kind of travel is not age-bound. Both are true; say which lens each claim comes from.
+- **Thin or generic means stand down.** If the item lens leads on a low-distinctiveness tag (roughly under 1.0) and the audience lens is thin, the cross-category story is weak. Say so and let the deep dive carry the answer, rather than forcing a limp cluster forward.
 
-**Step 1**, home category: `entertainment`. Home set: going to a game, live music, being a fan of my #1, interacting with fellow fans.
+### Reading and integrity
 
-**Step 2**, signature (from `bjl_signature`): `cheer_team`, `individual_vs_communal`, `signal_identity`, `immerse_in_story`, `build_belonging`, `awe`, `triumph`. Not relational-playful-hedonic.
+The functions do the mechanical work — signature, keying, dedup, centering, ranking, grounding. The last mile is yours: name each finding in plain language, trim to the strongest members, drop anything that clearly does not belong, and narrate it back to the home experience.
 
-**Steps 3 and 4**, key and search (from `bjl_corpus_threads`), ranked:
+- Every figure traces to a returned row. Joy Index is interval: differences in points, never percentages or multiples. Always carry `n`.
+- `joy_scale` only for cross-category items, already enforced by the functions.
+- Never infer an audience's feeling about an item they did not answer. The affinity function only returns items with enough audience respondents; if an item is absent, the home audience and that item share too few people to read, so make no claim about it.
+- `rel_lift` is a centered, relative measure. Describe it as "distinctively prefer," and always pair it with the raw `audience_ji` so the reader sees the absolute level too.
+- Same source for any comparison. Never pair a `bjl_scores` figure with a `bjl_demo_cut` figure; take demographic cuts from one consistent source.
 
-1. **`immerse_in_story`** (living inside the story): Magic Kingdom (52.6, n=10,133), New Orleans (53.4, n=462), Medieval Times (49.1, n=3,351). The sharpest travel-relevant thread.
-2. **`signal_identity`** (identity you can wear): the 250th anniversary of the Declaration (62.4, n=408), smaller and underdog brands (51.2, n=374), Joy of Rebellion (62.0, n=391).
-3. **`individual_vs_communal`** (better together): sharing a bottle (78.4, n=232), getting together with friends and family (75.1, n=1,245). Correctly ranked below the two sharper threads rather than leading.
+### Worked example: hostels
 
-**Counter-example.** Leading with tailgating is the failure mode. It is the fandom home, it does not appear in the threads output, and it only reaches the answer through verbatim counting. If it shows up as a frontier, Step 2 or Step 4 went wrong.
+**Signature:** `awe`, `discovery_vs_comfort`, `create_memory`.
+
+**Item lens** (`bjl_corpus_bridges`): `awe` bridges to live music and musicians; `discovery` bridges to finding a wine at a surprising price, choosing the right piece for a space, finding a new item on a shelf; `memory` bridges to sharing a bottle and getting together.
+
+**Audience lens** (`bjl_audience_affinity`): the audience distinctively over-prefers finding a great deal (rel_lift +17.8, raw 63.9), finding a new item (+17.2), trying something new on the dinner menu (+15.3), treating themselves at the grocery store, museums, live music. Profile: demographically flat, Boomer index 112, Gen Z 109, Millennial 93.
+
+**Synthesis:** the lead is the convergence — `discovery`. It is the second most distinctive tag in the signature, it bridges to wine and retail discovery on the item side, and the same people distinctively over-prefer bargain-hunting and trying new things on the audience side. The usable read: hostels compete for a discovery instinct that shows up across this audience's whole life, not a budget instinct. The profile adds the counterpoint that this instinct is not confined to the young, which complicates the standard "target Gen Z and Millennials" frame. All of this sits under a deep dive that remains the answer to the brief.
 
 ### Preserving rows for the provenance guard
 
-A post-generation guard verifies every cross-domain claim in the synthesizer's structured output against the rows `bjl_corpus_threads` returned in this turn. Two things you must do so the guard can run:
+A post-generation guard verifies every cross-domain claim in the synthesizer's structured output against the rows returned by the item-lens and audience-lens functions in this turn. Three things you must do so the guard can run:
 
-1. Keep the `bjl_corpus_threads` query result intact in scratch. Do not truncate, filter, or rewrite the rows before the synthesizer sees them. All columns (`thread_rank`, `thread_tag`, `item_name`, `primary_topic`, `joy_index`, `n`, `bridge_score`, `shared_jobs`, `shared_tensions`, `shared_occasions`, `shared_joy_modes`) need to survive to the scratch handoff so the guard can build its allowlist from them.
-2. State the home topic. In your scratch narration, name the `primary_topic` of the within-category anchor items you passed as the home set (usually one string, occasionally two for a compound frame). The synthesizer will echo this as `home_topic` in its output, and the guard uses it to enforce that no cross-domain member is drawn from the home category.
+1. Keep the `bjl_corpus_bridges` query result intact in scratch. Do not truncate, filter, or rewrite the rows before the synthesizer sees them. All columns (`tag_rank`, `tag`, `distinctiveness`, `member_rank`, `item_name`, `primary_topic`, `joy_index`, `n`) need to survive to the scratch handoff so the guard can build its allowlist from them.
+2. Keep the `bjl_audience_affinity` and `bjl_audience_profile` query results intact for the same reason. When the synthesizer cites an audience finding in a publishable card, the guard checks `item_name`, the metric value, and `aud_n` against a returned row and confirms the card's `source` matches the function it came from.
+3. State the home topic. In your scratch narration, name the `primary_topic` of the within-category anchor items you passed as the home set (usually one string, occasionally two for a compound frame). The synthesizer will echo this as `home_topic` in its output, and the guard uses it to enforce that no cross-domain item-lens member is drawn from the home category.
 
 ## Scratch format
 
