@@ -12,7 +12,8 @@
  * Two surfaces are guarded on the same code path:
  *
  * A) Cross-domain threads (cross_domain_threads). Allowlist is the rows
- *    returned by bjl_corpus_threads / bjl_corpus_pivot in scratch. Checks:
+ *    returned by bjl_corpus_bridges (current item lens), bjl_corpus_threads,
+ *    or bjl_corpus_pivot in scratch. Checks:
  *      1. Item provenance: member.item_name matches a returned row.
  *      2. Number provenance: joy_index equal to one decimal, n exact.
  *      3. Thread provenance: thread_tag is one of the returned tags.
@@ -85,12 +86,18 @@ function buildAllowlist(scratch) {
     const q = typeof entry.query === 'string' ? entry.query.toLowerCase() : '';
     // Also handle entries that carry the sql on a different key (some flows
     // use `sql` or `query_text`); the invariant is a string containing the
-    // function name.
+    // function name. bjl_corpus_bridges is the current item-lens source;
+    // bjl_corpus_threads and bjl_corpus_pivot are recognized for back-compat
+    // during the transition.
     const alt = [entry.sql, entry.query_text]
       .filter(v => typeof v === 'string')
       .map(v => v.toLowerCase());
     const hay = [q, ...alt].join(' ');
-    if (!hay.includes('bjl_corpus_threads(') && !hay.includes('bjl_corpus_pivot(')) continue;
+    if (
+      !hay.includes('bjl_corpus_bridges(') &&
+      !hay.includes('bjl_corpus_threads(') &&
+      !hay.includes('bjl_corpus_pivot(')
+    ) continue;
 
     const rows = Array.isArray(entry.result) ? entry.result
                : Array.isArray(entry.rows)   ? entry.rows
@@ -106,8 +113,13 @@ function buildAllowlist(scratch) {
         primary_topic: typeof row.primary_topic === 'string' ? row.primary_topic : null,
       });
       itemIndex.set(key, bucket);
+      // bjl_corpus_bridges emits `tag`; bjl_corpus_threads emitted
+      // `thread_tag`. Accept either so the guard covers both transitional
+      // shapes.
       if (typeof row.thread_tag === 'string' && row.thread_tag) {
         threadTags.add(row.thread_tag);
+      } else if (typeof row.tag === 'string' && row.tag) {
+        threadTags.add(row.tag);
       }
     }
   }
@@ -461,18 +473,27 @@ function buildRetryAllowlistDigest(scratch) {
       .filter(v => typeof v === 'string')
       .map(v => v.toLowerCase());
     const hay = [q, ...alt].join(' ');
-    if (!hay.includes('bjl_corpus_threads(') && !hay.includes('bjl_corpus_pivot(')) continue;
+    if (
+      !hay.includes('bjl_corpus_bridges(') &&
+      !hay.includes('bjl_corpus_threads(') &&
+      !hay.includes('bjl_corpus_pivot(')
+    ) continue;
 
     const rows = Array.isArray(entry.result) ? entry.result
                : Array.isArray(entry.rows)   ? entry.rows
                : [];
     for (const row of rows) {
-      if (!row || typeof row.thread_tag !== 'string') continue;
-      const tag = row.thread_tag;
+      // bjl_corpus_bridges: row.tag + row.tag_rank
+      // bjl_corpus_threads: row.thread_tag + row.thread_rank
+      const tag = typeof row.thread_tag === 'string' ? row.thread_tag
+                : typeof row.tag === 'string' ? row.tag
+                : null;
+      if (!tag) continue;
+      const rank = row.thread_rank ?? row.tag_rank ?? null;
       if (!byThread.has(tag)) {
         byThread.set(tag, {
           thread_tag: tag,
-          thread_rank: row.thread_rank ?? null,
+          thread_rank: rank,
           members: [],
         });
       }
@@ -481,9 +502,6 @@ function buildRetryAllowlistDigest(scratch) {
         joy_index: roundJoy(row.joy_index),
         n: toInt(row.n),
         primary_topic: row.primary_topic || null,
-        shared_jobs: row.shared_jobs || null,
-        shared_tensions: row.shared_tensions || null,
-        shared_joy_modes: row.shared_joy_modes || null,
       });
     }
   }
