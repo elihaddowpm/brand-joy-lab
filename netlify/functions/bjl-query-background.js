@@ -29,44 +29,12 @@ const Anthropic = require('@anthropic-ai/sdk').default;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY;
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
 
 const HAIKU_MODEL = 'claude-haiku-4-5-20251001';
 const SONNET_MODEL = 'claude-sonnet-4-6';
-const EMBED_MODEL  = 'text-embedding-3-small';
-
-// v9.17: Embed the query text for the mandatory coverage scan. Returns
-// a vector-literal string (e.g. '[0.01,0.02,...]') suitable for direct
-// use in the query_embedding column (Postgres vector(1536)). Returns
-// null on failure so the caller can skip the scan gracefully rather
-// than blocking the whole investigation.
-async function embedQuery(text) {
-  if (!OPENAI_API_KEY || !text) return null;
-  try {
-    const rsp = await fetch('https://api.openai.com/v1/embeddings', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({ model: EMBED_MODEL, input: String(text).slice(0, 8000) }),
-    });
-    if (!rsp.ok) {
-      console.error('[bjl-query-background] embed failed:', rsp.status);
-      return null;
-    }
-    const json = await rsp.json();
-    const vec = json && json.data && json.data[0] && json.data[0].embedding;
-    if (!Array.isArray(vec)) return null;
-    return `[${vec.join(',')}]`;
-  } catch (e) {
-    console.error('[bjl-query-background] embed threw:', e.message);
-    return null;
-  }
-}
 
 // Investigation depth -> max turns mapping. Each successful query is one turn;
 // turn budget includes overhead for tool result + final synthesis.
@@ -181,7 +149,6 @@ console.log('  schema_doc.md head[200]:', PROMPTS.schemaDoc.slice(0, 200).replac
 
 const TRIAGE_PROMPT_GET            = () => PROMPTS.triage;
 const INVESTIGATOR_PROMPT_BASE_GET = () => PROMPTS.investigator;
-const INVESTIGATOR_COVERAGE_SCAN_DIRECTIVE_GET = () => PROMPTS.investigatorCoverageScanDirective || '';
 const SYNTHESIZER_PROMPT_BASE_GET  = () => PROMPTS.synthesizer;
 const SCHEMA_DOC_GET               = () => PROMPTS.schemaDoc;
 
@@ -306,16 +273,11 @@ async function runTriage(question, priorContext, extraContext) {
 // -------------------------------------------------------------------------
 // Stage 2: Investigation (Sonnet 4.6)
 // -------------------------------------------------------------------------
-// v9.17: buildInvestigatorSystemPrompt now accepts an opts bag so the
-// deep-coverage-scan directive can be appended (and job_id threaded)
-// when Deep Dive mode is on. When the flag is off the prompt is
-// identical to the pre-9.17 shape.
 function buildInvestigatorSystemPrompt(triage, opts) {
   opts = opts || {};
-  const deepCoverageScan = !!opts.deepCoverageScan;
   const jobId = opts.jobId || null;
 
-  const base = `${INVESTIGATOR_PROMPT_BASE_GET()}
+  return `${INVESTIGATOR_PROMPT_BASE_GET()}
 
 ## DATABASE SCHEMA
 ${SCHEMA_DOC_GET()}
@@ -327,19 +289,10 @@ investigation_depth: ${triage.investigation_depth || 'focused'}
 response_posture:    ${triage.response_posture || 'interpretive'}
 response_length:     ${triage.response_length || 'medium'}
 job_id:              ${jobId || '(unknown)'}
-deep_coverage_scan:  ${deepCoverageScan ? 'true' : 'false'}
 
 investigator_brief:
 ${triage.investigator_brief || '(none)'}
 `;
-
-  if (!deepCoverageScan) return base;
-
-  // Append the coverage-scan directive with the concrete job_id
-  // substituted so the investigator can paste the call verbatim.
-  const directive = INVESTIGATOR_COVERAGE_SCAN_DIRECTIVE_GET()
-    .replace(/<JOB_ID>/g, jobId || '');
-  return `${base}\n\n${directive}\n`;
 }
 
 async function runInvestigation(triage, prompt, extraContext, opts) {
@@ -347,38 +300,10 @@ async function runInvestigation(triage, prompt, extraContext, opts) {
     return { scratch: [], queryCount: 0 };
   }
   opts = opts || {};
-  const deepCoverageScan = !!opts.deepCoverageScan;
   const jobId = opts.jobId || null;
 
-  // v9.17: In Deep Dive mode, embed the question and persist the vector on
-  // the job row before the investigator starts. The coverage-scan directive
-  // tells the investigator to call bjl_coverage_scan_by_job(job_id), which
-  // reads that embedding. If embed fails, log and continue without the
-  // directive so the investigation still runs (graceful degradation).
-  let effectiveDeep = deepCoverageScan;
-  if (deepCoverageScan && jobId) {
-    const questionText = triage.the_question || prompt || '';
-    const vecLit = await embedQuery(questionText);
-    if (vecLit) {
-      const { error: embErr } = await supabase
-        .from('bjl_query_jobs')
-        .update({ query_embedding: vecLit })
-        .eq('job_id', jobId);
-      if (embErr) {
-        console.error('[bjl-query-background] persist query_embedding failed:', embErr.message);
-        effectiveDeep = false;
-      }
-    } else {
-      console.warn('[bjl-query-background] embed returned null; skipping coverage scan directive');
-      effectiveDeep = false;
-    }
-  }
-
   const maxTurns = DEPTH_TO_MAX_TURNS[triage.investigation_depth] || DEPTH_TO_MAX_TURNS.focused;
-  const systemPrompt = buildInvestigatorSystemPrompt(triage, {
-    deepCoverageScan: effectiveDeep,
-    jobId,
-  });
+  const systemPrompt = buildInvestigatorSystemPrompt(triage, { jobId });
 
   // Build user message: the question, plus any extra context blocks.
   const parts = [];
@@ -899,7 +824,7 @@ exports.handler = async (event) => {
   // Load the job
   const { data: job, error: loadErr } = await supabase
     .from('bjl_query_jobs')
-    .select('job_id, query_type, prompt, status, extra_context, prior_conversation_context, deep_coverage_scan')
+    .select('job_id, query_type, prompt, status, extra_context, prior_conversation_context')
     .eq('job_id', jobId)
     .single();
 
@@ -986,7 +911,6 @@ exports.handler = async (event) => {
 
     // Stage 2: Investigation
     const { scratch, queryCount, hit_max_turns } = await runInvestigation(triage, job.prompt, job.extra_context, {
-      deepCoverageScan: !!job.deep_coverage_scan,
       jobId: job.job_id,
     });
 

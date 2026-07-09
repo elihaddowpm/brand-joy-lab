@@ -21,7 +21,6 @@ const ROOT = path.resolve(__dirname, '..');
 const SOURCES = {
   triage: 'prompts/triage_prompt.md',
   investigator: 'prompts/investigator_prompt_v3.md',
-  investigatorCoverageScanDirective: 'prompts/investigator_coverage_scan_directive.md',
   synthesizer: 'prompts/synthesizer_prompt_v3.md',
   joyMapSynthesis: 'prompts/joy_map_synthesis.md',
   joyMapAudienceParse: 'prompts/joy_map_audience_parse.md',

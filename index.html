@@ -1245,9 +1245,6 @@ const investigateQuery = async ({
   // returns it in the enqueue response). Threaded into onDone via the
   // info payload so the caller can stash it in URL + localStorage.
   sessionId = null,
-  // v9.17: Deep Dive toggle. When true the background investigator
-  // runs the mandatory 16-topic coverage scan as its first query.
-  deepCoverageScan = false,
   onStatus = () => {}, onNote = () => {}, onChunk = () => {}, onDone = () => {},
   onError = () => {}, onDebug = () => {}, onEvidence = () => {},
   endpoint = "/api/bjl-query", signal,
@@ -1270,7 +1267,6 @@ const investigateQuery = async ({
         strategistContext: strategistContextStr,
         prior_conversation_context: priorConversationContext,
         session_id: sessionId,
-        deep_coverage_scan: !!deepCoverageScan,
       }),
       signal,
     }));
@@ -2254,19 +2250,6 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
   const [recentSessions, setRecentSessions] = useState([]);
   const [recentMenuOpen, setRecentMenuOpen] = useState(false);
 
-  // v9.17: Deep Dive toggle. When on, the investigator runs the mandatory
-  // 16-topic coverage scan before deep-diving. Persisted per operator via
-  // localStorage; preserved across New Session (it's a preference, not a
-  // session artifact).
-  const [deepDive, setDeepDive] = useState(() => {
-    try { return window.localStorage.getItem("bjl_deep_dive_v1") === "1"; }
-    catch (_) { return false; }
-  });
-  useEffect(() => {
-    try { window.localStorage.setItem("bjl_deep_dive_v1", deepDive ? "1" : "0"); }
-    catch (_) { /* localStorage unavailable */ }
-  }, [deepDive]);
-
   // v7 mount-time restore. Priority: URL > localStorage > server most-
   // recent > fresh. The localStorage path repaints instantly so the
   // strategist doesn't see a flash of empty state; the server fetch
@@ -2445,8 +2428,6 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
       // v7: pass the active session id (null on a fresh conversation;
       // the server creates a session and returns its id in onDone.session_id).
       sessionId: sessionId,
-      // v9.17: operator's Deep Dive preference for this turn.
-      deepCoverageScan: deepDive,
       onStatus: ({ phase }) => setPhase(phase),
       onNote: ({ note }) => setNotes(prev => [...prev, note]),
       onEvidence: ({ rows }) => setEvidenceRows(rows || []),
@@ -2610,59 +2591,6 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
         <div className="commission">
           <div className="commission-head">
             <div className="step">Ask the Lab</div>
-            {/* v9.17.1: Deep dive switch lives here (replacing the old
-                NO TAG / current-tag readout). Toggling flips whether the
-                investigator runs the mandatory 16-topic coverage scan. */}
-            <div
-              role="switch"
-              aria-checked={deepDive}
-              tabIndex={0}
-              onClick={() => { if (!running) setDeepDive(v => !v); }}
-              onKeyDown={(e) => {
-                if (running) return;
-                if (e.key === " " || e.key === "Enter") { e.preventDefault(); setDeepDive(v => !v); }
-              }}
-              title="Deep dive: scan all 16 topic centers before investigating. Slower, catches cross-category patterns."
-              className="mono"
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 10,
-                cursor: running ? "not-allowed" : "pointer",
-                opacity: running ? 0.55 : 1,
-                color: "var(--grey-2)",
-                userSelect: "none",
-              }}
-            >
-              <span>DEEP DIVE</span>
-              <span
-                aria-hidden="true"
-                style={{
-                  display: "inline-block",
-                  position: "relative",
-                  width: 32,
-                  height: 18,
-                  borderRadius: 9,
-                  background: deepDive ? "var(--accent, #FF6B00)" : "var(--grey-1, #d8d8d8)",
-                  transition: "background 120ms",
-                }}
-              >
-                <span
-                  style={{
-                    position: "absolute",
-                    top: 2,
-                    left: 2,
-                    width: 14,
-                    height: 14,
-                    borderRadius: "50%",
-                    background: "#fff",
-                    transform: deepDive ? "translateX(14px)" : "translateX(0)",
-                    transition: "transform 120ms",
-                    boxShadow: "0 1px 2px rgba(0,0,0,0.15)",
-                  }}
-                />
-              </span>
-            </div>
           </div>
           <div className="intent-chips" style={{display: "flex", flexWrap: "wrap", gap: 8, padding: "12px 16px"}}>
             {INTEL_CHIPS.map(c => (
@@ -2762,19 +2690,6 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
                     </div>
                   )}
                 </div>
-                {/* v9.17 — Deep Dive toggle. Off by default. When on the
-                    investigator runs a mandatory 16-topic coverage scan
-                    before deep-diving. Slower but catches cross-category
-                    patterns that a narrow question would miss. */}
-                <button
-                  type="button"
-                  className={"btn ghost" + (deepDive ? " is-active" : "")}
-                  title="Deep dive: scan all 16 topic centers before investigating. Slower, catches cross-category patterns. Off by default."
-                  onClick={() => setDeepDive(v => !v)}
-                  disabled={running}
-                  aria-pressed={deepDive}
-                  style={deepDive ? { background: "var(--accent, #FF6B00)", color: "#fff" } : undefined}
-                >Deep dive{deepDive ? " · on" : ""}</button>
                 <button className="icon-btn" title="New conversation" onClick={clearConversation} disabled={running || turns.length === 0}><Icon name="regen" /></button>
                 <button className="icon-btn" title="Copy full conversation" onClick={copyConversation} disabled={turns.length === 0}><Icon name="copy" /></button>
                 <button className="btn ghost" onClick={exportPdf} disabled={turns.length === 0}><Icon name="download" size={12} /> Export PDF</button>
