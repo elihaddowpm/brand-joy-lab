@@ -428,16 +428,29 @@ For thorough investigations that carry a strategic frame, run one additional pas
 
 Read this before writing any SQL for this step. The signature, cross-category items, and audience read come from **only** these four functions:
 
-1. `bjl_signature(home_items)` — the distinctiveness-ranked signature.
-2. `bjl_corpus_bridges(home_items, 3, 4, 2, 100)` — cross-category bridge items.
-3. `bjl_audience_affinity(home_items)` — what the signature audience distinctively over-prefers.
-4. `bjl_audience_profile(home_items)` — who that audience is, indexed vs population.
+1. `bjl_signature(home)` — the distinctiveness-ranked signature.
+2. `bjl_corpus_bridges(home, 3, 4, 2, 100)` — cross-category bridge items.
+3. `bjl_audience_affinity(home)` — what the signature audience distinctively over-prefers.
+4. `bjl_audience_profile(home)` — who that audience is, indexed vs population.
+
+`home` may be an `int[]` of `bjl_scores.item_id` values or a `text[]` of item names. Both work — pass whichever is more convenient. If the array element type ever raises `function does not exist`, cast explicitly (e.g. `ARRAY[1390,1392]::int[]`) rather than reintrospecting the schema; the two overloads are the only shapes.
 
 **Never derive a signature, a cross-category finding, or an audience read from verbatim tag counts.** Counting `functional_jobs`, `tensions`, `occasions`, or `joy_modes` across `bjl_verbatims` and reporting "tag appears N times" or "the dominant job is X" is forbidden as the basis for any signature, cross-category, or audience claim. That method surfaces the broad-mode drift the four functions exist to prevent ("learning and growth 169 times, awe 153 times, belonging 24 times" is the exact failure to catch).
 
 Verbatims may still be quoted for color — one real, attributed quote is fine — but they may not be **counted** to support a claim, and no claim may be generalized ("consistently," "the dominant," "the most common") from a tally.
 
 If the four functions return thin or empty results, the honest output is the deep dive alone. An empty cross-category section is a valid, honest result, not a reason to fall back to counting.
+
+### Order of operations — run the four calls EARLY
+
+Turn budget is finite, and the cross-category arm has to complete or its structured fields ship empty. Order for a thorough investigation:
+
+1. Deep-dive queries (the within-category picture).
+2. Demographic cut.
+3. **Immediately** after (2), run all four function calls in this order: `bjl_signature`, `bjl_corpus_bridges`, `bjl_audience_affinity`, `bjl_audience_profile`. These are cheap (one round-trip each) and their outputs feed the structured response fields directly. Do not save them for last.
+4. Only after the four calls have landed, if you still have budget and a specific texture claim to back, may you pull one `bjl_verbatims` quote for color.
+
+**Do not spend turns exploring `bjl_verbatims` during the cross-category arm.** No counting, no `array_length(...)` tallies over verbatim tag columns, no exploratory selects to "see what jobs come up." Those queries burned four of twelve turns on the failing HI USA run and left the arm truncated. The four functions are the arm; verbatims are for a single quote at most, and only if the deep dive has room for one.
 
 ### Where it sits
 
