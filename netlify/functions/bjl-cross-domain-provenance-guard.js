@@ -9,7 +9,7 @@
  * Called from bjl-query-background.js after runSynthesis and before persisting
  * the answer. Pure function: no I/O, no side effects, easy to test.
  *
- * Six surfaces are guarded on the same code path:
+ * Seven surfaces are guarded on the same code path:
  *
  * A) signature. Allowlist: rows from bjl_signature.
  *    Check: every {tag, framework} appears in a returned row.
@@ -26,10 +26,18 @@
  * D) audience_profile. Allowlist: rows from bjl_audience_profile. Checks:
  *      1. Row provenance: {dimension, cut_value} matches a returned row.
  *      2. Index provenance: index (integer) matches.
- * E) cross_domain_threads (legacy nested shape). Kept for back-compat with
+ * E) audience_selects. Allowlist: rows from bjl_audience_selects_v2, keyed
+ *    on the (question, item_name) pair because option text recurs across
+ *    batteries and only the question label disambiguates. Checks:
+ *      1. Question is present on the claim (mandatory).
+ *      2. (question, item_name) pair matches a returned row.
+ *      3. aud_pct (1 decimal), gen_pct (1 decimal), aud_exposed (exact).
+ *    norm_lift is not verified; it is a selection score the prompt-side
+ *    rule keeps out of prose.
+ * F) cross_domain_threads (legacy nested shape). Kept for back-compat with
  *    already-deployed surfaces. Same checks as (B) but on the older
  *    {thread_tag, members[]} shape.
- * F) cards. Allowlist: any row from any SELECT in scratch, tagged with the
+ * G) cards. Allowlist: any row from any SELECT in scratch, tagged with the
  *    source table inferred from the query's FROM clause. Checks:
  *      1. Item provenance: stat_item.item_name matches a returned row.
  *      2. Number provenance: joy_index (1 decimal), n (exact).
@@ -267,6 +275,31 @@ function buildAudienceAffinityAllowlist(scratch) {
   return byItem;
 }
 
+/**
+ * Select-all allowlist. Rows are keyed on the (question, item_name) pair,
+ * not item_name alone, because option text ("food", "connection") recurs
+ * across batteries and only the question label disambiguates the meaning.
+ */
+function buildAudienceSelectsAllowlist(scratch) {
+  const rows = collectRowsFromFn(scratch, ['bjl_audience_selects_v2']);
+  const byKey = new Map();
+  for (const r of rows) {
+    const item = normalizeItemName(r.item_name);
+    const question = typeof r.question === 'string' ? r.question.trim() : null;
+    if (!item || !question) continue;
+    const key = `${normalizeItemName(question)}|${item}`;
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push({
+      question,
+      aud_pct:     r.aud_pct == null ? null : Math.round(Number(r.aud_pct) * 10) / 10,
+      gen_pct:     r.gen_pct == null ? null : Math.round(Number(r.gen_pct) * 10) / 10,
+      norm_lift:   r.norm_lift == null ? null : Math.round(Number(r.norm_lift) * 100) / 100,
+      aud_exposed: toInt(r.aud_exposed),
+    });
+  }
+  return byKey;
+}
+
 function buildAudienceProfileAllowlist(scratch) {
   const rows = collectRowsFromFn(scratch, ['bjl_audience_profile_v2', 'bjl_audience_profile']);
   const byKey = new Map();
@@ -322,6 +355,7 @@ function runProvenanceGuard({
   cross_domain_items,
   audience_affinity,
   audience_profile,
+  audience_selects,
   home_topic,
   scratch,
 }) {
@@ -334,6 +368,8 @@ function runProvenanceGuard({
       .map(f => Object.assign({ surface: 'audience_affinity' }, f)),
     ...runAudienceProfileGuard({ audience_profile, scratch })
       .map(f => Object.assign({ surface: 'audience_profile' }, f)),
+    ...runAudienceSelectsGuard({ audience_selects, scratch })
+      .map(f => Object.assign({ surface: 'audience_selects' }, f)),
     ...runThreadsGuard({ threads, home_topic, scratch })
       .map(f => Object.assign({ surface: 'threads' }, f)),
     ...runCardsGuard({ cards, scratch })
@@ -691,6 +727,91 @@ function runAudienceProfileGuard({ audience_profile, scratch }) {
 }
 
 /**
+ * Audience_selects guard. Every claim must appear in a bjl_audience_selects_v2
+ * row keyed on the (question, item_name) pair. Numeric checks: aud_pct and
+ * gen_pct to one decimal, aud_exposed exact. norm_lift is a selection score
+ * and is not verified against the claim (the model should not be citing it
+ * as a finding; the prompt-side rule catches that).
+ */
+function runAudienceSelectsGuard({ audience_selects, scratch }) {
+  const failures = [];
+  const list = Array.isArray(audience_selects) ? audience_selects : [];
+  if (list.length === 0) return failures;
+
+  const byKey = buildAudienceSelectsAllowlist(scratch);
+  if (byKey.size === 0) {
+    failures.push({
+      claim: null,
+      reason: 'no_audience_selects_rows_in_scratch',
+      detail: 'audience_selects was populated but bjl_audience_selects_v2 did not run this turn',
+    });
+    return failures;
+  }
+
+  for (const m of list) {
+    if (!m || typeof m !== 'object' || typeof m.item_name !== 'string') {
+      failures.push({ claim: m, reason: 'malformed_audience_selects_entry' });
+      continue;
+    }
+    // The question label is mandatory because option text recurs across
+    // batteries. A claim without one cannot be located unambiguously in
+    // the allowlist.
+    if (typeof m.question !== 'string' || !m.question.trim()) {
+      failures.push({
+        claim: { item_name: m.item_name },
+        reason: 'audience_selects_missing_question',
+      });
+      continue;
+    }
+    const key = `${normalizeItemName(m.question)}|${normalizeItemName(m.item_name)}`;
+    const bucket = byKey.get(key);
+    if (!bucket || bucket.length === 0) {
+      failures.push({
+        claim: { question: m.question, item_name: m.item_name },
+        reason: 'audience_selects_row_not_in_allowlist',
+      });
+      continue;
+    }
+    const claimAud = m.aud_pct == null ? null : Math.round(Number(m.aud_pct) * 10) / 10;
+    const claimGen = m.gen_pct == null ? null : Math.round(Number(m.gen_pct) * 10) / 10;
+    const claimExposed = toInt(m.aud_exposed);
+    let matched = false;
+    let closest = { aud: null, gen: null, exposed: null };
+    for (const row of bucket) {
+      const audOk     = claimAud === null || row.aud_pct === null || claimAud === row.aud_pct;
+      const genOk     = claimGen === null || row.gen_pct === null || claimGen === row.gen_pct;
+      const exposedOk = claimExposed === null || row.aud_exposed === null || claimExposed === row.aud_exposed;
+      if (audOk && genOk && exposedOk) { matched = true; break; }
+      if (!audOk     && closest.aud     === null) closest.aud     = { claim: claimAud, allowlist: row.aud_pct };
+      if (!genOk     && closest.gen     === null) closest.gen     = { claim: claimGen, allowlist: row.gen_pct };
+      if (!exposedOk && closest.exposed === null) closest.exposed = { claim: claimExposed, allowlist: row.aud_exposed };
+    }
+    if (!matched) {
+      if (closest.aud) {
+        failures.push({
+          claim: { question: m.question, item_name: m.item_name, aud_pct: m.aud_pct },
+          reason: 'audience_selects_aud_pct_mismatch',
+          detail: closest.aud,
+        });
+      } else if (closest.gen) {
+        failures.push({
+          claim: { question: m.question, item_name: m.item_name, gen_pct: m.gen_pct },
+          reason: 'audience_selects_gen_pct_mismatch',
+          detail: closest.gen,
+        });
+      } else if (closest.exposed) {
+        failures.push({
+          claim: { question: m.question, item_name: m.item_name, aud_exposed: m.aud_exposed },
+          reason: 'audience_selects_aud_exposed_mismatch',
+          detail: closest.exposed,
+        });
+      }
+    }
+  }
+  return failures;
+}
+
+/**
  * Card provenance guard. Applies the four checks (item, joy_index, n, source)
  * to each stat_item, and enforces the single-source rule (all stat_items in
  * one card share a source). Returns a bare failures array; the unified
@@ -893,6 +1014,7 @@ module.exports = {
   buildSignatureAllowlist,
   buildAudienceAffinityAllowlist,
   buildAudienceProfileAllowlist,
+  buildAudienceSelectsAllowlist,
   // Exported for tests + reuse.
   normalizeItemName,
   roundJoy,
