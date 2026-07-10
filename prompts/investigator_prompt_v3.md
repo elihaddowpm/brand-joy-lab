@@ -517,19 +517,18 @@ Two weaker tiers sit below it. Tag prevalence and its lift over a corpus baselin
 
 The hard rule under all three: **no finding rests on a verbatim.** The scores carry the argument; verbatims dress it.
 
-**4d. Select-all layer — the audience through checkbox behavior (optional fifth call).**
+**4d. Select-all layer — what boxes this audience checks (optional fifth call).**
 
 ```sql
-SELECT question, item_name, aud_pct, gen_pct, norm_lift, aud_exposed
+SELECT question, item_name, aud_pct, gen_pct, lift, norm_lift, aud_exposed
 FROM bjl_audience_selects_v2(ARRAY[ <home set> ]);
 ```
 
-`bjl_audience_selects_v2` reads the same audience defined by the numeric affinity function, but through the multi-option "select all that apply" batteries. Home topic is excluded. `norm_lift` is propensity-normalized via per-respondent box weighting, so it corrects for respondents who check many boxes on average — the ordering is honest, not just a heavy-checker artifact.
+The same audience, read through the checkbox batteries (the largest question type in the corpus, including the fandom waves). For multi-option questions outside the home topic, it compares the share of the audience selecting each option against the general share. `norm_lift` is the ranking key: it weights each checked box by one over the number of boxes that person checked, so selection propensity cancels within respondent. Report the raw shares (`aud_pct` vs `gen_pct`); never headline `norm_lift` as a statistic.
 
-Two things about the output shape:
+**Scale note.** Honest normalization keeps these lifts modest, and this audience checks fewer boxes than average, so a `norm_lift` of 1.2 is a real signal, and rows near 1.05 are noise floor. `lift` (unnormalized) is returned alongside for reference; it is also a selection score, not output.
 
-- The row is keyed on `(question, item_name)`, not `item_name` alone. Checkbox option text recurs across batteries — "food" appears under both "what makes you joyful" and "what stresses you out." Always carry the question label so the meaning is unambiguous.
-- `aud_pct` and `gen_pct` are the client-facing numbers ("58% of this audience checks X, versus 41% of the population"). `norm_lift` ranks the results and never appears as a finding; it is a selection score like `distinctiveness` and `rel_lift`.
+The row is keyed on `(question, item_name)`. Checkbox option text recurs across batteries — "food" appears under both "what makes you joyful" and "what stresses you out." Always pair the option with its question so the meaning is unambiguous.
 
 Use this layer when checkbox behavior would add something the numeric affinity read cannot see — a behavior pattern, a categorical preference, an activation trigger. Skip it when the four core calls already tell the story.
 
@@ -539,7 +538,7 @@ Do not dump all three streams. Choose. Lead with the deep dive, then add the two
 
 - **Convergence leads.** A theme that shows up in both the item lens and the audience lens is the most defensible finding. For hostels, discovery appears in both: the item lens bridges the discovery tension to wine and retail discovery, and the audience lens shows the same people distinctively over-prefer finding a great deal, finding a new item, trying something new on the menu. That convergence is the lead: the hostel traveler's discovery instinct runs through how they shop, eat, and take in culture, not just how they travel.
 - **Surprise plus usefulness.** Favor a high `rel_lift` or a non-obvious bridge that a brand could act on, over an obvious or generic one. Novelty alone is not enough; it has to be usable.
-- **Scores select, they do not speak.** `distinctiveness`, `rel_lift`, and `norm_lift` are internal selection scores. They decide what to surface; they never appear in the output as the finding. Once a tag, item, or option is chosen, state the finding as either the verbatim from 4c or a plain share/score comparison a reader already understands. "Awe, distinctiveness 3.01" becomes the pyramids quote. "Finding a great deal, rel_lift +4.4" becomes "this audience rates it 65, against the corpus norm of 60." A select-all option with `norm_lift 1.42` becomes "58% of this audience checks it, versus 41% of the population." A card whose headline or body leans on a selection number has not finished the job.
+- **Scores select, they do not speak.** `distinctiveness`, `rel_lift`, `norm_lift`, and the unnormalized `lift` are internal selection scores. They decide what to surface; they never appear in the output as the finding. Once a tag, item, or option is chosen, state the finding as either the verbatim from 4c or a plain share/score comparison a reader already understands. "Awe, distinctiveness 3.01" becomes the pyramids quote. "Finding a great deal, rel_lift +4.4" becomes "this audience rates it 65, against the corpus norm of 60." A select-all option with `norm_lift 1.42` becomes "58% of this audience checks it, versus 41% of the population." A card whose headline or body leans on a selection number has not finished the job.
 - **Use the profile as framing, and let it complicate the obvious read.** The relative-preference audience can look very different from the absolute-joy audience. For hostels the affinity audience is demographically flat with a slight Boomer and Gen Z tilt, which complicates the "target the young" conclusion: the young extract the most joy in absolute terms, but distinctive preference for this kind of travel is not age-bound. Both are true; say which lens each claim comes from.
 - **Thin or generic means stand down.** If the item lens leads on a low-distinctiveness tag (roughly under 1.0) and the audience lens is thin, the cross-category story is weak. Say so and let the deep dive carry the answer, rather than forcing a limp cluster forward.
 
@@ -550,7 +549,7 @@ The functions do the mechanical work — signature, keying, dedup, centering, ra
 - Every figure traces to a returned row. Score is interval: differences in points, never percentages or multiples. Always carry `n`.
 - **Every score carries its construct.** The corpus measures several emotional registers on the same -3..+5 scale: joy, trust, likelihood, familiarity, perception (with more coming as text scales are normalized). The v2 functions label every row with its `construct`. Any construct may lead a finding, with equal weight, but the number is always named as what its question asked: a trust score is a trust finding, never relabeled as joy. Constructs never share an axis or a baseline; centering is within construct.
 - Never infer an audience's feeling about an item they did not answer. The affinity function only returns items with enough audience respondents; if an item is absent, the home audience and that item share too few people to read, so make no claim about it.
-- `rel_lift` is a centered, relative measure. It is a selection score, not output. Never print it; translate it to the raw `audience_score` against the corpus norm (`general_score`), and pair it with a verbatim where one exists. The same holds for `distinctiveness` (it ranks the signature) and `norm_lift` (it ranks the select-all options): both rank internally, both are never quoted as findings. Select-all findings translate `norm_lift` to `aud_pct` vs `gen_pct`.
+- `rel_lift` is a centered, relative measure. It is a selection score, not output. Never print it; translate it to the raw `audience_score` against the corpus norm (`general_score`), and pair it with a verbatim where one exists. The same holds for `distinctiveness` (it ranks the signature) and for `norm_lift` and its unnormalized companion `lift` (both rank the select-all options): all rank internally, none are quoted as findings. Select-all findings translate `norm_lift` to `aud_pct` vs `gen_pct`.
 - Same source for any comparison. Never pair a `bjl_scores` figure with a `bjl_demo_cut` figure; take demographic cuts from one consistent source.
 
 ### Worked example: hostels
@@ -569,7 +568,7 @@ A post-generation guard verifies every cross-domain claim in the synthesizer's s
 
 1. Keep the `bjl_corpus_bridges_v2` query result intact in scratch. Do not truncate, filter, or rewrite the rows before the synthesizer sees them. All columns (`tag_rank`, `tag`, `distinctiveness`, `member_rank`, `item_name`, `primary_topic`, `construct`, `score`, `n`) need to survive to the scratch handoff so the guard can build its allowlist from them.
 2. Keep the `bjl_audience_affinity_v2` and `bjl_audience_profile_v2` query results intact for the same reason. When the synthesizer cites an audience finding in a publishable card, the guard checks `item_name`, `construct`, the score value, and `aud_n` against a returned row and confirms the card's `source` matches the function it came from.
-3. If you ran `bjl_audience_selects_v2`, keep its result intact too. All columns (`question`, `item_name`, `aud_pct`, `gen_pct`, `norm_lift`, `aud_exposed`) need to reach the synthesizer. The guard keys select-all rows on the `(question, item_name)` pair, so both must survive.
+3. If you ran `bjl_audience_selects_v2`, keep its result intact too. All columns (`question`, `item_name`, `aud_pct`, `gen_pct`, `lift`, `norm_lift`, `aud_exposed`) need to reach the synthesizer. The guard keys select-all rows on the `(question, item_name)` pair, so both must survive.
 4. State the home topic. In your scratch narration, name the `primary_topic` of the within-category anchor items you passed as the home set (usually one string, occasionally two for a compound frame). The synthesizer will echo this as `home_topic` in its output, and the guard uses it to enforce that no cross-domain item-lens member is drawn from the home category.
 
 ## Scratch format
