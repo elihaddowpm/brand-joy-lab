@@ -9,7 +9,7 @@
  * Called from bjl-query-background.js after runSynthesis and before persisting
  * the answer. Pure function: no I/O, no side effects, easy to test.
  *
- * Seven surfaces are guarded on the same code path:
+ * Eight surfaces are guarded on the same code path:
  *
  * A) signature. Allowlist: rows from bjl_signature.
  *    Check: every {tag, framework} appears in a returned row.
@@ -34,10 +34,18 @@
  *      3. aud_pct (1 decimal), gen_pct (1 decimal), aud_exposed (exact).
  *    Neither lift nor norm_lift is verified; both are selection scores
  *    the prompt-side rule keeps out of prose.
- * F) cross_domain_threads (legacy nested shape). Kept for back-compat with
+ * F) audience_distributions. Allowlist: rows from bjl_audience_distributions_v2,
+ *    keyed on the (item_name, set_name, answer) triple because one item can
+ *    carry two scales from different waves and shares are only comparable
+ *    within a set. Checks:
+ *      1. set_name and answer are present on the claim (mandatory).
+ *      2. (item_name, set_name, answer) triple matches a returned row.
+ *      3. aud_pct (1 decimal), gen_pct (1 decimal), gap_pts (1 decimal),
+ *         aud_n (exact).
+ * G) cross_domain_threads (legacy nested shape). Kept for back-compat with
  *    already-deployed surfaces. Same checks as (B) but on the older
  *    {thread_tag, members[]} shape.
- * G) cards. Allowlist: any row from any SELECT in scratch, tagged with the
+ * H) cards. Allowlist: any row from any SELECT in scratch, tagged with the
  *    source table inferred from the query's FROM clause. Checks:
  *      1. Item provenance: stat_item.item_name matches a returned row.
  *      2. Number provenance: joy_index (1 decimal), n (exact).
@@ -305,6 +313,33 @@ function buildAudienceSelectsAllowlist(scratch) {
   return byKey;
 }
 
+/**
+ * Distribution allowlist. Rows keyed on (item_name, set_name, answer) because
+ * one item can carry two scales from different waves and shares are only
+ * comparable within a set. All three parts of the key are mandatory on the
+ * claim; the guard rejects entries that omit any.
+ */
+function buildAudienceDistributionsAllowlist(scratch) {
+  const rows = collectRowsFromFn(scratch, ['bjl_audience_distributions_v2']);
+  const byKey = new Map();
+  for (const r of rows) {
+    const item = normalizeItemName(r.item_name);
+    const set  = typeof r.set_name === 'string' ? r.set_name.trim() : null;
+    const answer = typeof r.answer === 'string' ? r.answer.trim() : null;
+    if (!item || !set || !answer) continue;
+    const key = `${item}|${normalizeItemName(set)}|${normalizeItemName(answer)}`;
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push({
+      construct: typeof r.construct === 'string' ? r.construct : null,
+      aud_pct:   r.aud_pct == null ? null : Math.round(Number(r.aud_pct) * 10) / 10,
+      gen_pct:   r.gen_pct == null ? null : Math.round(Number(r.gen_pct) * 10) / 10,
+      gap_pts:   r.gap_pts == null ? null : Math.round(Number(r.gap_pts) * 10) / 10,
+      aud_n:     toInt(r.aud_n),
+    });
+  }
+  return byKey;
+}
+
 function buildAudienceProfileAllowlist(scratch) {
   const rows = collectRowsFromFn(scratch, ['bjl_audience_profile_v2', 'bjl_audience_profile']);
   const byKey = new Map();
@@ -361,6 +396,7 @@ function runProvenanceGuard({
   audience_affinity,
   audience_profile,
   audience_selects,
+  audience_distributions,
   home_topic,
   scratch,
 }) {
@@ -375,6 +411,8 @@ function runProvenanceGuard({
       .map(f => Object.assign({ surface: 'audience_profile' }, f)),
     ...runAudienceSelectsGuard({ audience_selects, scratch })
       .map(f => Object.assign({ surface: 'audience_selects' }, f)),
+    ...runAudienceDistributionsGuard({ audience_distributions, scratch })
+      .map(f => Object.assign({ surface: 'audience_distributions' }, f)),
     ...runThreadsGuard({ threads, home_topic, scratch })
       .map(f => Object.assign({ surface: 'threads' }, f)),
     ...runCardsGuard({ cards, scratch })
@@ -817,6 +855,90 @@ function runAudienceSelectsGuard({ audience_selects, scratch }) {
 }
 
 /**
+ * Audience_distributions guard. Every claim must appear in a
+ * bjl_audience_distributions_v2 row keyed on the (item_name, set_name,
+ * answer) triple. All three parts of the key are mandatory on the claim
+ * — set_name in particular, because one item can carry two scales from
+ * different waves and shares are only comparable within a set. Numeric
+ * checks: aud_pct / gen_pct / gap_pts to one decimal, aud_n exact.
+ */
+function runAudienceDistributionsGuard({ audience_distributions, scratch }) {
+  const failures = [];
+  const list = Array.isArray(audience_distributions) ? audience_distributions : [];
+  if (list.length === 0) return failures;
+
+  const byKey = buildAudienceDistributionsAllowlist(scratch);
+  if (byKey.size === 0) {
+    failures.push({
+      claim: null,
+      reason: 'no_audience_distributions_rows_in_scratch',
+      detail: 'audience_distributions was populated but bjl_audience_distributions_v2 did not run this turn',
+    });
+    return failures;
+  }
+
+  for (const m of list) {
+    if (!m || typeof m !== 'object' || typeof m.item_name !== 'string') {
+      failures.push({ claim: m, reason: 'malformed_audience_distributions_entry' });
+      continue;
+    }
+    if (typeof m.set_name !== 'string' || !m.set_name.trim()) {
+      failures.push({
+        claim: { item_name: m.item_name, answer: m.answer },
+        reason: 'audience_distributions_missing_set_name',
+      });
+      continue;
+    }
+    if (typeof m.answer !== 'string' || !m.answer.trim()) {
+      failures.push({
+        claim: { item_name: m.item_name, set_name: m.set_name },
+        reason: 'audience_distributions_missing_answer',
+      });
+      continue;
+    }
+    const key = `${normalizeItemName(m.item_name)}|${normalizeItemName(m.set_name)}|${normalizeItemName(m.answer)}`;
+    const bucket = byKey.get(key);
+    if (!bucket || bucket.length === 0) {
+      failures.push({
+        claim: { item_name: m.item_name, set_name: m.set_name, answer: m.answer },
+        reason: 'audience_distributions_row_not_in_allowlist',
+      });
+      continue;
+    }
+    const claimAud  = m.aud_pct == null ? null : Math.round(Number(m.aud_pct) * 10) / 10;
+    const claimGen  = m.gen_pct == null ? null : Math.round(Number(m.gen_pct) * 10) / 10;
+    const claimGap  = m.gap_pts == null ? null : Math.round(Number(m.gap_pts) * 10) / 10;
+    const claimN    = toInt(m.aud_n);
+    let matched = false;
+    let closest = { aud: null, gen: null, gap: null, n: null };
+    for (const row of bucket) {
+      const audOk = claimAud === null || row.aud_pct === null || claimAud === row.aud_pct;
+      const genOk = claimGen === null || row.gen_pct === null || claimGen === row.gen_pct;
+      const gapOk = claimGap === null || row.gap_pts === null || claimGap === row.gap_pts;
+      const nOk   = claimN === null || row.aud_n === null || claimN === row.aud_n;
+      if (audOk && genOk && gapOk && nOk) { matched = true; break; }
+      if (!audOk && closest.aud === null) closest.aud = { claim: claimAud, allowlist: row.aud_pct };
+      if (!genOk && closest.gen === null) closest.gen = { claim: claimGen, allowlist: row.gen_pct };
+      if (!gapOk && closest.gap === null) closest.gap = { claim: claimGap, allowlist: row.gap_pts };
+      if (!nOk   && closest.n   === null) closest.n   = { claim: claimN, allowlist: row.aud_n };
+    }
+    if (!matched) {
+      const baseClaim = { item_name: m.item_name, set_name: m.set_name, answer: m.answer };
+      if (closest.aud) {
+        failures.push({ claim: Object.assign({}, baseClaim, { aud_pct: m.aud_pct }), reason: 'audience_distributions_aud_pct_mismatch', detail: closest.aud });
+      } else if (closest.gen) {
+        failures.push({ claim: Object.assign({}, baseClaim, { gen_pct: m.gen_pct }), reason: 'audience_distributions_gen_pct_mismatch', detail: closest.gen });
+      } else if (closest.gap) {
+        failures.push({ claim: Object.assign({}, baseClaim, { gap_pts: m.gap_pts }), reason: 'audience_distributions_gap_pts_mismatch', detail: closest.gap });
+      } else if (closest.n) {
+        failures.push({ claim: Object.assign({}, baseClaim, { aud_n: m.aud_n }), reason: 'audience_distributions_aud_n_mismatch', detail: closest.n });
+      }
+    }
+  }
+  return failures;
+}
+
+/**
  * Card provenance guard. Applies the four checks (item, joy_index, n, source)
  * to each stat_item, and enforces the single-source rule (all stat_items in
  * one card share a source). Returns a bare failures array; the unified
@@ -1020,6 +1142,7 @@ module.exports = {
   buildAudienceAffinityAllowlist,
   buildAudienceProfileAllowlist,
   buildAudienceSelectsAllowlist,
+  buildAudienceDistributionsAllowlist,
   // Exported for tests + reuse.
   normalizeItemName,
   roundJoy,
