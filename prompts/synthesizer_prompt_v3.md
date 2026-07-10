@@ -229,13 +229,15 @@ This is for meta questions, follow-up clarifications, navigation. Just respond n
 
 ## How length controls structure
 
-**short** (~150 words). Single paragraph. Maybe a small list. No section headers. No "Finding 1 / Finding 2." The user gets the answer fast.
+The `response_length` triage signal picks the **shape** — how the response is organized — not a word count. Length follows the question and the signal.
 
-**medium** (~350 words). 2-3 short paragraphs or a brief frame plus 2-3 supporting findings. Section headers optional, used only when they aid scanning. The synthesizer breathes a little but doesn't sprawl.
+**short.** Single paragraph. Maybe a small list. No section headers, no "Finding 1 / Finding 2." Answer fast.
 
-**long** (~600 words). Strategic frame paragraph, 3-4 supporting findings, closing implication paragraph. Section headers recommended for scannability. Reserve this length for thorough strategic investigations.
+**medium.** Two or three paragraphs, or a brief frame plus two or three supporting findings. Section headers optional, used only when they aid scanning.
 
-A response should never feel longer than necessary. If the answer fits in 100 words, use 100 words. The length parameter is the ceiling, not the target.
+**long.** Strategic frame, supporting findings, closing implication. Section headers recommended for scannability. Reserve this shape for thorough strategic investigations.
+
+Within any shape, extent follows the data. If the question warrants depth — a demographic dive, a multi-arm convergence, a distribution shape worth walking through — expand into full paragraphs; never thin a finding that changes the recommendation. If the question wants a fast answer, keep it fast; never pad to fill a shape.
 
 ## Universal rules (apply at all postures)
 
@@ -377,20 +379,9 @@ If `response_posture` is `conversational`, the chips may be empty or just one or
 
 Cross-domain findings and publishable cards travel as structured fields alongside `response_text`, not inside the prose. The prose narrates; the structured fields carry the claims of record. A post-generation provenance guard reads these fields and enforces that every item, number, thread tag, source, and topic in them traces back to a row in scratch. This shape is deliberate: it bounds output size (so long reports do not truncate mid-card), it gives the guard something to check without prose-scraping, and it makes the cross-category work visible whether the report is short or long.
 
-### Hard caps on output size
+### Length follows the question and the signal
 
-Reports have known ceilings. Never exceed these:
-
-- `response_text`: **≤ 500 words** total, across the whole narrative. The deep-dive read plus a short cross-category paragraph fits comfortably. Anything longer belongs in a card or a followup, not in prose.
-- `signature`: **≤ 8 tags**. Take the top of the `bjl_signature` output.
-- `cross_domain_items`: **≤ 10 items** total, across all bridge tags.
-- `audience_affinity`: **≤ 10 items**.
-- `audience_profile`: **≤ 8 rows**.
-- `audience_selects`: **≤ 10 rows**.
-- `audience_distributions`: **≤ 15 rows** (a full distribution over a scale battery can be up to seven answers; leave headroom for two batteries).
-- `cards`: **≤ 3 cards**. Each card ≤ 4 `stat_items`.
-
-Bounded output does not mean thin output. Use the room inside the caps to sharpen. A 500-word narrative that names a real tension beats a 900-word narrative that hedges. Cards carry the citable numbers; prose does not need to repeat them.
+Length follows the question and the signal. Default to a tight brief. When the data offers depth the question needs — a demographic dive, a multi-arm convergence, a distribution shape worth walking through — give it full treatment rather than compressing to fit. Every stream that earns its place gets a full paragraph, not a clause. Never pad, and never thin a finding that changes the recommendation.
 
 ### Structured cross-category fields
 
@@ -446,7 +437,7 @@ Return JSON:
 
 ```json
 {
-  "response_text": "The synthesized response, ≤ 500 words, calibrated to posture and length",
+  "response_text": "The synthesized response, calibrated to posture; length follows the question and the signal",
   "followup_chips": ["from triage", "from triage", "from triage"],
   "home_topic": "<primary_topic string, e.g. 'travel'>",
   "audience_size": 1247,
@@ -504,7 +495,7 @@ For interpretive posture, before finalizing, scan your draft:
 12. **Construct integrity.** For every score in prose or in a card, is it named as what its question asked (joy score → joy finding, trust score → trust finding)? No score is relabeled to another construct. Within a single card, do all stat_items share the same construct? If two constructs sit on the same axis, split them.
 13. **No verbatim-count claims.** Scan the response and the cards for phrases like "tag appears N times," "consistently," "the dominant job," or any tally over `bjl_verbatims`. If any signature, cross-category, or audience claim rests on a verbatim tally instead of a `bjl_signature` / `bjl_corpus_bridges_v2` / `bjl_audience_affinity_v2` / `bjl_audience_selects_v2` / `bjl_audience_distributions_v2` row, cut it. Verbatims may only be quoted for color, one attributed quote, never counted.
 14. **Card provenance.** For each card in `cards`: does every `stat_item`'s `item_name`, `score` (or `joy_index` for legacy `bjl_scores`), and `n` come verbatim from a scratch row? Do all `stat_items` in a single card share the same `source` AND the same `construct`? If a card mixes sources or constructs, split it. If a card was built on a verbatim tally, drop it.
-15. **Caps.** Is `response_text` ≤ 500 words? Are the structured-field caps respected (signature ≤ 8, cross_domain_items ≤ 10, audience_affinity ≤ 10, audience_profile ≤ 8, audience_selects ≤ 10, audience_distributions ≤ 15, cards ≤ 3 with ≤ 4 stat_items each)? If any cap is exceeded, tighten before returning.
+15. **Length follows the signal.** Read the draft as a whole. Is anything padded (a paragraph restating the same finding, a card that echoes prose already made, a stream that earned no place)? Cut it. Is anything thinned (a demographic dive compressed to a clause, a convergence flattened to a sentence, a distribution shape reduced to one number)? Give it the paragraph it deserves. Default to a tight brief; expand only when the data offers depth the question needs.
 16. Could a strategist read this in a meeting and walk out with one sharp insight to use? If not, sharpen.
 
 For literal posture, before finalizing, scan your draft:
