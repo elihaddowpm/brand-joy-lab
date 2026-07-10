@@ -426,13 +426,14 @@ For thorough investigations that carry a strategic frame, run one additional pas
 
 ### Hard rule — NO verbatim-count derivation
 
-Read this before writing any SQL for this step. The signature, cross-category items, audience read, and select-all layer come from **only** these five functions:
+Read this before writing any SQL for this step. The signature, cross-category items, audience read, select-all layer, and distribution layer come from **only** these six functions:
 
 1. `bjl_signature(home)` — the distinctiveness-ranked signature.
 2. `bjl_corpus_bridges_v2(home, 3, 4, 2, 100)` — cross-category bridge items across all numeric constructs.
 3. `bjl_audience_affinity_v2(home)` — what the signature audience distinctively over-prefers on the numeric scales, centered within construct.
 4. `bjl_audience_profile_v2(home)` — who that audience is, indexed vs population.
 5. `bjl_audience_selects_v2(home)` — the same audience read through the multi-option checkbox batteries, home topic excluded, propensity-normalized via per-respondent box weighting. Optional; run it when the sharper picture from checkbox behavior would add to the numeric read.
+6. `bjl_audience_distributions_v2(home)` — the same audience read through every text-answered battery (agreement, emotional state, importance, behavior, drivers, fandom, trajectory scales, categorical picks). Optional; run it when the shape of how this audience answers a battery is itself the story.
 
 `home` may be an `int[]` of `bjl_scores.item_id` values or a `text[]` of item names. Both work — pass whichever is more convenient. If the array element type ever raises `function does not exist`, cast explicitly (e.g. `ARRAY[1390,1392]::int[]`) rather than reintrospecting the schema; the two overloads are the only shapes.
 
@@ -450,7 +451,8 @@ Turn budget is finite, and the cross-category arm has to complete or its structu
 2. Demographic cut.
 3. **Immediately** after (2), run the four core function calls in this order: `bjl_signature`, `bjl_corpus_bridges_v2`, `bjl_audience_affinity_v2`, `bjl_audience_profile_v2`. These are cheap (one round-trip each) and their outputs feed the structured response fields directly. Do not save them for last.
 4. **Optionally** run `bjl_audience_selects_v2` as a fifth call when the select-all layer would sharpen the audience read. Its output feeds a separate `audience_selects` structured field.
-4. Only after the four calls have landed, if you still have budget and a specific texture claim to back, may you pull one `bjl_verbatims` quote for color.
+5. **Optionally** run `bjl_audience_distributions_v2` as a sixth call when the distribution shape of how this audience answers a text-scale battery is itself the story. Its output feeds `audience_distributions`.
+6. Only after the four core calls have landed, if you still have budget and a specific texture claim to back, may you pull one `bjl_verbatims` quote for color.
 
 **Do not spend turns exploring `bjl_verbatims` during the cross-category arm.** No counting, no `array_length(...)` tallies over verbatim tag columns, no exploratory selects to "see what jobs come up." Those queries burned four of twelve turns on the failing HI USA run and left the arm truncated. The four functions are the arm; verbatims are for a single quote at most, and only if the deep dive has room for one.
 
@@ -532,6 +534,15 @@ The row is keyed on `(question, item_name)`. Checkbox option text recurs across 
 
 Use this layer when checkbox behavior would add something the numeric affinity read cannot see — a behavior pattern, a categorical preference, an activation trigger. Skip it when the four core calls already tell the story.
 
+**4e. Distribution layer — how this audience answers everything else (optional sixth call).**
+
+```sql
+SELECT construct, item_name, set_name, answer, aud_pct, gen_pct, gap_pts, aud_n
+FROM bjl_audience_distributions_v2(ARRAY[ <home set> ]);
+```
+
+The same audience, read through every text-answered battery in the corpus: agreement, emotional state, importance, behavior, drivers, fandom, trajectory scales, and categorical picks all flow through identically. Rendering is report-native and stays that way: "41% of this audience feels somewhat joyful, against 27% of everyone." State shares as percentages and comparisons as percentage-point gaps; never relative percentages, never an average of ranks, never an invented index. `rank` orders answers within a battery for display only. `set_name` matters because one item can carry two scales from different waves (an intensity battery in one, a change battery in another); shares are only comparable within a set. Distribution shape is itself a finding: an audience can over-index on the middle of a feeling scale and under-index on both extremes, which no single number would show.
+
 ### Step 5 — Synthesize the most useful and surprising
 
 Do not dump all three streams. Choose. Lead with the deep dive, then add the two or three sharpest cross-category findings from everything on the table.
@@ -569,7 +580,8 @@ A post-generation guard verifies every cross-domain claim in the synthesizer's s
 1. Keep the `bjl_corpus_bridges_v2` query result intact in scratch. Do not truncate, filter, or rewrite the rows before the synthesizer sees them. All columns (`tag_rank`, `tag`, `distinctiveness`, `member_rank`, `item_name`, `primary_topic`, `construct`, `score`, `n`) need to survive to the scratch handoff so the guard can build its allowlist from them.
 2. Keep the `bjl_audience_affinity_v2` and `bjl_audience_profile_v2` query results intact for the same reason. When the synthesizer cites an audience finding in a publishable card, the guard checks `item_name`, `construct`, the score value, and `aud_n` against a returned row and confirms the card's `source` matches the function it came from.
 3. If you ran `bjl_audience_selects_v2`, keep its result intact too. All columns (`question`, `item_name`, `aud_pct`, `gen_pct`, `lift`, `norm_lift`, `aud_exposed`) need to reach the synthesizer. The guard keys select-all rows on the `(question, item_name)` pair, so both must survive.
-4. State the home topic. In your scratch narration, name the `primary_topic` of the within-category anchor items you passed as the home set (usually one string, occasionally two for a compound frame). The synthesizer will echo this as `home_topic` in its output, and the guard uses it to enforce that no cross-domain item-lens member is drawn from the home category.
+4. If you ran `bjl_audience_distributions_v2`, keep its result intact too. All columns (`construct`, `item_name`, `set_name`, `answer`, `aud_pct`, `gen_pct`, `gap_pts`, `aud_n`) need to reach the synthesizer. The guard keys distribution rows on the `(item_name, set_name, answer)` triple because one item can carry two scales from different waves.
+5. State the home topic. In your scratch narration, name the `primary_topic` of the within-category anchor items you passed as the home set (usually one string, occasionally two for a compound frame). The synthesizer will echo this as `home_topic` in its output, and the guard uses it to enforce that no cross-domain item-lens member is drawn from the home category.
 
 ## Scratch format
 
