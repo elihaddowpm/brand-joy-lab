@@ -96,14 +96,15 @@ function buildAllowlist(scratch) {
     const q = typeof entry.query === 'string' ? entry.query.toLowerCase() : '';
     // Also handle entries that carry the sql on a different key (some flows
     // use `sql` or `query_text`); the invariant is a string containing the
-    // function name. bjl_corpus_bridges is the current item-lens source;
-    // bjl_corpus_threads and bjl_corpus_pivot are recognized for back-compat
-    // during the transition.
+    // function name. bjl_corpus_bridges_v2 is the current item-lens source;
+    // bjl_corpus_bridges (v1), bjl_corpus_threads, and bjl_corpus_pivot are
+    // recognized for back-compat.
     const alt = [entry.sql, entry.query_text]
       .filter(v => typeof v === 'string')
       .map(v => v.toLowerCase());
     const hay = [q, ...alt].join(' ');
     if (
+      !hay.includes('bjl_corpus_bridges_v2(') &&
       !hay.includes('bjl_corpus_bridges(') &&
       !hay.includes('bjl_corpus_threads(') &&
       !hay.includes('bjl_corpus_pivot(')
@@ -116,16 +117,20 @@ function buildAllowlist(scratch) {
       if (!row || typeof row !== 'object') continue;
       const key = normalizeItemName(row.item_name);
       if (!key) continue;
+      // v2 rows use `score`; v1/legacy rows use `joy_index`. Accept either
+      // as the primary numeric value so a member match works across
+      // versions.
+      const scoreValue = row.score != null ? row.score : row.joy_index;
       const bucket = itemIndex.get(key) || [];
       bucket.push({
-        joy_index: roundJoy(row.joy_index),
-        n: toInt(row.n),
+        joy_index:     roundJoy(scoreValue),
+        n:             toInt(row.n),
         primary_topic: typeof row.primary_topic === 'string' ? row.primary_topic : null,
+        construct:     typeof row.construct === 'string' ? row.construct : null,
       });
       itemIndex.set(key, bucket);
-      // bjl_corpus_bridges emits `tag`; bjl_corpus_threads emitted
-      // `thread_tag`. Accept either so the guard covers both transitional
-      // shapes.
+      // bjl_corpus_bridges(_v2) emits `tag`; bjl_corpus_threads emitted
+      // `thread_tag`. Accept either.
       if (typeof row.thread_tag === 'string' && row.thread_tag) {
         threadTags.add(row.thread_tag);
       } else if (typeof row.tag === 'string' && row.tag) {
@@ -177,11 +182,19 @@ function buildCardAllowlist(scratch) {
       if (!row || typeof row !== 'object') continue;
       const key = normalizeItemName(row.item_name);
       if (!key) continue;
+      // v2 rows use `score`; v1/legacy rows use `joy_index`. Also accept
+      // `audience_score` when the row comes from bjl_audience_affinity(_v2),
+      // so a card citing an affinity finding matches.
+      const scoreValue = row.score != null ? row.score
+                       : row.joy_index != null ? row.joy_index
+                       : row.audience_score;
+      const nValue = row.n != null ? row.n : row.aud_n;
       const bucket = itemIndex.get(key) || [];
       bucket.push({
-        joy_index: roundJoy(row.joy_index),
-        n: toInt(row.n),
+        joy_index: roundJoy(scoreValue),
+        n:         toInt(nValue),
         source,
+        construct: typeof row.construct === 'string' ? row.construct : null,
       });
       itemIndex.set(key, bucket);
     }
@@ -231,25 +244,31 @@ function buildSignatureAllowlist(scratch) {
 }
 
 function buildAudienceAffinityAllowlist(scratch) {
-  const rows = collectRowsFromFn(scratch, ['bjl_audience_affinity']);
+  // Accept both v2 and v1 function names, plus their score-column aliases:
+  //   v2 uses audience_score / general_score
+  //   v1 uses audience_ji / general_ji
+  const rows = collectRowsFromFn(scratch, ['bjl_audience_affinity_v2', 'bjl_audience_affinity']);
   const byItem = new Map();
   for (const r of rows) {
     const key = normalizeItemName(r.item_name);
     if (!key) continue;
+    const audScore = r.audience_score != null ? r.audience_score : r.audience_ji;
+    const genScore = r.general_score  != null ? r.general_score  : r.general_ji;
     if (!byItem.has(key)) byItem.set(key, []);
     byItem.get(key).push({
-      rel_lift:    r.rel_lift == null ? null : Math.round(Number(r.rel_lift) * 10) / 10,
-      audience_ji: r.audience_ji == null ? null : Math.round(Number(r.audience_ji) * 10) / 10,
-      general_ji:  r.general_ji == null ? null : Math.round(Number(r.general_ji) * 10) / 10,
-      aud_n:       toInt(r.aud_n),
+      rel_lift:      r.rel_lift == null ? null : Math.round(Number(r.rel_lift) * 10) / 10,
+      audience_ji:   audScore == null ? null : Math.round(Number(audScore) * 10) / 10,
+      general_ji:    genScore == null ? null : Math.round(Number(genScore) * 10) / 10,
+      aud_n:         toInt(r.aud_n),
       primary_topic: typeof r.primary_topic === 'string' ? r.primary_topic : null,
+      construct:     typeof r.construct === 'string' ? r.construct : null,
     });
   }
   return byItem;
 }
 
 function buildAudienceProfileAllowlist(scratch) {
-  const rows = collectRowsFromFn(scratch, ['bjl_audience_profile']);
+  const rows = collectRowsFromFn(scratch, ['bjl_audience_profile_v2', 'bjl_audience_profile']);
   const byKey = new Map();
   for (const r of rows) {
     const dim = typeof r.dimension === 'string' ? r.dimension : null;
@@ -534,7 +553,9 @@ function runCrossDomainItemsGuard({ cross_domain_items, home_topic, scratch }) {
       failures.push({ claim: { item_name: m.item_name, tag: m.tag }, reason: 'cross_domain_item_not_in_allowlist' });
       continue;
     }
-    const claimJoy   = roundJoy(m.joy_index);
+    // v2 claims use `score`; v1 claims use `joy_index`. Accept either.
+    const claimScoreRaw = m.score != null ? m.score : m.joy_index;
+    const claimJoy   = roundJoy(claimScoreRaw);
     const claimN     = toInt(m.n);
     const claimTopic = typeof m.primary_topic === 'string' ? m.primary_topic.toLowerCase() : null;
     let matched = false;
@@ -549,7 +570,7 @@ function runCrossDomainItemsGuard({ cross_domain_items, home_topic, scratch }) {
       if (!topicOk && closest.topic === null) closest.topic = { claim: claimTopic, allowlist: row.primary_topic };
     }
     if (!matched) {
-      if (closest.joy)   failures.push({ claim: { item_name: m.item_name, joy_index: m.joy_index }, reason: 'cross_domain_joy_mismatch', detail: closest.joy });
+      if (closest.joy)   failures.push({ claim: { item_name: m.item_name, score: claimScoreRaw }, reason: 'cross_domain_score_mismatch', detail: closest.joy });
       else if (closest.n)   failures.push({ claim: { item_name: m.item_name, n: m.n }, reason: 'cross_domain_n_mismatch', detail: closest.n });
       else if (closest.topic) failures.push({ claim: { item_name: m.item_name, primary_topic: m.primary_topic }, reason: 'cross_domain_topic_mismatch', detail: closest.topic });
     }
@@ -595,8 +616,10 @@ function runAudienceAffinityGuard({ audience_affinity, scratch }) {
       failures.push({ claim: { item_name: m.item_name }, reason: 'audience_item_not_in_allowlist' });
       continue;
     }
+    // v2 claims use `audience_score`; v1 claims use `audience_ji`. Accept either.
+    const claimScoreRaw = m.audience_score != null ? m.audience_score : m.audience_ji;
     const claimLift  = m.rel_lift == null ? null : Math.round(Number(m.rel_lift) * 10) / 10;
-    const claimJI    = m.audience_ji == null ? null : Math.round(Number(m.audience_ji) * 10) / 10;
+    const claimJI    = claimScoreRaw == null ? null : Math.round(Number(claimScoreRaw) * 10) / 10;
     const claimN     = toInt(m.aud_n);
     let matched = false;
     let closest = { lift: null, ji: null, n: null };
@@ -611,7 +634,7 @@ function runAudienceAffinityGuard({ audience_affinity, scratch }) {
     }
     if (!matched) {
       if (closest.lift) failures.push({ claim: { item_name: m.item_name, rel_lift: m.rel_lift }, reason: 'audience_rel_lift_mismatch', detail: closest.lift });
-      else if (closest.ji) failures.push({ claim: { item_name: m.item_name, audience_ji: m.audience_ji }, reason: 'audience_ji_mismatch', detail: closest.ji });
+      else if (closest.ji) failures.push({ claim: { item_name: m.item_name, audience_score: claimScoreRaw }, reason: 'audience_score_mismatch', detail: closest.ji });
       else if (closest.n) failures.push({ claim: { item_name: m.item_name, aud_n: m.aud_n }, reason: 'audience_n_mismatch', detail: closest.n });
     }
   }
@@ -705,7 +728,8 @@ function runCardsGuard({ cards, scratch }) {
       continue;
     }
 
-    const seenSources = new Set();
+    const seenSources    = new Set();
+    const seenConstructs = new Set();
     for (let si = 0; si < statItems.length; si++) {
       const s = statItems[si];
       if (!s || typeof s !== 'object' || typeof s.item_name !== 'string') {
@@ -726,29 +750,37 @@ function runCardsGuard({ cards, scratch }) {
         continue;
       }
 
-      const claimJoy    = roundJoy(s.joy_index);
-      const claimN      = toInt(s.n);
-      const claimSource = typeof s.source === 'string' ? s.source.toLowerCase() : null;
-      if (claimSource) seenSources.add(claimSource);
+      // Accept `score` (v2 shape) as an alias for `joy_index` (v1/legacy).
+      const claimScoreRaw  = s.score != null ? s.score : s.joy_index;
+      const claimJoy       = roundJoy(claimScoreRaw);
+      const claimN         = toInt(s.n);
+      const claimSource    = typeof s.source === 'string' ? s.source.toLowerCase() : null;
+      const claimConstruct = typeof s.construct === 'string' ? s.construct.toLowerCase() : null;
+      if (claimSource)    seenSources.add(claimSource);
+      if (claimConstruct) seenConstructs.add(claimConstruct);
 
-      // A row matches when joy_index, n, and source all agree. Multiple
-      // rows can exist per item; accept the stat item if any row agrees.
+      // A row matches when the score, n, and source all agree. Construct
+      // must match too when both sides provide one (bjl_scores rows have
+      // no construct; v2 rows do). Multiple rows can exist per item;
+      // accept the stat item if any row agrees.
       let matched = false;
-      let closest = { joy: null, n: null, source: null };
+      let closest = { joy: null, n: null, source: null, construct: null };
       for (const row of bucket) {
-        const joyOk    = claimJoy === null || row.joy_index === null || claimJoy === row.joy_index;
-        const nOk      = claimN === null || row.n === null || claimN === row.n;
-        const sourceOk = claimSource === null || claimSource === row.source;
-        if (joyOk && nOk && sourceOk) { matched = true; break; }
-        if (!joyOk    && closest.joy    === null) closest.joy    = { claim: claimJoy, allowlist: row.joy_index };
-        if (!nOk      && closest.n      === null) closest.n      = { claim: claimN, allowlist: row.n };
-        if (!sourceOk && closest.source === null) closest.source = { claim: claimSource, allowlist: row.source };
+        const joyOk       = claimJoy === null || row.joy_index === null || claimJoy === row.joy_index;
+        const nOk         = claimN === null || row.n === null || claimN === row.n;
+        const sourceOk    = claimSource === null || claimSource === row.source;
+        const constructOk = claimConstruct === null || row.construct === null || claimConstruct === (row.construct || '').toLowerCase();
+        if (joyOk && nOk && sourceOk && constructOk) { matched = true; break; }
+        if (!joyOk       && closest.joy       === null) closest.joy       = { claim: claimJoy, allowlist: row.joy_index };
+        if (!nOk         && closest.n         === null) closest.n         = { claim: claimN, allowlist: row.n };
+        if (!sourceOk    && closest.source    === null) closest.source    = { claim: claimSource, allowlist: row.source };
+        if (!constructOk && closest.construct === null) closest.construct = { claim: claimConstruct, allowlist: row.construct };
       }
       if (!matched) {
         if (closest.joy) {
           failures.push({
-            claim: { card_index: ci, item_name: s.item_name, joy_index: s.joy_index },
-            reason: 'card_joy_index_mismatch',
+            claim: { card_index: ci, item_name: s.item_name, score: claimScoreRaw },
+            reason: 'card_score_mismatch',
             detail: closest.joy,
           });
         } else if (closest.n) {
@@ -763,6 +795,12 @@ function runCardsGuard({ cards, scratch }) {
             reason: 'card_source_mismatch',
             detail: closest.source,
           });
+        } else if (closest.construct) {
+          failures.push({
+            claim: { card_index: ci, item_name: s.item_name, construct: s.construct },
+            reason: 'card_construct_mismatch',
+            detail: closest.construct,
+          });
         }
       }
     }
@@ -772,6 +810,16 @@ function runCardsGuard({ cards, scratch }) {
       failures.push({
         claim: { card_index: ci, headline: card.headline, sources: Array.from(seenSources) },
         reason: 'card_mixed_sources',
+      });
+    }
+
+    // Same-construct rule: all stat_items in one card share a construct
+    // when they carry one. Cards mixing constructs put two centered
+    // scales on the same axis, which is meaningless.
+    if (seenConstructs.size > 1) {
+      failures.push({
+        claim: { card_index: ci, headline: card.headline, constructs: Array.from(seenConstructs) },
+        reason: 'card_mixed_constructs',
       });
     }
   }
@@ -797,6 +845,7 @@ function buildRetryAllowlistDigest(scratch) {
       .map(v => v.toLowerCase());
     const hay = [q, ...alt].join(' ');
     if (
+      !hay.includes('bjl_corpus_bridges_v2(') &&
       !hay.includes('bjl_corpus_bridges(') &&
       !hay.includes('bjl_corpus_threads(') &&
       !hay.includes('bjl_corpus_pivot(')
@@ -806,8 +855,8 @@ function buildRetryAllowlistDigest(scratch) {
                : Array.isArray(entry.rows)   ? entry.rows
                : [];
     for (const row of rows) {
-      // bjl_corpus_bridges: row.tag + row.tag_rank
-      // bjl_corpus_threads: row.thread_tag + row.thread_rank
+      // bjl_corpus_bridges(_v2): row.tag + row.tag_rank
+      // bjl_corpus_threads:     row.thread_tag + row.thread_rank
       const tag = typeof row.thread_tag === 'string' ? row.thread_tag
                 : typeof row.tag === 'string' ? row.tag
                 : null;
@@ -820,11 +869,14 @@ function buildRetryAllowlistDigest(scratch) {
           members: [],
         });
       }
+      // v2 rows use `score`; v1/legacy use `joy_index`. Prefer `score`.
+      const scoreValue = row.score != null ? row.score : row.joy_index;
       byThread.get(tag).members.push({
-        item_name: row.item_name,
-        joy_index: roundJoy(row.joy_index),
-        n: toInt(row.n),
+        item_name:     row.item_name,
+        joy_index:     roundJoy(scoreValue),
+        n:             toInt(row.n),
         primary_topic: row.primary_topic || null,
+        construct:     typeof row.construct === 'string' ? row.construct : null,
       });
     }
   }

@@ -429,9 +429,9 @@ For thorough investigations that carry a strategic frame, run one additional pas
 Read this before writing any SQL for this step. The signature, cross-category items, and audience read come from **only** these four functions:
 
 1. `bjl_signature(home)` — the distinctiveness-ranked signature.
-2. `bjl_corpus_bridges(home, 3, 4, 2, 100)` — cross-category bridge items.
-3. `bjl_audience_affinity(home)` — what the signature audience distinctively over-prefers.
-4. `bjl_audience_profile(home)` — who that audience is, indexed vs population.
+2. `bjl_corpus_bridges_v2(home, 3, 4, 2, 100)` — cross-category bridge items across all numeric constructs.
+3. `bjl_audience_affinity_v2(home)` — what the signature audience distinctively over-prefers, centered within construct.
+4. `bjl_audience_profile_v2(home)` — who that audience is, indexed vs population.
 
 `home` may be an `int[]` of `bjl_scores.item_id` values or a `text[]` of item names. Both work — pass whichever is more convenient. If the array element type ever raises `function does not exist`, cast explicitly (e.g. `ARRAY[1390,1392]::int[]`) rather than reintrospecting the schema; the two overloads are the only shapes.
 
@@ -447,7 +447,7 @@ Turn budget is finite, and the cross-category arm has to complete or its structu
 
 1. Deep-dive queries (the within-category picture).
 2. Demographic cut.
-3. **Immediately** after (2), run all four function calls in this order: `bjl_signature`, `bjl_corpus_bridges`, `bjl_audience_affinity`, `bjl_audience_profile`. These are cheap (one round-trip each) and their outputs feed the structured response fields directly. Do not save them for last.
+3. **Immediately** after (2), run all four function calls in this order: `bjl_signature`, `bjl_corpus_bridges_v2`, `bjl_audience_affinity_v2`, `bjl_audience_profile_v2`. These are cheap (one round-trip each) and their outputs feed the structured response fields directly. Do not save them for last.
 4. Only after the four calls have landed, if you still have budget and a specific texture claim to back, may you pull one `bjl_verbatims` quote for color.
 
 **Do not spend turns exploring `bjl_verbatims` during the cross-category arm.** No counting, no `array_length(...)` tallies over verbatim tag columns, no exploratory selects to "see what jobs come up." Those queries burned four of twelve turns on the failing HI USA run and left the arm truncated. The four functions are the arm; verbatims are for a single quote at most, and only if the deep dive has room for one.
@@ -479,26 +479,41 @@ Run both. They answer different questions and their agreement is the strongest s
 **4a. Item lens — what else carries this signature.**
 
 ```sql
-SELECT tag_rank, tag, distinctiveness, member_rank, item_name, primary_topic, joy_index, n
-FROM bjl_corpus_bridges(ARRAY[ <home set> ], 3, 4, 2, 100)
+SELECT tag_rank, tag, distinctiveness, member_rank, item_name, primary_topic, construct, score, n
+FROM bjl_corpus_bridges_v2(ARRAY[ <home set> ], 3, 4, 2, 100)
 ORDER BY tag_rank, member_rank;
 ```
 
-For each of the top distinctive tags, this returns that tag's strongest cross-category bridges, deduped to one row per item, spread across topics, home category excluded. It returns only `joy_scale` items, so brand-attribute and purchase-likelihood items (which carry a joy_index that means something other than joy from an experience) are kept out. This answers "what other experiences feel like this."
+For each of the top distinctive tags, this returns that tag's strongest cross-category bridges, deduped to one row per item, spread across topics, home category excluded. Candidates span the full numeric construct family (joy, trust, likelihood, familiarity, perception), and every row carries its `construct`. Read the score as what its construct says it is: a trust bridge means the same feeling shows up in what people trust, a likelihood bridge in what they would choose. This answers "what other experiences carry this feeling," in whichever emotional register the corpus measured it.
 
 **4b. Audience lens — what the people who live in this signature also love, and who they are.**
 
 ```sql
-SELECT primary_topic, item_name, rel_lift, audience_ji, general_ji, aud_n, audience_size
-FROM bjl_audience_affinity(ARRAY[ <home set> ]);
+SELECT construct, primary_topic, item_name, rel_lift, audience_score, general_score, aud_n, audience_size
+FROM bjl_audience_affinity_v2(ARRAY[ <home set> ]);
 
 SELECT dimension, cut_value, pct_of_audience, pct_of_population, index
-FROM bjl_audience_profile(ARRAY[ <home set> ]) ORDER BY dimension, index DESC;
+FROM bjl_audience_profile_v2(ARRAY[ <home set> ]) ORDER BY dimension, index DESC;
 ```
 
-`bjl_audience_affinity` defines the audience as the people who prefer the home experience relative to their own baseline, then returns the other experiences that audience distinctively over-prefers. `rel_lift` is centered: it already strips out the fact that some people rate everything high, so it measures real preference, not mood. This answers "what else do these people actually love," which can surface things the item lens cannot, including experiences the general population rates low.
+`bjl_audience_affinity_v2` defines the audience as the people who prefer the home experience relative to their own baseline, then returns the other experiences that audience distinctively over-prefers, in any construct the fielding allows. `rel_lift` is centered within construct: a person's trust responses are compared to their own trust baseline, joy to joy, so it measures real preference, not mood and not scale differences. This answers "what else do these people actually love," which can surface things the item lens cannot, including experiences the general population rates low. An item's absence means the audience and that item share too few respondents to read; that silence is correct, not a gap to fill.
 
-`bjl_audience_profile` gives the high-level read on who that audience is — generation and income indexed against the population (100 = at parity).
+`bjl_audience_profile_v2` gives the high-level read on who that audience is — generation and income indexed against the population (100 = at parity).
+
+**4c. Verbatim layer — supporting texture, never the measurement.**
+
+Verbatims corroborate the structured findings and give them voice. They do not carry quantitative weight on their own. Use them in three tiers, in this order of trust.
+
+```sql
+SELECT framework, tag, aud_hits, lift
+FROM bjl_audience_tag_profile_v2(ARRAY[ <home set> ]);
+```
+
+`bjl_audience_tag_profile_v2` takes the same audience as the affinity function and reports which emotional tags that audience over-indexes on in their own verbatims. Lift washes out the broad modes that dominate raw counts, so this is a real directional read: for hostels the audience leans into `learn_grow`, `aesthetic`, `immerse_in_story`, and `awe`, which echoes the structured signature in people's unprompted language. Name the theme; never headline the lift figure as a statistic. There is a built-in confound: the audience is defined by a topic preference, so part of any lift reflects their verbatim topic mix rather than a pure dispositional difference. This makes it support, not proof.
+
+Two weaker tiers sit below it. Tag prevalence and its lift over a corpus baseline (for example, `awe` running about three times its base rate in travel verbatims) is directional corroboration of the signature, not a strong quantitative claim, and never a headline number. Single quotes, from `bjl_signature_verbatims`, are color only: at most one real, attributed quote to bring a finding to life, never evidence on their own and never counted.
+
+The hard rule under all three: **no finding rests on a verbatim.** The scores carry the argument; verbatims dress it.
 
 ### Step 5 — Synthesize the most useful and surprising
 
@@ -506,6 +521,7 @@ Do not dump all three streams. Choose. Lead with the deep dive, then add the two
 
 - **Convergence leads.** A theme that shows up in both the item lens and the audience lens is the most defensible finding. For hostels, discovery appears in both: the item lens bridges the discovery tension to wine and retail discovery, and the audience lens shows the same people distinctively over-prefer finding a great deal, finding a new item, trying something new on the menu. That convergence is the lead: the hostel traveler's discovery instinct runs through how they shop, eat, and take in culture, not just how they travel.
 - **Surprise plus usefulness.** Favor a high `rel_lift` or a non-obvious bridge that a brand could act on, over an obvious or generic one. Novelty alone is not enough; it has to be usable.
+- **Scores select, they do not speak.** `distinctiveness` and `rel_lift` are internal selection scores. They decide what to surface; they never appear in the output as the finding. Once a tag or item is chosen, state the finding as either the verbatim from 4c or a plain score comparison a reader already understands. "Awe, distinctiveness 3.01" becomes the pyramids quote. "Finding a great deal, rel_lift +4.4" becomes "this audience rates it 65, against the corpus norm of 60." A card whose headline or body leans on a distinctiveness or rel_lift number has not finished the job.
 - **Use the profile as framing, and let it complicate the obvious read.** The relative-preference audience can look very different from the absolute-joy audience. For hostels the affinity audience is demographically flat with a slight Boomer and Gen Z tilt, which complicates the "target the young" conclusion: the young extract the most joy in absolute terms, but distinctive preference for this kind of travel is not age-bound. Both are true; say which lens each claim comes from.
 - **Thin or generic means stand down.** If the item lens leads on a low-distinctiveness tag (roughly under 1.0) and the audience lens is thin, the cross-category story is weak. Say so and let the deep dive carry the answer, rather than forcing a limp cluster forward.
 
@@ -513,19 +529,19 @@ Do not dump all three streams. Choose. Lead with the deep dive, then add the two
 
 The functions do the mechanical work — signature, keying, dedup, centering, ranking, grounding. The last mile is yours: name each finding in plain language, trim to the strongest members, drop anything that clearly does not belong, and narrate it back to the home experience.
 
-- Every figure traces to a returned row. Joy Index is interval: differences in points, never percentages or multiples. Always carry `n`.
-- `joy_scale` only for cross-category items, already enforced by the functions.
+- Every figure traces to a returned row. Score is interval: differences in points, never percentages or multiples. Always carry `n`.
+- **Every score carries its construct.** The corpus measures several emotional registers on the same -3..+5 scale: joy, trust, likelihood, familiarity, perception (with more coming as text scales are normalized). The v2 functions label every row with its `construct`. Any construct may lead a finding, with equal weight, but the number is always named as what its question asked: a trust score is a trust finding, never relabeled as joy. Constructs never share an axis or a baseline; centering is within construct.
 - Never infer an audience's feeling about an item they did not answer. The affinity function only returns items with enough audience respondents; if an item is absent, the home audience and that item share too few people to read, so make no claim about it.
-- `rel_lift` is a centered, relative measure. Describe it as "distinctively prefer," and always pair it with the raw `audience_ji` so the reader sees the absolute level too.
+- `rel_lift` is a centered, relative measure. It is a selection score, not output. Never print it; translate it to the raw `audience_score` against the corpus norm (`general_score`), and pair it with a verbatim where one exists. The same holds for `distinctiveness`: it ranks the signature, it is never quoted as a finding.
 - Same source for any comparison. Never pair a `bjl_scores` figure with a `bjl_demo_cut` figure; take demographic cuts from one consistent source.
 
 ### Worked example: hostels
 
 **Signature:** `awe`, `discovery_vs_comfort`, `create_memory`.
 
-**Item lens** (`bjl_corpus_bridges`): `awe` bridges to live music and musicians; `discovery` bridges to finding a wine at a surprising price, choosing the right piece for a space, finding a new item on a shelf; `memory` bridges to sharing a bottle and getting together.
+**Item lens** (`bjl_corpus_bridges_v2`): `awe` bridges to live music (67.4, n=377) and learning about history; `discovery` bridges to finding a wine at a surprising price (77.6), choosing the right piece for a space, finding a new item on a shelf; `memory` bridges to sharing a bottle (78.4) and getting together with friends and family. All joy-construct rows for this home set. The item lens also reaches items the audience lens cannot: psychedelics carries the `awe` tag and appears here at its honest score of −6.3, while the audience lens stays silent about it because no audience respondents answered it. Both behaviors are correct.
 
-**Audience lens** (`bjl_audience_affinity`): the audience distinctively over-prefers finding a great deal (rel_lift +17.8, raw 63.9), finding a new item (+17.2), trying something new on the dinner menu (+15.3), treating themselves at the grocery store, museums, live music. Profile: demographically flat, Boomer index 112, Gen Z 109, Millennial 93.
+**Audience lens** (`bjl_audience_affinity_v2`): the audience distinctively over-prefers listening to music via speakers (rel_lift +6.7, raw 72.7), live music (+4.8, raw 71.1), finding a great deal on a brand they love (+4.4, raw 65.1), treating themselves at the grocery store (+3.9), something new on the dinner menu (+3.2), finding a new item on a shelf (+3.1). Note the scale: within-construct centering yields honest `rel_lift`s in the single digits; treat +4 as meaningful, not as weak. Profile: demographically flat, Boomer index 109, Gen Z 102, Gen X 97, Millennial 95.
 
 **Synthesis:** the lead is the convergence — `discovery`. It is the second most distinctive tag in the signature, it bridges to wine and retail discovery on the item side, and the same people distinctively over-prefer bargain-hunting and trying new things on the audience side. The usable read: hostels compete for a discovery instinct that shows up across this audience's whole life, not a budget instinct. The profile adds the counterpoint that this instinct is not confined to the young, which complicates the standard "target Gen Z and Millennials" frame. All of this sits under a deep dive that remains the answer to the brief.
 
@@ -533,8 +549,8 @@ The functions do the mechanical work — signature, keying, dedup, centering, ra
 
 A post-generation guard verifies every cross-domain claim in the synthesizer's structured output against the rows returned by the item-lens and audience-lens functions in this turn. Three things you must do so the guard can run:
 
-1. Keep the `bjl_corpus_bridges` query result intact in scratch. Do not truncate, filter, or rewrite the rows before the synthesizer sees them. All columns (`tag_rank`, `tag`, `distinctiveness`, `member_rank`, `item_name`, `primary_topic`, `joy_index`, `n`) need to survive to the scratch handoff so the guard can build its allowlist from them.
-2. Keep the `bjl_audience_affinity` and `bjl_audience_profile` query results intact for the same reason. When the synthesizer cites an audience finding in a publishable card, the guard checks `item_name`, the metric value, and `aud_n` against a returned row and confirms the card's `source` matches the function it came from.
+1. Keep the `bjl_corpus_bridges_v2` query result intact in scratch. Do not truncate, filter, or rewrite the rows before the synthesizer sees them. All columns (`tag_rank`, `tag`, `distinctiveness`, `member_rank`, `item_name`, `primary_topic`, `construct`, `score`, `n`) need to survive to the scratch handoff so the guard can build its allowlist from them.
+2. Keep the `bjl_audience_affinity_v2` and `bjl_audience_profile_v2` query results intact for the same reason. When the synthesizer cites an audience finding in a publishable card, the guard checks `item_name`, `construct`, the score value, and `aud_n` against a returned row and confirms the card's `source` matches the function it came from.
 3. State the home topic. In your scratch narration, name the `primary_topic` of the within-category anchor items you passed as the home set (usually one string, occasionally two for a compound frame). The synthesizer will echo this as `home_topic` in its output, and the guard uses it to enforce that no cross-domain item-lens member is drawn from the home category.
 
 ## Scratch format
