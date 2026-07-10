@@ -407,17 +407,19 @@ followup_seeds:  ${JSON.stringify(triage.followup_seeds || [])}
 // by mid-object truncation that didn't trip the truncation heuristic
 // cleanly; more room reduces the frequency.
 //
-// Immediate stop-the-bleed: three recent reports (a fandom follow-up, two
-// HI USA runs) cut off mid-card at the medium ceiling. The medium cap is
-// raised with real headroom so a full response (deep-dive prose +
-// structured cross_domain_threads + structured cards) fits with room to
-// spare while the bounded output contract lands. The contract itself
-// (caps on word count, thread count, card count) is the real fix; this is
-// insurance until it takes effect.
+// 2026-07-10: length-follows-signal contract removes fixed word caps from
+// the synthesizer prompt. Structure — not the token ceiling — now governs
+// shape. To keep the ceiling from becoming the editor, medium and long
+// are raised roughly threefold (July 8 answers ran about double today's,
+// and this leaves headroom for a full demographic dive plus multi-arm
+// convergence plus a distribution shape worth walking through). Long is
+// capped at 64000, which is Sonnet 4.6's max output. Short stays
+// unchanged: email_mode uses it for a single-sentence output and the
+// smaller ceiling keeps latency low there.
 const LENGTH_TO_MAX_TOKENS = {
   short:  2000,
-  medium: 12000,
-  long:   24000
+  medium: 36000,
+  long:   64000
 };
 
 // Heuristic for distinguishing truncation from other JSON-parse failures.
@@ -821,7 +823,7 @@ async function runSynthesisWithGuard(triage, scratch, extraContext) {
     '4. Rewrite response_text so it does not name any item or number that is not present in the structured fields you kept. If you drop anything, remove any prose that leaned on it.',
     '5. home_topic must equal the primary_topic of the within-category anchors, as before.',
     '6. followup_chips remain from triage.',
-    '7. Respect the caps: response_text ≤ 500 words, ≤ 3 threads (≤ 3 members each), ≤ 3 cards (≤ 4 stat_items each), audience_selects ≤ 10.',
+    '7. Length follows the question and the signal. Default to a tight brief. When the data offers depth the question needs, give it full treatment rather than compressing to fit. Never pad, and never thin a finding that changes the recommendation.',
     '',
     'ALLOWLIST DIGEST (the only cross-domain claims you may make):',
     JSON.stringify(digest, null, 2),

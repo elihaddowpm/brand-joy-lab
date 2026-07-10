@@ -545,7 +545,7 @@ The same audience, read through every text-answered battery in the corpus: agree
 
 ### Step 5 — Synthesize the most useful and surprising
 
-Do not dump all three streams. Choose. Lead with the deep dive, then add the two or three sharpest cross-category findings from everything on the table.
+Choose what earns its place, then give each chosen stream full treatment. Choosing means dropping weak streams, never thinning strong ones. A question that touches demographics, audience, and items deserves all three at length.
 
 - **Convergence leads.** A theme that shows up in both the item lens and the audience lens is the most defensible finding. For hostels, discovery appears in both: the item lens bridges the discovery tension to wine and retail discovery, and the audience lens shows the same people distinctively over-prefer finding a great deal, finding a new item, trying something new on the menu. That convergence is the lead: the hostel traveler's discovery instinct runs through how they shop, eat, and take in culture, not just how they travel.
 - **Surprise plus usefulness.** Favor a high `rel_lift` or a non-obvious bridge that a brand could act on, over an obvious or generic one. Novelty alone is not enough; it has to be usable.
