@@ -32,8 +32,8 @@
  *      1. Question is present on the claim (mandatory).
  *      2. (question, item_name) pair matches a returned row.
  *      3. aud_pct (1 decimal), gen_pct (1 decimal), aud_exposed (exact).
- *    norm_lift is not verified; it is a selection score the prompt-side
- *    rule keeps out of prose.
+ *    Neither lift nor norm_lift is verified; both are selection scores
+ *    the prompt-side rule keeps out of prose.
  * F) cross_domain_threads (legacy nested shape). Kept for back-compat with
  *    already-deployed surfaces. Same checks as (B) but on the older
  *    {thread_tag, members[]} shape.
@@ -289,10 +289,15 @@ function buildAudienceSelectsAllowlist(scratch) {
     if (!item || !question) continue;
     const key = `${normalizeItemName(question)}|${item}`;
     if (!byKey.has(key)) byKey.set(key, []);
+    // lift and norm_lift are both selection scores; captured for diagnostic
+    // completeness but never verified against claims. The prompt-side rule
+    // keeps both out of prose. aud_pct / gen_pct / aud_exposed are what the
+    // guard actually checks.
     byKey.get(key).push({
       question,
       aud_pct:     r.aud_pct == null ? null : Math.round(Number(r.aud_pct) * 10) / 10,
       gen_pct:     r.gen_pct == null ? null : Math.round(Number(r.gen_pct) * 10) / 10,
+      lift:        r.lift == null ? null : Math.round(Number(r.lift) * 100) / 100,
       norm_lift:   r.norm_lift == null ? null : Math.round(Number(r.norm_lift) * 100) / 100,
       aud_exposed: toInt(r.aud_exposed),
     });
