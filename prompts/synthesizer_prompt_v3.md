@@ -386,6 +386,7 @@ Reports have known ceilings. Never exceed these:
 - `cross_domain_items`: **≤ 10 items** total, across all bridge tags.
 - `audience_affinity`: **≤ 10 items**.
 - `audience_profile`: **≤ 8 rows**.
+- `audience_selects`: **≤ 10 rows**.
 - `cards`: **≤ 3 cards**. Each card ≤ 4 `stat_items`.
 
 Bounded output does not mean thin output. Use the room inside the caps to sharpen. A 500-word narrative that names a real tension beats a 900-word narrative that hedges. Cards carry the citable numbers; prose does not need to repeat them.
@@ -398,6 +399,7 @@ When the investigator ran the signature-keyed cross-category pass, the four func
 - **`cross_domain_items`** — from `bjl_corpus_bridges_v2`. Each entry: `{ tag, item_name, primary_topic, construct, score, n }`. The cross-category bridges for the top distinctive tags, across the numeric construct family (joy, trust, likelihood, familiarity, perception). Every named bridge experience in prose or a card must appear here, verbatim. `construct` names what the score measures.
 - **`audience_affinity`** — from `bjl_audience_affinity_v2`. Each entry: `{ item_name, primary_topic, construct, rel_lift, audience_score, general_score, aud_n }`. What the signature audience distinctively over-prefers, centered within construct. Never print `rel_lift` in prose; translate to `audience_score` against the `general_score` (corpus norm).
 - **`audience_profile`** — from `bjl_audience_profile_v2`. Each entry: `{ dimension, cut_value, pct_of_audience, pct_of_population, index }`. Who the signature audience is, indexed vs population (100 = at parity).
+- **`audience_selects`** — from `bjl_audience_selects_v2` (optional). Each entry: `{ question, item_name, aud_pct, gen_pct, norm_lift, aud_exposed }`. The same audience read through checkbox behavior, home topic excluded, propensity-normalized. The `question` label is mandatory on every entry because option text ("food", "connection", "trying something new") recurs across batteries and only the question disambiguates the meaning. `aud_pct` and `gen_pct` are the client-facing numbers. `norm_lift` ranks the results and never prints as a finding.
 - **`audience_size`** — integer, the audience size from the affinity/profile output.
 - **`home_topic`** — the `primary_topic` of the within-category anchor items. Whenever the above fields are non-empty, `home_topic` must be set; the guard uses it to enforce that no `cross_domain_items` member is drawn from the home category.
 
@@ -405,7 +407,7 @@ All are optional. When the four functions returned thin or empty results, the ho
 
 **Every score carries its construct.** The v2 functions label each row with a `construct` (joy, trust, likelihood, familiarity, perception, …). Any construct may lead a finding, but the number is always named as what its question asked: a trust score is a trust finding, never relabeled joy. Constructs never share an axis or a baseline; centering is within construct. Never compare scores across constructs on the same axis.
 
-**Scores select, they do not speak.** `distinctiveness` and `rel_lift` are internal selection scores. They decide what to surface; they never appear in the output as the finding. Once a tag or item is chosen, state the finding as either a plain score comparison the reader already understands, or a verbatim quote. "Awe, distinctiveness 3.01" becomes "the pyramids quote." "Finding a great deal, rel_lift +4.4" becomes "this audience rates it 65, against the corpus norm of 60." A card whose headline or body leans on a distinctiveness or rel_lift number has not finished the job.
+**Scores select, they do not speak.** `distinctiveness`, `rel_lift`, and `norm_lift` are internal selection scores. They decide what to surface; they never appear in the output as the finding. Once a tag, item, or option is chosen, state the finding as either a plain score/share comparison the reader already understands, or a verbatim quote. "Awe, distinctiveness 3.01" becomes "the pyramids quote." "Finding a great deal, rel_lift +4.4" becomes "this audience rates it 65, against the corpus norm of 60." A select-all option with `norm_lift 1.42` becomes "58% of this audience checks it, versus 41% of the population." A card whose headline or body leans on a selection number has not finished the job.
 
 ### Publishable cards
 
@@ -430,6 +432,7 @@ The provenance guard runs after generation and validates:
 - Every `cross_domain_items` entry against a `bjl_corpus_bridges_v2` row (item_name, tag, construct, score, n, primary_topic), plus the home-topic exclusion rule (no item's primary_topic equals `home_topic`).
 - Every `audience_affinity` entry against a `bjl_audience_affinity_v2` row (item_name, construct, rel_lift, audience_score, aud_n).
 - Every `audience_profile` entry against a `bjl_audience_profile_v2` row (dimension, cut_value, index).
+- Every `audience_selects` entry against a `bjl_audience_selects_v2` row, keyed on the `(question, item_name)` pair, matched on `aud_pct`, `gen_pct`, and `aud_exposed`.
 - Every `cards` stat_item against a scratch row, with the single-source rule and the same-construct rule inside each card.
 
 If the guard fires, the turn regenerates once with a strict allowlist. If it fires again, the offending structured field is dropped and a `synth_warning` is logged. That is the failsafe. Do not treat it as license to be loose here.
@@ -459,6 +462,9 @@ Return JSON:
     { "dimension": "generation", "cut_value": "Gen Z",      "pct_of_audience": 21.3, "pct_of_population": 20.8, "index": 102 },
     { "dimension": "generation", "cut_value": "Millennial", "pct_of_audience": 28.0, "pct_of_population": 29.5, "index": 95 }
   ],
+  "audience_selects": [
+    { "question": "What brings you joy on vacation?", "item_name": "Trying something new", "aud_pct": 58.4, "gen_pct": 41.1, "norm_lift": 1.42, "aud_exposed": 412 }
+  ],
   "cards": [
     {
       "headline": "Hostels compete for a discovery instinct, not a budget",
@@ -486,12 +492,13 @@ For interpretive posture, before finalizing, scan your draft:
 7. **Inference vs data check.** For every claim in the response, can you point to the specific query in the investigator's scratch that supports it? If no, the claim must be either (a) qualified inline with hedging language, (b) moved to a labeled inference block (*Worth testing* / *Strategic implications*), or (c) cut. Do not present unsupported inferences in the same authoritative register as data findings. Named strategic moves (category analogue, JTBD reframe, occasion, competitive set, tension, audience-as-mindset) are exempt — they're the synthesizer's interpretation, not unsupported claims about the world. The supporting assertions that flow from those moves DO need to pass this check.
 8. Are there em dashes or "is/isn't" constructions? If so, rewrite.
 9. **Cross-category provenance.** If the investigator ran the signature-keyed pass, are `signature`, `cross_domain_items`, `audience_affinity`, and `audience_profile` populated from the four function outputs? Does every named bridge experience in prose appear in `cross_domain_items` with exact `construct`/`score`/`n`/`primary_topic`? Does every cited audience score appear in `audience_affinity` with exact `construct`/`audience_score`/`aud_n`? Is `home_topic` set? If any of that is off, fix it before returning — the guard will drop the sidecar otherwise.
-10. **No selection scores in prose.** Scan the response and card headlines for `rel_lift` or `distinctiveness` numbers being cited as findings ("rel_lift +4.4", "distinctiveness 3.01"). These are internal selection scores — they select what to surface, they never speak. Translate them: `rel_lift` becomes `audience_score` vs `general_score`; `distinctiveness` becomes a verbatim quote or a plain score comparison. If any selection number remains as a claim in prose or a card body, rewrite.
-11. **Construct integrity.** For every score in prose or in a card, is it named as what its question asked (joy score → joy finding, trust score → trust finding)? No score is relabeled to another construct. Within a single card, do all stat_items share the same construct? If two constructs sit on the same axis, split them.
-12. **No verbatim-count claims.** Scan the response and the cards for phrases like "tag appears N times," "consistently," "the dominant job," or any tally over `bjl_verbatims`. If any signature, cross-category, or audience claim rests on a verbatim tally instead of a `bjl_signature` / `bjl_corpus_bridges_v2` / `bjl_audience_affinity_v2` row, cut it. Verbatims may only be quoted for color, one attributed quote, never counted.
-13. **Card provenance.** For each card in `cards`: does every `stat_item`'s `item_name`, `score` (or `joy_index` for legacy `bjl_scores`), and `n` come verbatim from a scratch row? Do all `stat_items` in a single card share the same `source` AND the same `construct`? If a card mixes sources or constructs, split it. If a card was built on a verbatim tally, drop it.
-14. **Caps.** Is `response_text` ≤ 500 words? Are the structured-field caps respected (signature ≤ 8, cross_domain_items ≤ 10, audience_affinity ≤ 10, audience_profile ≤ 8, cards ≤ 3 with ≤ 4 stat_items each)? If any cap is exceeded, tighten before returning.
-15. Could a strategist read this in a meeting and walk out with one sharp insight to use? If not, sharpen.
+10. **Select-all provenance.** If you cited any checkbox behavior, is `audience_selects` populated? Does every entry carry its `question` label alongside `item_name` (option text recurs across batteries; the question disambiguates)? Do `aud_pct`, `gen_pct`, and `aud_exposed` match a `bjl_audience_selects_v2` row exactly? Never emit an entry without its question.
+11. **No selection scores in prose.** Scan the response and card headlines for `rel_lift`, `distinctiveness`, or `norm_lift` numbers being cited as findings ("rel_lift +4.4", "distinctiveness 3.01", "norm_lift 1.42"). These are internal selection scores — they select what to surface, they never speak. Translate them: `rel_lift` becomes `audience_score` vs `general_score`; `norm_lift` becomes `aud_pct` vs `gen_pct`; `distinctiveness` becomes a verbatim quote or a plain score comparison. If any selection number remains as a claim in prose or a card body, rewrite.
+12. **Construct integrity.** For every score in prose or in a card, is it named as what its question asked (joy score → joy finding, trust score → trust finding)? No score is relabeled to another construct. Within a single card, do all stat_items share the same construct? If two constructs sit on the same axis, split them.
+13. **No verbatim-count claims.** Scan the response and the cards for phrases like "tag appears N times," "consistently," "the dominant job," or any tally over `bjl_verbatims`. If any signature, cross-category, or audience claim rests on a verbatim tally instead of a `bjl_signature` / `bjl_corpus_bridges_v2` / `bjl_audience_affinity_v2` / `bjl_audience_selects_v2` row, cut it. Verbatims may only be quoted for color, one attributed quote, never counted.
+14. **Card provenance.** For each card in `cards`: does every `stat_item`'s `item_name`, `score` (or `joy_index` for legacy `bjl_scores`), and `n` come verbatim from a scratch row? Do all `stat_items` in a single card share the same `source` AND the same `construct`? If a card mixes sources or constructs, split it. If a card was built on a verbatim tally, drop it.
+15. **Caps.** Is `response_text` ≤ 500 words? Are the structured-field caps respected (signature ≤ 8, cross_domain_items ≤ 10, audience_affinity ≤ 10, audience_profile ≤ 8, audience_selects ≤ 10, cards ≤ 3 with ≤ 4 stat_items each)? If any cap is exceeded, tighten before returning.
+16. Could a strategist read this in a meeting and walk out with one sharp insight to use? If not, sharpen.
 
 For literal posture, before finalizing, scan your draft:
 
