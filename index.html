@@ -2494,18 +2494,22 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
   }, [followupText, runQuery]);
 
   const clearConversation = useCallback(() => {
-    setTurns([]);
-    setCurrentPrompt("");
-    setCurrentStream("");
-    setError(null);
-    setEvidenceRows([]);
-    // v7: starting a new conversation drops the session id everywhere.
-    // The next runQuery will create a fresh session server-side and the
-    // URL/localStorage get re-mirrored from the enqueue response.
-    setSessionId(null);
-    writeSessionToUrl(null);
-    writeSessionLocal(null, []);
-  }, [setEvidenceRows]);
+    // Hard reset via full page navigation to a clean URL. The prior
+    // soft-reset (setTurns([]) + writeSessionLocal(null, []) + ...) was
+    // reliable in isolation but did not survive real-world edge cases —
+    // a stale HTML/JS cache, an in-flight fetch that resolved after the
+    // wipe and re-mirrored the prior turns, or a service-worker-style
+    // intermediary — could all leak the prior conversation back in.
+    // Navigating to a clean URL kills every path: the React tree is
+    // discarded, all timers and closures are gone, and the mount effect
+    // runs on a truly fresh page with an empty URL and empty
+    // localStorage.
+    try {
+      window.localStorage.removeItem(BJL_INTELLIGENCE_SESSION_LSKEY);
+    } catch (_) { /* localStorage may be unavailable in some embed contexts */ }
+    const cleanUrl = window.location.origin + window.location.pathname;
+    window.location.replace(cleanUrl);
+  }, []);
 
   // v6.1 — Auto-extract publishable candidates from each completed turn.
   // Runs as Haiku in the background after a turn lands; never blocks the
@@ -5482,14 +5486,21 @@ const App = ({ authedUser = null, onSignOut = null } = {}) => {
   // results, etc.) without lifting every piece of state into App.
   const [sessionKey, setSessionKey] = useState(0);
   const newSession = () => {
-    // Drop the persisted session before remounting the mode component,
-    // otherwise the intelligence pane's mount effect reads the stale
-    // session id + turns from URL/localStorage and re-hydrates the
-    // prior conversation.
-    writeSessionToUrl(null);
-    writeSessionLocal(null, []);
-    setEvidenceRows([]);
-    setSessionKey(k => k + 1);
+    // Hard reset via full page navigation to a clean URL. The prior
+    // soft-reset (writeSessionToUrl(null) + writeSessionLocal(null, [])
+    // + remount via key bump) was reliable in isolation but did not
+    // survive real-world edge cases — a stale HTML/JS cache, an
+    // in-flight fetch that resolved after the wipe and re-mirrored the
+    // prior turns, or a service-worker-style intermediary — could all
+    // leak the prior conversation back into the fresh state. Navigating
+    // to a clean URL kills every path: the React tree is discarded, all
+    // timers and closures are gone, and the mount effect runs on a
+    // truly fresh page with an empty URL and empty localStorage.
+    try {
+      window.localStorage.removeItem("bjl.session.intelligence");
+    } catch (_) { /* localStorage may be unavailable in some embed contexts */ }
+    const cleanUrl = window.location.origin + window.location.pathname;
+    window.location.replace(cleanUrl);
   };
   // Welcome modal shows on every page load (refresh / new tab). It is NOT
   // shown when the user clicks "New session" — that button is an in-tool
