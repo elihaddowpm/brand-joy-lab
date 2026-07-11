@@ -657,6 +657,7 @@ async function runSynthesis(triage, scratch, extraContext) {
     const audienceSelectsValue = read('audience_selects');
     const audienceDistributionsValue = read('audience_distributions');
     const audienceSizeValue = read('audience_size');
+    const blocksValue = read('blocks');
     const crossDomainThreads = Array.isArray(crossDomainThreadsValue)
       ? crossDomainThreadsValue
       : null;
@@ -673,6 +674,7 @@ async function runSynthesis(triage, scratch, extraContext) {
     const audienceSize = (typeof audienceSizeValue === 'number' && Number.isFinite(audienceSizeValue))
       ? Math.trunc(audienceSizeValue)
       : null;
+    const blocks = Array.isArray(blocksValue) ? blocksValue : null;
 
     if (!responseText) {
       // JSON parsed but no recognizable response_text key in any casing.
@@ -709,6 +711,7 @@ async function runSynthesis(triage, scratch, extraContext) {
       audience_selects: audienceSelects,
       audience_distributions: audienceDistributions,
       audience_size: audienceSize,
+      blocks,
     };
   } catch (e) {
     // JSON.parse failed entirely. Three sub-paths, all of which now route
@@ -916,6 +919,7 @@ async function runSynthesisWithGuard(triage, scratch, extraContext) {
     audience_selects: outAudienceSelects,
     audience_distributions: outAudienceDistributions,
     audience_size: retry.audience_size,
+    blocks: Array.isArray(retry.blocks) ? retry.blocks : null,
     synth_warning: 'provenance_failed',
     synth_warning_detail: secondPass.failures,
   };
@@ -1050,6 +1054,7 @@ exports.handler = async (event) => {
       audience_selects,
       audience_distributions,
       audience_size,
+      blocks,
       synth_warning,
       synth_warning_detail,
     } = synth;
@@ -1060,11 +1065,12 @@ exports.handler = async (event) => {
     // still lands but with the failure recorded so the UI can render an
     // "answer without that sidecar" state and the log has the offending
     // claims.
-    const anyStructured = [cross_domain_threads, cards, signature, cross_domain_items, audience_affinity, audience_profile, audience_selects, audience_distributions]
+    const anyStructured = [cross_domain_threads, cards, signature, cross_domain_items, audience_affinity, audience_profile, audience_selects, audience_distributions, blocks]
       .some(a => Array.isArray(a) && a.length > 0);
     const guardMeta = (anyStructured || home_topic || audience_size !== null || synth_warning)
       ? [{
           type: 'structured_synth_output',
+          blocks:                 Array.isArray(blocks) ? blocks : [],
           cross_domain_threads:   Array.isArray(cross_domain_threads) ? cross_domain_threads : [],
           cards:                  Array.isArray(cards) ? cards : [],
           signature:              Array.isArray(signature) ? signature : [],
