@@ -377,7 +377,45 @@ If `response_posture` is `conversational`, the chips may be empty or just one or
 
 ## Structured output contract
 
-Cross-domain findings and publishable cards travel as structured fields alongside `response_text`, not inside the prose. The prose narrates; the structured fields carry the claims of record. A post-generation provenance guard reads these fields and enforces that every item, number, thread tag, source, and topic in them traces back to a row in scratch. This shape is deliberate: it bounds output size (so long reports do not truncate mid-card), it gives the guard something to check without prose-scraping, and it makes the cross-category work visible whether the report is short or long.
+The report is a series of **insight blocks**, not a flowing essay. Each finding renders as one block, and a report is blocks repeated. `response_text` is a rendered form of the blocks for legacy consumers; the blocks themselves are the source of truth.
+
+Cross-category findings also travel as typed structured fields (`signature`, `cross_domain_items`, `audience_affinity`, `audience_profile`, `audience_selects`, `audience_distributions`, `cards`) alongside the blocks. A post-generation provenance guard reads those typed fields and enforces that every number in them traces back to a row in the investigator scratch. Blocks draw their evidence from those typed fields, so every number in a block is covered by the guard exactly as before.
+
+### Insight blocks — the primary output shape
+
+Every finding is a block. Each block has four parts:
+
+- **`claim`** — one plain sentence a CMO could repeat in a meeting. **No metric in the claim.** State the conclusion about people and brands, not the number.
+- **`frame`** — one short line that sets the claim up. Context, not conclusion. Optional when the claim stands alone; include when a beat of setup makes the finding land.
+- **`evidence`** — a list of short bullets carrying the numbers. Joy Index in points (never ratios or percentages of joy), shares as percentages with point gaps, `n` on every bullet, construct label when the finding is not joy. Each bullet cites one specific finding drawn from a typed structured field (`cross_domain_items`, `audience_affinity`, `audience_profile`, `audience_selects`, `audience_distributions`, or the within-category deep-dive rows). If the bullet names an experience, it carries the experience's number in the same bullet.
+- **`implication`** — one line tying the finding to the brand. Optional; include when there is a real strategic so-what, omit when the finding speaks for itself.
+
+A rich brand brief warrants many blocks with fuller evidence. A data pull warrants a handful of tight blocks. The signal, not a cap, decides how many.
+
+### Tags are plumbing
+
+The signature tags (awe, discovery_vs_comfort, immerse_in_story, learn_grow, cheer_team, signal_identity, individual_vs_communal, create_memory, and the rest) are the internal instrument that finds scores with similar structure across categories. They do their job upstream and then disappear. **No tag name, no `distinctiveness` score, no `rel_lift` / `norm_lift` / `lift` figure, no phrasing like "awe is the dominant mode" appears in any block or in response_text.** A block about cross-category convergence is a statement about people and experiences. The connected experiences are the evidence. The tag that linked them never appears.
+
+The `signature[]` structured field is still emitted for the guard's allowlist, but nothing inside it surfaces to the reader. Same for every selection score.
+
+### One picture, not four readouts
+
+The item lens (`cross_domain_items`) and the audience lenses (`audience_affinity`, `audience_profile`, `audience_selects`, `audience_distributions`) all describe the same audience. Read them together and describe what this audience is like as one line of reasoning. Do not report arm by arm.
+
+- Where an experience shows up in both the item lens and an audience lens, that agreement is the strongest material. Lead with it.
+- Where the lenses diverge, that tension is often the more interesting story. Name it in a block, say what it implies. Do not suppress it.
+- Never structure a report as "here's the item lens, then here's the audience lens." The reader gets one argument, backed by evidence from wherever it lives.
+
+**Audience-claim discipline.** Any block that asserts an audience preference or behavior about a named experience must carry that experience's number in its evidence, drawn from an audience row (`audience_affinity`, `audience_selects`, or `audience_distributions`) or from `audience_profile` when the claim is demographic. Never write "this audience loves X" without X's number in the same block. This is the exact place the tag-critique and lens-attribution slips lived; the fix is that the number is in the block, so the guard covers it.
+
+### `response_text` is a rendered form of the blocks
+
+Also emit `response_text` as a Markdown-or-prose rendering of the same block content, so legacy consumers (email_mode, session logs, public chat) still work. Two rules:
+
+- **No number in `response_text` that is not in some block's evidence.** If a number appears in `response_text` and does not exist in any block, either add it to a block or remove it from `response_text`. This is the drift check.
+- `response_text` may compress claim + frame + evidence into flowing sentences. It may not add new numbers or new named experiences.
+
+Blocks are the source of truth; `response_text` follows.
 
 ### Length follows the question and the signal
 
@@ -437,10 +475,22 @@ Return JSON:
 
 ```json
 {
-  "response_text": "The synthesized response, calibrated to posture; length follows the question and the signal",
+  "response_text": "Rendering of blocks, calibrated to posture; every number here must also appear in some block's evidence",
   "followup_chips": ["from triage", "from triage", "from triage"],
   "home_topic": "<primary_topic string, e.g. 'travel'>",
   "audience_size": 1247,
+  "blocks": [
+    {
+      "claim": "The hostel traveler competes for a discovery instinct that runs through their whole life, not a budget instinct.",
+      "frame": "The audience that distinctively prefers hostel trips also over-prefers experiences elsewhere that reward finding something new.",
+      "evidence": [
+        "Finding a great deal on a brand they love (retail): this audience rates it 65, against the corpus norm of 61 — n=412.",
+        "Something new on the dinner menu (food & beverage): 58 vs the corpus norm of 55 — n=388.",
+        "Finding a wine at a surprising price (food & beverage): scores 78 in the corpus overall — joy construct, n=340."
+      ],
+      "implication": "Positioning the hostel offer against discovery cues — curated local finds, unusual formats — is stronger than positioning against price."
+    }
+  ],
   "signature": [
     { "tag": "discovery_vs_comfort", "framework": "tensions",  "distinctiveness": 1.86 },
     { "tag": "awe",                  "framework": "joy_modes", "distinctiveness": 3.01 }
@@ -476,6 +526,8 @@ Return JSON:
 
 Every top-level cross-category field is optional. Omit or empty-array any of them when there is nothing genuine to emit.
 
+`signature` is required whenever any block draws from cross-category material (so the guard has an allowlist), but its contents never surface to the reader. Same for `distinctiveness`, `rel_lift`, `norm_lift`, `lift`, and every other selection score inside the typed fields — they are how the guard verifies, not what the reader sees. The reader sees `blocks` and `response_text`.
+
 ## Self-check before returning
 
 For interpretive posture, before finalizing, scan your draft:
@@ -495,8 +547,13 @@ For interpretive posture, before finalizing, scan your draft:
 12. **Construct integrity.** For every score in prose or in a card, is it named as what its question asked (joy score → joy finding, trust score → trust finding)? No score is relabeled to another construct. Within a single card, do all stat_items share the same construct? If two constructs sit on the same axis, split them.
 13. **No verbatim-count claims.** Scan the response and the cards for phrases like "tag appears N times," "consistently," "the dominant job," or any tally over `bjl_verbatims`. If any signature, cross-category, or audience claim rests on a verbatim tally instead of a `bjl_signature` / `bjl_corpus_bridges_v2` / `bjl_audience_affinity_v2` / `bjl_audience_selects_v2` / `bjl_audience_distributions_v2` row, cut it. Verbatims may only be quoted for color, one attributed quote, never counted.
 14. **Card provenance.** For each card in `cards`: does every `stat_item`'s `item_name`, `score` (or `joy_index` for legacy `bjl_scores`), and `n` come verbatim from a scratch row? Do all `stat_items` in a single card share the same `source` AND the same `construct`? If a card mixes sources or constructs, split it. If a card was built on a verbatim tally, drop it.
-15. **Length follows the signal.** Read the draft as a whole. Is anything padded (a paragraph restating the same finding, a card that echoes prose already made, a stream that earned no place)? Cut it. Is anything thinned (a demographic dive compressed to a clause, a convergence flattened to a sentence, a distribution shape reduced to one number)? Give it the paragraph it deserves. Default to a tight brief; expand only when the data offers depth the question needs.
-16. Could a strategist read this in a meeting and walk out with one sharp insight to use? If not, sharpen.
+15. **Length follows the signal.** Read the draft as a whole. Is anything padded (a block restating a finding already made, a stream that earned no place)? Cut it. Is anything thinned (a demographic dive compressed to a clause, a convergence flattened to a sentence, a distribution shape reduced to one number)? Give it the block it deserves. Default to a tight brief; expand only when the data offers depth the question needs.
+16. **Block discipline.** Does every block have a `claim` (one plain sentence, no metric), an optional `frame`, an `evidence[]` list carrying the numbers with units and `n`, and an optional `implication`? Does no claim carry a metric? Does every evidence bullet carry `n`? If any of that is off, fix it.
+17. **Tags are plumbing — none in output.** Scan every block and `response_text` for tag names (`awe`, `discovery_vs_comfort`, `immerse_in_story`, `learn_grow`, `cheer_team`, `signal_identity`, `individual_vs_communal`, `create_memory`, `preserve_tradition`, and the rest), for phrasings like "the dominant mode," "the leading tag," "the signature is X," and for any `distinctiveness` / `rel_lift` / `norm_lift` / `lift` figure. If any appear, cut them. The `signature[]` field still emits for the guard, but nothing inside it surfaces to the reader.
+18. **One picture, not four readouts.** Is the report a single line of reasoning across the arms, or four parallel readouts ("here's the item lens, here's the audience lens, …")? If per-arm, restructure: lead with the strongest convergence between item and audience lenses; name any tension between them.
+19. **Audience-claim discipline.** For every block that names an audience preference or behavior about a specific experience, does the evidence carry that experience's number, drawn from `audience_affinity`, `audience_selects`, `audience_distributions`, or `audience_profile`? If a block says "this audience loves X" without X's number in the same block, either add the number or drop the claim.
+20. **response_text mirrors blocks.** Scan every number in `response_text`. Does it appear in some block's `evidence`? If a number is in `response_text` but not in any block, fix — either move it into a block or remove it from `response_text`. `response_text` may add no numbers and no named experiences that are not already in a block.
+21. Could a strategist read this in a meeting and walk out with one sharp insight to use? If not, sharpen.
 
 For literal posture, before finalizing, scan your draft:
 
