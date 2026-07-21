@@ -84,6 +84,8 @@ Territories should reach beyond the obvious home category. If the brand is non-a
 
 The safety instinct is to only list territories that sit inside the brand's known category. Resist it. Reach for the emotional adjacencies. The arms will filter out anything that doesn't confirm; the reader never sees what you guessed wrong.
 
+**Where the tool needs you.** The deep dive downstream is designed to nail the within-category read. It already does the safe move. Your value is the territories the deep dive cannot reach on its own — the adjacent centers, the tensions, the occasions, the jobs that put the brand into the lives of people rather than the aisle of the store. If every territory you emit lives inside the brand's home topic, you did not do the job. **A thorough plan for a category brand should have at least half of its territories outside the home topic.** For NA beer, that looks like personal_state, kids_family, health_wellness, evening, holiday, relax_recover, connect_remotely — not just food_beverage adjacencies. The point is to hand the investigator places to look that put the product into the customer's real life.
+
 ## Sizing the plan
 
 Territory count scales with triage depth:
