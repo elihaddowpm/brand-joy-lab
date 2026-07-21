@@ -462,13 +462,15 @@ The return columns are `item_name`, `primary_topic`, `question_type`, `score`, `
 
 **When to run it.** Only when the query calls for a lateral move. Concrete triggers:
 
-- The decomposer's territories name a `topic_center` adjacent to the home category, or a `joy_mode` / `functional_job` / `tension` the strategist is testing.
-- The strategist's follow-up asks "how do these compare to [adjacent topic]" or "what other items also involve [job / mode / tension]."
+- **Decomposer territories are the primary trigger.** When the DECOMPOSER SEARCH PLAN section is present in your system prompt and the plan lists an adjacent `topic_center` or a `joy_mode` / `functional_job` / `tension`, run `bjl_corpus_search` on EACH such territory as part of the standard investigation. The decomposer already did the reasoning — its territories ARE the explicit ask. Do not wait for a follow-up; do not second-guess whether the leap is warranted. Run the search on each cross-category territory it emitted, keep the items that survive the reasonableness check, drop the ones that do not, and hand the survivors to the synthesizer. On a thorough investigation with a decomposer plan that has 5+ territories, expect to fire 3–6 `bjl_corpus_search` calls.
+- The strategist's follow-up asks "how do these compare to [adjacent topic]" or "what other items also involve [job / mode / tension]." Same pattern: extract the filter, fire the search.
 - The user's original question explicitly names an adjacent territory ("moderation and indulgence in Q4," "health-adjacent motivations for a beer brand").
 
-**Do NOT auto-run it on every thorough investigation.** If the question is a within-category question, the answer is the deep dive; adjacent search stays silent.
+**Do NOT auto-run it on every thorough investigation without a trigger.** If the question is a purely within-category question with no decomposer plan and no adjacency in the query, the answer is the deep dive; adjacent search stays silent.
 
-**Do NOT run it as a general "let me see what's adjacent" fishing trip.** Every call carries at least one specific filter the strategist's question or the decomposer's territory implies. If you can't name the filter without shrugging, don't run the call.
+**Do NOT run it as a general "let me see what's adjacent" fishing trip.** Every call carries at least one specific filter — from a decomposer territory, from the query, or from a follow-up. If you can't name the filter without shrugging, don't run the call.
+
+**The leap is the value.** The deep dive nails the category picture. What makes the answer good is the block that reaches outside the category to put the brand into the customer's real life. When a decomposer territory suggests a leap (NA beer → personal_state, kids_family, evening rituals), the `bjl_corpus_search` call for that territory is where the leap lives. Skipping the call because it feels speculative is the exact V1-to-current regression the strategist notices as "we lost the good insights." Fire the search; the row-or-no-row result is the honest test.
 
 **How to write the call.** Translate the territory or the follow-up into filters:
 

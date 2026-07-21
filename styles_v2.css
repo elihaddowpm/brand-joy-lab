@@ -4086,3 +4086,66 @@ textarea { font-family: var(--font-text); }
   font-size: 12px;
   margin-top: 6px;
 }
+
+/* -------------------------------------------------------------------------
+ * Card multi-select + seed-a-query bar in ProjectsMode
+ * ------------------------------------------------------------------------- */
+.blocks-container-label {
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--iron-darker, #5a5a55);
+  margin: 8px 0 -4px 0;
+}
+
+.saved-card-selectable { position: relative; }
+.saved-card-selectable.selected {
+  border-color: var(--ink, #1a1a17);
+  box-shadow: 0 0 0 2px rgba(26,26,23,0.06);
+}
+.saved-card-select {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--iron-darker, #5a5a55);
+  margin-bottom: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+.saved-card-select input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+  accent-color: var(--ink, #1a1a17);
+}
+.saved-card-select-hint { padding-top: 1px; }
+
+.seed-query-bar {
+  position: sticky;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 20px;
+  background: var(--paper, #fbfaf6);
+  border-top: 1px solid var(--iron, #e2e2dc);
+  box-shadow: 0 -6px 18px rgba(0,0,0,0.06);
+  z-index: 10;
+  margin: 20px -32px -32px -32px;
+}
+.seed-query-count {
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  color: var(--ink, #1a1a17);
+  font-weight: 500;
+  flex: 1;
+}
+.seed-query-clear { font-size: 11px; }
+.seed-query-start { font-size: 12px; }

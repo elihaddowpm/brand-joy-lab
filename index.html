@@ -2391,6 +2391,22 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
   useEffect(() => { refreshProjects(); }, [refreshProjects]);
   useEffect(() => { refreshCards(activeProjectId); }, [activeProjectId, refreshCards]);
 
+  // Seed-a-query handoff from ProjectsMode. When the strategist clicks
+  // "Take me to Intelligence" with selected saved cards, we land here
+  // with strategistContext already populated (by the setter) and a
+  // pending prompt sitting in localStorage. Read it once, populate the
+  // prompt input, and clear the key so a subsequent mount doesn't
+  // repopulate.
+  useEffect(() => {
+    try {
+      const pending = localStorage.getItem('bjl_pending_seed_prompt_v1');
+      if (pending && pending.trim()) {
+        setPrompt(pending);
+        localStorage.removeItem('bjl_pending_seed_prompt_v1');
+      }
+    } catch (_) { /* soft-fail */ }
+  }, []);
+
   // v7 mount-time restore. Priority: URL > localStorage > server most-
   // recent > fresh. The localStorage path repaints instantly so the
   // strategist doesn't see a flash of empty state; the server fetch
@@ -2897,14 +2913,18 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
                       The lab needs a bit more from you before investigating. Type your answer below to continue.
                     </div>
                   )}
-                  {/* Move 2: render insight blocks when present; fall back
-                      to prose (response_text) for legacy turns or
-                      conversational-posture responses that didn't emit
-                      structured blocks. Each block carries a Save-to-project
-                      button; the prose fallback keeps the per-turn Save entry
-                      point as a backup so nothing becomes unsaveable. */}
-                  {Array.isArray(t.blocks) && t.blocks.length > 0 ? (
+                  {/* Prose narrative is the primary reading experience —
+                      response_text is a rendered form of the blocks (per
+                      synth prompt contract), so the strategist gets the
+                      summary they'd expect. Blocks appear below as a
+                      save-to-project affordance so the strategist can lift
+                      individual findings into the active project. */}
+                  <div className="stream-doc">
+                    {renderMarkdown(t.response)}
+                  </div>
+                  {Array.isArray(t.blocks) && t.blocks.length > 0 && (
                     <div className="blocks-container">
+                      <div className="blocks-container-label">Insights to save</div>
                       {t.blocks.map((block, bi) => (
                         <BlockView
                           key={bi}
@@ -2919,10 +2939,6 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
                           onNeedProject={() => setShowCreateProject(true)}
                         />
                       ))}
-                    </div>
-                  ) : (
-                    <div className="stream-doc">
-                      {renderMarkdown(t.response)}
                     </div>
                   )}
                   {/* v6.1 — Public Corpus candidate insights, auto-extracted
@@ -5023,7 +5039,7 @@ const JoyMapMode = () => {
  *          Buttons to create, rename, archive, drill in.
  *  - Detail: one project's saved cards. Rename / archive from here too.
  * ------------------------------------------------------------------------- */
-const ProjectsMode = () => {
+const ProjectsMode = ({ setMode, setStrategistContext }) => {
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -5033,6 +5049,57 @@ const ProjectsMode = () => {
   const [showCreate, setShowCreate] = useState(false);
   const [renaming, setRenaming] = useState(null); // { id, name, notes }
   const [savingRename, setSavingRename] = useState(false);
+
+  // Card selection for the seed-a-query flow. When one or more cards are
+  // checked, a compose bar appears at the bottom of the drill-in view; the
+  // strategist adds an optional follow-up prompt and starts a query in the
+  // Intelligence pane with the selected cards packaged as strategist context.
+  const [selectedCardIds, setSelectedCardIds] = useState(() => new Set());
+  const [showSeedCompose, setShowSeedCompose] = useState(false);
+  const [seedPrompt, setSeedPrompt] = useState('');
+
+  const toggleCardSelected = (id) => setSelectedCardIds(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const clearSelection = () => setSelectedCardIds(new Set());
+
+  // Format the selected cards into a strategist-context blob and hand off
+  // to the Intelligence pane. The blob is verbose on purpose — the
+  // synthesizer sees it as brand context to reason over, so the full
+  // provenance (claim + frame + evidence + implication + source question)
+  // helps the leap land.
+  const formatCardsForContext = (proj, chosenCards) => {
+    const lines = [];
+    lines.push(`Saved insights from project "${proj.name}"${proj.notes ? ` (${proj.notes})` : ''}. These are prior findings the strategist has already validated. Use them as anchor context for the next question, not as new material to re-derive.`);
+    lines.push('');
+    chosenCards.forEach((card, i) => {
+      lines.push(`Insight ${i + 1}: ${card.claim}`);
+      if (card.frame) lines.push(`  Frame: ${card.frame}`);
+      if (Array.isArray(card.evidence) && card.evidence.length > 0) {
+        card.evidence.forEach(e => lines.push(`  - ${typeof e === 'string' ? e : JSON.stringify(e)}`));
+      }
+      if (card.implication) lines.push(`  Implication: ${card.implication}`);
+      if (card.source_question) lines.push(`  Source question: ${card.source_question}`);
+      lines.push('');
+    });
+    return lines.join('\n').trim();
+  };
+
+  const startSeededQuery = () => {
+    const chosenCards = cards.filter(c => selectedCardIds.has(c.id));
+    if (chosenCards.length === 0 || !seedPrompt.trim() || !selected) return;
+    const contextBlob = formatCardsForContext(selected, chosenCards);
+    // Hand-off: the follow-up prompt goes through localStorage so the
+    // Intelligence pane's mount effect can pick it up and populate its
+    // prompt input. Strategist context is set immediately via the setter
+    // App threads through.
+    try { localStorage.setItem('bjl_pending_seed_prompt_v1', seedPrompt.trim()); }
+    catch (_) { /* soft-fail if storage unavailable; prompt just won't preload */ }
+    if (setStrategistContext) setStrategistContext(contextBlob);
+    if (setMode) setMode('intelligence');
+  };
 
   const selected = projects.find(p => p.id === selectedId) || null;
 
@@ -5051,7 +5118,10 @@ const ProjectsMode = () => {
   };
 
   useEffect(() => { reloadProjects(); }, []);
-  useEffect(() => { if (selectedId) reloadCards(selectedId); }, [selectedId]);
+  useEffect(() => {
+    clearSelection();
+    if (selectedId) reloadCards(selectedId);
+  }, [selectedId]);
 
   const archive = async (id) => {
     if (!confirm('Archive this project? Its saved cards are preserved but the project is hidden from the active list.')) return;
@@ -5074,7 +5144,7 @@ const ProjectsMode = () => {
   };
 
   return (
-    <div className="brief-scroll" style={{padding: 32}}>
+    <div className="brief-scroll" style={{padding: 32, overflowY: "auto", height: "100%", minHeight: 0, boxSizing: "border-box"}}>
       <div style={{display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 22}}>
         <div>
           <div className="eyebrow" style={{marginBottom: 6}}>Workbench</div>
@@ -5139,31 +5209,76 @@ const ProjectsMode = () => {
           {!cardsLoading && cards.length === 0 && (
             <div style={{color: "var(--grey-2)", fontStyle: "italic", padding: "16px 0"}}>Nothing saved yet. Save cards from the Intelligence pane and they'll land here.</div>
           )}
-          <div className="blocks-container">
-            {cards.map(card => (
-              <div key={card.id} className="block-view">
-                <div className="block-claim">{card.claim}</div>
-                {card.frame && <div className="block-frame">{card.frame}</div>}
-                {Array.isArray(card.evidence) && card.evidence.length > 0 && (
-                  <ul className="block-evidence">
-                    {card.evidence.map((line, i) => (
-                      <li key={i}>{typeof line === 'string' ? line : JSON.stringify(line)}</li>
-                    ))}
-                  </ul>
-                )}
-                {card.implication && <div className="block-implication">{card.implication}</div>}
-                <div className="block-actions" style={{justifyContent: "space-between"}}>
-                  <span style={{fontFamily: "var(--font-mono, monospace)", fontSize: 10, color: "var(--iron-darker, #5a5a55)", textTransform: "uppercase", letterSpacing: "0.06em"}}>
-                    Saved {new Date(card.saved_at).toLocaleDateString()}
-                  </span>
-                  <button className="btn ghost" onClick={async () => {
-                    if (!confirm('Remove this card from the project? Soft-delete; nothing else is affected.')) return;
-                    try { await deleteProjectCardApi(card.id); setCards(prev => prev.filter(c => c.id !== card.id)); }
-                    catch (e) { alert('Remove failed: ' + (e.message || e)); }
-                  }}>Remove</button>
+          <div className="blocks-container" style={{paddingBottom: selectedCardIds.size > 0 ? 100 : 0}}>
+            {cards.map(card => {
+              const isChecked = selectedCardIds.has(card.id);
+              return (
+                <div key={card.id} className={"block-view saved-card-selectable" + (isChecked ? " selected" : "")}>
+                  <label className="saved-card-select">
+                    <input type="checkbox"
+                      checked={isChecked}
+                      onChange={() => toggleCardSelected(card.id)} />
+                    <span className="saved-card-select-hint">Include in next query</span>
+                  </label>
+                  <div className="block-claim">{card.claim}</div>
+                  {card.frame && <div className="block-frame">{card.frame}</div>}
+                  {Array.isArray(card.evidence) && card.evidence.length > 0 && (
+                    <ul className="block-evidence">
+                      {card.evidence.map((line, i) => (
+                        <li key={i}>{typeof line === 'string' ? line : JSON.stringify(line)}</li>
+                      ))}
+                    </ul>
+                  )}
+                  {card.implication && <div className="block-implication">{card.implication}</div>}
+                  <div className="block-actions" style={{justifyContent: "space-between"}}>
+                    <span style={{fontFamily: "var(--font-mono, monospace)", fontSize: 10, color: "var(--iron-darker, #5a5a55)", textTransform: "uppercase", letterSpacing: "0.06em"}}>
+                      Saved {new Date(card.saved_at).toLocaleDateString()}
+                    </span>
+                    <button className="btn ghost" onClick={async () => {
+                      if (!confirm('Remove this card from the project? Soft-delete; nothing else is affected.')) return;
+                      try { await deleteProjectCardApi(card.id); setCards(prev => prev.filter(c => c.id !== card.id)); setSelectedCardIds(prev => { const n = new Set(prev); n.delete(card.id); return n; }); }
+                      catch (e) { alert('Remove failed: ' + (e.message || e)); }
+                    }}>Remove</button>
+                  </div>
                 </div>
+              );
+            })}
+          </div>
+
+          {selectedCardIds.size > 0 && (
+            <div className="seed-query-bar">
+              <div className="seed-query-count">
+                {selectedCardIds.size} card{selectedCardIds.size === 1 ? '' : 's'} selected
               </div>
-            ))}
+              <button className="btn ghost seed-query-clear" onClick={clearSelection}>Clear</button>
+              <button className="btn primary seed-query-start" onClick={() => setShowSeedCompose(true)}>
+                Start a query with these
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {showSeedCompose && (
+        <div className="public-promote-overlay" onClick={() => setShowSeedCompose(false)}>
+          <div className="public-promote-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Start a query with {selectedCardIds.size} saved card{selectedCardIds.size === 1 ? '' : 's'}</h3>
+            <p className="public-promote-help">
+              The selected cards will be packaged as strategist context (visible to you in the Intelligence pane, editable before you send) so the Lab treats them as prior findings. Type the next question below.
+            </p>
+            <label>Next question
+              <textarea rows={4} value={seedPrompt}
+                onChange={(e) => setSeedPrompt(e.target.value)}
+                placeholder="e.g. Given the insights above, what would you recommend for the Q4 push?"
+                autoFocus />
+            </label>
+            <div className="public-promote-actions">
+              <button className="btn ghost" onClick={() => setShowSeedCompose(false)}>Cancel</button>
+              <button className="btn primary" onClick={startSeededQuery}
+                disabled={!seedPrompt.trim()}>
+                Take me to Intelligence
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -6161,7 +6276,9 @@ const App = ({ authedUser = null, onSignOut = null } = {}) => {
             {mode === "joy_map" && <JoyMapMode
               key={`joymap-${sessionKey}`} />}
             {mode === "public_corpus" && <ProjectsMode
-              key={`projects-${sessionKey}`} />}
+              key={`projects-${sessionKey}`}
+              setMode={setMode}
+              setStrategistContext={setStrategistContext} />}
           </div>
           {showDrawer && <EvidenceDrawer rows={evidenceRows} filter={drawerFilter} onFilter={setDrawerFilter} />}
         </div>
