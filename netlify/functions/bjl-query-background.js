@@ -708,21 +708,57 @@ async function runSynthesis(triage, scratch, extraContext) {
   const lengthKey = emailMode ? 'short' : ((triage && triage.response_length) || 'medium');
   const maxTokens = LENGTH_TO_MAX_TOKENS[lengthKey] || LENGTH_TO_MAX_TOKENS.medium;
 
-  const response = await anthropic.messages.create({
-    model: SONNET_MODEL,
-    max_tokens: maxTokens,
-    system: finalSystemPrompt,
-    messages: [{ role: 'user', content: userMessage }]
-  });
+  // Small helper so we can call the synthesizer once, check the result,
+  // and (if needed) call it again with a strict JSON-only reminder.
+  // Follow-ups occasionally arrive as bare Markdown when the model treats
+  // the turn conversationally and drops the JSON envelope; the retry
+  // gives us one shot at recovering proper structured output (with
+  // blocks[], cross_domain_items[], etc.) before falling through to the
+  // salvage path (which can only rescue response_text).
+  const callSynth = async (extraSystem) => {
+    const sys = extraSystem
+      ? (finalSystemPrompt + '\n\n' + extraSystem)
+      : finalSystemPrompt;
+    const rsp = await anthropic.messages.create({
+      model: SONNET_MODEL,
+      max_tokens: maxTokens,
+      system: sys,
+      messages: [{ role: 'user', content: userMessage }],
+    });
+    const rawText = (rsp.content[0] && rsp.content[0].text) ? rsp.content[0].text.trim() : '';
+    const slice = extractJsonObjectSubstring(rawText);
+    return { rsp, raw: slice || rawText };
+  };
 
-  let raw = (response.content[0] && response.content[0].text) ? response.content[0].text.trim() : '';
-  // v6.8: lenient fence + preamble strip. The strict ^```json\n form
-  // missed cases where the model wrote "Here's the JSON:\n```json\n{...}"
-  // or wrapped the fences with surrounding prose. Walk the buffer to the
-  // outermost {…} and slice; that handles preamble, late fences, and
-  // trailing prose at once.
-  const jsonSlice = extractJsonObjectSubstring(raw);
-  if (jsonSlice) raw = jsonSlice;
+  let { rsp: response, raw } = await callSynth(null);
+
+  // If the first response doesn't parse as JSON, retry once with a strict
+  // JSON-only reminder. Only retry the actually-recoverable case: the model
+  // emitted prose or something JSON-adjacent that neither JSON.parse nor
+  // the substring slicer could pull a valid object from. Truncation cases
+  // bypass the retry (a bigger token budget won't help; the salvage path
+  // handles those below).
+  const looksParseable = (() => {
+    try { JSON.parse(raw); return true; } catch (_) { return false; }
+  })();
+  if (!looksParseable && !looksLikeTruncation(response.stop_reason, raw)) {
+    console.warn('[synthesis] first attempt did not parse as JSON; retrying once with strict reminder. raw[0..200]:', raw.slice(0, 200));
+    const retryReminder = '## JSON output enforcement (retry)\n\n'
+      + 'Your previous response was not valid JSON. Return exactly one JSON object matching the schema '
+      + 'in the Output section above. The object must include `response_text`, `blocks`, and the other '
+      + 'structured fields as documented. Do not include any prose outside the JSON envelope. Do not '
+      + 'wrap the output in code fences. Do not preface with explanation. Return the JSON object only, '
+      + 'starting with `{` and ending with `}`.';
+    try {
+      const retry = await callSynth(retryReminder);
+      // Accept the retry only if it parses; otherwise fall through to the
+      // original response's raw so the salvage path can rescue what it can.
+      try { JSON.parse(retry.raw); response = retry.rsp; raw = retry.raw; console.log('[synthesis] retry succeeded, JSON now parses'); }
+      catch (_) { console.warn('[synthesis] retry also did not parse; falling through to salvage'); }
+    } catch (retryErr) {
+      console.warn('[synthesis] retry API call failed; falling through to salvage:', retryErr.message);
+    }
+  }
 
   // Helper for the never-dump-raw-JSON fallback: try the permissive
   // string-walking extractor regardless of stop_reason. The extractor
