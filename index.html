@@ -2074,11 +2074,13 @@ const Icon = ({ name, size = 16 }) => {
  * 7. Rail — three modes, brand mark, PETERMAYER wordmark preserved exactly.
  * ========================================================================= */
 const Rail = ({ mode, setMode }) => {
+  // Outreach was removed from the nav on 2026-07-21 — no longer used.
+  // BatchMode component definition remains as dead code (safe to delete in
+  // a follow-up once we're sure nothing else references it).
   const items = [
     { k: "intelligence",  label: "Intelligence",  num: "01" },
-    { k: "outreach",      label: "Outreach",      num: "02" },
-    { k: "joy_map",       label: "Joy Map",       num: "03" },
-    { k: "public_corpus", label: "Projects", num: "04" },
+    { k: "joy_map",       label: "Joy Map",       num: "02" },
+    { k: "public_corpus", label: "Projects",      num: "03" },
   ];
   return (
     <aside className="rail">
@@ -6125,7 +6127,11 @@ const WelcomeModal = ({ onDismiss }) => (
 const App = ({ authedUser = null, onSignOut = null } = {}) => {
   const [mode, setMode] = useState(() => {
     const saved = localStorage.getItem("bjl_mode_v2");
-    return saved === "batch" ? "outreach" : (saved || "intelligence");
+    // Outreach was removed from the nav on 2026-07-21. Any localStorage
+    // that still holds "outreach" or the older "batch" value redirects
+    // to intelligence so the user lands on a valid pane.
+    if (saved === "batch" || saved === "outreach") return "intelligence";
+    return saved || "intelligence";
   });
   const [drawerOpen, setDrawerOpen] = useState(true);
   const [drawerFilter, setDrawerFilter] = useState("all");
@@ -6160,9 +6166,12 @@ const App = ({ authedUser = null, onSignOut = null } = {}) => {
 
   useEffect(() => { localStorage.setItem("bjl_mode_v2", mode); }, [mode]);
 
-  // Migrate legacy "batch" mode value to "outreach" — Batch has been folded
-  // into Outreach. Also guards against stale localStorage after this change.
-  useEffect(() => { if (mode === "batch") setMode("outreach"); }, [mode]);
+  // Outreach was removed from the nav on 2026-07-21. Migrate any lingering
+  // "batch" or "outreach" mode state to intelligence so setMode never leaves
+  // us on a pane that no longer renders.
+  useEffect(() => {
+    if (mode === "batch" || mode === "outreach") setMode("intelligence");
+  }, [mode]);
 
   // Keep-warm: ping /api/claude on mount so the function is hot when the user acts
   useEffect(() => {
@@ -6175,12 +6184,11 @@ const App = ({ authedUser = null, onSignOut = null } = {}) => {
 
   const crumbs = {
     intelligence:  ["Workbench", "Intelligence engine", "Ask the Lab"],
-    outreach:      ["Workbench", "Outreach", "Accounts"],
     joy_map:       ["Workbench", "Joy Map"],
     public_corpus: ["Workbench", "Projects"],
   }[mode] || ["Workbench"];
 
-  const showDrawer = drawerOpen && mode !== "outreach" && mode !== "joy_map" && mode !== "public_corpus";
+  const showDrawer = drawerOpen && mode !== "joy_map" && mode !== "public_corpus";
 
   return (
     <div className="app" data-screen-label={`BJL · ${mode}`}>
@@ -6212,16 +6220,10 @@ const App = ({ authedUser = null, onSignOut = null } = {}) => {
           }
         />
         <div className={`body ${showDrawer ? "" : "no-drawer"}`}>
-          <div style={mode === "outreach"
-            ? {minHeight: 0, display: "flex", flexDirection: "column", overflow: "auto"}
-            : {overflow: "hidden", minHeight: 0, display: "flex", flexDirection: "column"}}>
+          <div style={{overflow: "hidden", minHeight: 0, display: "flex", flexDirection: "column"}}>
             {mode === "intelligence" && <IntelligenceMode
               key={`intel-${sessionKey}`}
               setEvidenceRows={setEvidenceRows}
-              strategistContext={strategistContext}
-              setStrategistContext={setStrategistContext} />}
-            {mode === "outreach" && <BatchMode
-              key={`outreach-${sessionKey}`}
               strategistContext={strategistContext}
               setStrategistContext={setStrategistContext} />}
             {mode === "joy_map" && <JoyMapMode
