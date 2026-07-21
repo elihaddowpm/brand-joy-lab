@@ -950,6 +950,114 @@ const authedFetchInit = (extraInit = {}) => {
   return { ...extraInit, headers };
 };
 
+/* -------------------------------------------------------------------------
+ * Strategist workbench — project collections
+ * -------------------------------------------------------------------------
+ * Move 2 machinery: per-engagement project collections replace the shared
+ * "Public Corpus" staging as the save target for insight blocks. A block's
+ * "Save to project" button lands its full payload (claim / frame / evidence /
+ * implication + the structured synth payload it drew from as provenance) in
+ * bjl_project_cards under whichever project is currently active.
+ * ------------------------------------------------------------------------- */
+
+const PROJECT_ACTIVE_LSKEY = 'bjl_active_project_id_v1';
+
+const getActiveProjectId = () => {
+  try { return localStorage.getItem(PROJECT_ACTIVE_LSKEY) || null; }
+  catch (_) { return null; }
+};
+const setActiveProjectId = (id) => {
+  try {
+    if (id) localStorage.setItem(PROJECT_ACTIVE_LSKEY, id);
+    else    localStorage.removeItem(PROJECT_ACTIVE_LSKEY);
+  } catch (_) { /* localStorage unavailable — soft-fail */ }
+};
+
+async function fetchProjects(includeArchived = false) {
+  const url = '/.netlify/functions/bjl-projects' + (includeArchived ? '?include_archived=1' : '');
+  const r = await fetch(url, authedFetchInit());
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || `list failed (${r.status})`);
+  return Array.isArray(j.projects) ? j.projects : [];
+}
+
+async function createProjectApi({ name, notes }) {
+  const r = await fetch('/.netlify/functions/bjl-projects', authedFetchInit({
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'create', name, notes: notes || null }),
+  }));
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || `create failed (${r.status})`);
+  return j.project;
+}
+
+async function updateProjectApi(id, { name, notes }) {
+  const r = await fetch('/.netlify/functions/bjl-projects', authedFetchInit({
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'update', id, name, notes }),
+  }));
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || `update failed (${r.status})`);
+  return j.project;
+}
+
+async function archiveProjectApi(id) {
+  const r = await fetch('/.netlify/functions/bjl-projects', authedFetchInit({
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'archive', id }),
+  }));
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || `archive failed (${r.status})`);
+  return true;
+}
+
+async function fetchProjectCards(projectId) {
+  const r = await fetch(`/.netlify/functions/bjl-project-cards?project_id=${encodeURIComponent(projectId)}`,
+    authedFetchInit());
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || `card list failed (${r.status})`);
+  return Array.isArray(j.cards) ? j.cards : [];
+}
+
+async function saveProjectCardApi(payload) {
+  const r = await fetch('/.netlify/functions/bjl-project-cards', authedFetchInit({
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'save', ...payload }),
+  }));
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || `save failed (${r.status})`);
+  return j.card;
+}
+
+async function deleteProjectCardApi(id) {
+  const r = await fetch('/.netlify/functions/bjl-project-cards', authedFetchInit({
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'delete', id }),
+  }));
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || `delete failed (${r.status})`);
+  return true;
+}
+
+/* Extract the { blocks[], typed structured fields } that the synthesizer
+ * emits and the background function persists as a `structured_synth_output`
+ * scratch meta entry. Returns null when the turn didn't produce blocks
+ * (e.g. conversational-posture answers, older jobs from before the
+ * insight-blocks PR). */
+function extractStructuredSynth(scratch) {
+  if (!Array.isArray(scratch)) return null;
+  for (let i = scratch.length - 1; i >= 0; i--) {
+    const entry = scratch[i];
+    if (entry && entry.type === 'structured_synth_output') return entry;
+  }
+  return null;
+}
+
 // Fire-and-forget write to the approved-email corpus. Callers gate on the
 // draft having been edited (userEdited) — edited drafts are the high-signal
 // teaching examples (model output vs. what the strategist actually wanted).
@@ -1970,7 +2078,7 @@ const Rail = ({ mode, setMode }) => {
     { k: "intelligence",  label: "Intelligence",  num: "01" },
     { k: "outreach",      label: "Outreach",      num: "02" },
     { k: "joy_map",       label: "Joy Map",       num: "03" },
-    { k: "public_corpus", label: "Public Corpus", num: "04" },
+    { k: "public_corpus", label: "Projects", num: "04" },
   ];
   return (
     <aside className="rail">
@@ -2250,6 +2358,39 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
   const [recentSessions, setRecentSessions] = useState([]);
   const [recentMenuOpen, setRecentMenuOpen] = useState(false);
 
+  // Move 2: active project + saved cards drawer state.
+  const [projects, setProjects] = useState([]);
+  const [activeProjectId, setActiveProjectIdState] = useState(() => getActiveProjectId());
+  const [projectCards, setProjectCards] = useState([]);
+  const [cardsLoading, setCardsLoading] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [showCreateProject, setShowCreateProject] = useState(false);
+  const [projectError, setProjectError] = useState(null);
+
+  const activeProject = projects.find(p => p.id === activeProjectId) || null;
+
+  const refreshProjects = useCallback(async () => {
+    try { setProjects(await fetchProjects(false)); }
+    catch (e) { setProjectError(String(e.message || e)); }
+  }, []);
+
+  const refreshCards = useCallback(async (projectId) => {
+    if (!projectId) { setProjectCards([]); return; }
+    setCardsLoading(true);
+    try { setProjectCards(await fetchProjectCards(projectId)); }
+    catch (e) { setProjectError(String(e.message || e)); }
+    finally { setCardsLoading(false); }
+  }, []);
+
+  const selectProject = useCallback((id) => {
+    setActiveProjectIdState(id);
+    setActiveProjectId(id);
+    refreshCards(id);
+  }, [refreshCards]);
+
+  useEffect(() => { refreshProjects(); }, [refreshProjects]);
+  useEffect(() => { refreshCards(activeProjectId); }, [activeProjectId, refreshCards]);
+
   // v7 mount-time restore. Priority: URL > localStorage > server most-
   // recent > fresh. The localStorage path repaints instantly so the
   // strategist doesn't see a flash of empty state; the server fetch
@@ -2463,12 +2604,19 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
           return;
         }
         setCurrentStream(finalStream => {
+          const scratchArr = (info && info.investigation && Array.isArray(info.investigation.scratch))
+            ? info.investigation.scratch : null;
+          const structured = extractStructuredSynth(scratchArr);
           setTurns(prev => [...prev, {
             prompt: promptText.trim(),
             response: finalStream,
             investigationMeta: info || null,
             triage_brief: (info && info.triage_brief) || null,
             followup_chips: (info && Array.isArray(info.followup_chips)) ? info.followup_chips : [],
+            blocks: (structured && Array.isArray(structured.blocks) && structured.blocks.length > 0)
+              ? structured.blocks : null,
+            structured: structured || null,
+            job_id: (info && info.job_id) || null,
             isFollowup,
           }]);
           return "";
@@ -2586,9 +2734,25 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
               {INTEL_WELCOME}
             </div>
           </div>
-          <div className="mono" style={{color: "var(--grey-2)", textAlign: "right"}}>
-            session · {new Date().toISOString().slice(0,10)}<br/>
-            v2 · investigator
+          <div style={{display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end"}}>
+            <div className="intel-project-row" style={{display: "flex", gap: 8, alignItems: "center"}}>
+              <ProjectSelector
+                projects={projects}
+                activeProjectId={activeProjectId}
+                onSelect={selectProject}
+                onOpenCreate={() => setShowCreateProject(true)}
+              />
+              <button type="button" className="btn ghost intel-saved-toggle"
+                onClick={() => setDrawerOpen(o => !o)}
+                title={activeProject ? `Show saved cards for ${activeProject.name}` : 'Pick a project to see saved cards'}
+                disabled={!activeProjectId}>
+                Saved <span className="saved-count-badge">{projectCards.length}</span>
+              </button>
+            </div>
+            <div className="mono" style={{color: "var(--grey-2)", textAlign: "right"}}>
+              session · {new Date().toISOString().slice(0,10)}<br/>
+              v2 · investigator
+            </div>
           </div>
         </div>
 
@@ -2733,36 +2897,39 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
                       The lab needs a bit more from you before investigating. Type your answer below to continue.
                     </div>
                   )}
-                  <div className="stream-doc">
-                    {renderMarkdown(t.response)}
-                  </div>
+                  {/* Move 2: render insight blocks when present; fall back
+                      to prose (response_text) for legacy turns or
+                      conversational-posture responses that didn't emit
+                      structured blocks. Each block carries a Save-to-project
+                      button; the prose fallback keeps the per-turn Save entry
+                      point as a backup so nothing becomes unsaveable. */}
+                  {Array.isArray(t.blocks) && t.blocks.length > 0 ? (
+                    <div className="blocks-container">
+                      {t.blocks.map((block, bi) => (
+                        <BlockView
+                          key={bi}
+                          block={block}
+                          blockIndex={bi}
+                          structured={t.structured || null}
+                          jobId={t.job_id || null}
+                          question={t.prompt || null}
+                          activeProjectId={activeProjectId}
+                          projects={projects}
+                          onSaved={() => refreshCards(activeProjectId)}
+                          onNeedProject={() => setShowCreateProject(true)}
+                        />
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="stream-doc">
+                      {renderMarkdown(t.response)}
+                    </div>
+                  )}
                   {/* v6.1 — Public Corpus candidate insights, auto-extracted
                       from this turn. Empty array means the extractor ran and
                       found nothing publishable. */}
                   {Array.isArray(t.publicCandidates) && t.publicCandidates.length > 0 && (
                     <PublicCandidatesPanel candidates={t.publicCandidates} sourceTurnPrompt={t.prompt} />
-                  )}
-                  {/* v6.2 — Backup "Add to public corpus" entry point on every
-                      completed Intelligence turn. The extractor surfaces 0-3
-                      candidate cards above when it finds publishable findings,
-                      but the strategist may notice a publishable insight the
-                      extractor missed. This button opens the staging modal with
-                      the full turn response pre-filled so the strategist can
-                      trim it down to the publishable finding by hand. */}
-                  {!t.isClarification && (
-                    <div className="turn-actions">
-                      <PromoteToPublicButton
-                        label="Add to public corpus"
-                        defaults={{
-                          title:        '',
-                          insight:      t.response || '',
-                          stat:         '',
-                          category:     '',
-                          confidence:   'medium',
-                          source_note:  t.prompt ? `Intelligence pane response to: "${String(t.prompt).slice(0, 240)}"` : '',
-                          created_from: 'promoted',
-                        }} />
-                    </div>
                   )}
                   {/* Triage-provided followup chips. Only on the last turn so the
                       conversation feed stays clean. Clicking a chip submits it
@@ -2832,6 +2999,24 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
           <div className="doc-placeholder">Output appears here after you ask the Lab a question.</div>
         )}
       </div>
+      <CreateProjectModal
+        isOpen={showCreateProject}
+        onClose={() => setShowCreateProject(false)}
+        onCreated={(p) => {
+          setShowCreateProject(false);
+          setProjects(prev => [p, ...prev.filter(x => x.id !== p.id)]);
+          selectProject(p.id);
+        }}
+      />
+      <SavedCardsDrawer
+        isOpen={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        project={activeProject}
+        cards={projectCards}
+        loading={cardsLoading}
+        onRemove={(id) => setProjectCards(prev => prev.filter(c => c.id !== id))}
+        onReload={() => refreshCards(activeProjectId)}
+      />
     </div>
   );
 };
@@ -4830,6 +5015,192 @@ const JoyMapMode = () => {
  *      (bjl_public_questions) sit alongside as the lead-handling queue.
  * ========================================================================= */
 
+/* -------------------------------------------------------------------------
+ * ProjectsMode — the repurposed "Public Corpus" pane.
+ * -------------------------------------------------------------------------
+ * Two views:
+ *  - List: every active project, with card count + notes + last activity.
+ *          Buttons to create, rename, archive, drill in.
+ *  - Detail: one project's saved cards. Rename / archive from here too.
+ * ------------------------------------------------------------------------- */
+const ProjectsMode = () => {
+  const [projects, setProjects] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [selectedId, setSelectedId] = useState(null);
+  const [cards, setCards] = useState([]);
+  const [cardsLoading, setCardsLoading] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
+  const [renaming, setRenaming] = useState(null); // { id, name, notes }
+  const [savingRename, setSavingRename] = useState(false);
+
+  const selected = projects.find(p => p.id === selectedId) || null;
+
+  const reloadProjects = async () => {
+    setLoading(true); setError(null);
+    try { setProjects(await fetchProjects(false)); }
+    catch (e) { setError(String(e.message || e)); }
+    finally { setLoading(false); }
+  };
+  const reloadCards = async (id) => {
+    if (!id) { setCards([]); return; }
+    setCardsLoading(true);
+    try { setCards(await fetchProjectCards(id)); }
+    catch (e) { setError(String(e.message || e)); }
+    finally { setCardsLoading(false); }
+  };
+
+  useEffect(() => { reloadProjects(); }, []);
+  useEffect(() => { if (selectedId) reloadCards(selectedId); }, [selectedId]);
+
+  const archive = async (id) => {
+    if (!confirm('Archive this project? Its saved cards are preserved but the project is hidden from the active list.')) return;
+    try {
+      await archiveProjectApi(id);
+      setSelectedId(prev => (prev === id ? null : prev));
+      reloadProjects();
+    } catch (e) { alert('Archive failed: ' + (e.message || e)); }
+  };
+
+  const submitRename = async () => {
+    if (!renaming || !renaming.name.trim()) return;
+    setSavingRename(true);
+    try {
+      await updateProjectApi(renaming.id, { name: renaming.name.trim(), notes: renaming.notes || null });
+      setRenaming(null);
+      reloadProjects();
+    } catch (e) { alert('Rename failed: ' + (e.message || e)); }
+    finally { setSavingRename(false); }
+  };
+
+  return (
+    <div className="brief-scroll" style={{padding: 32}}>
+      <div style={{display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 22}}>
+        <div>
+          <div className="eyebrow" style={{marginBottom: 6}}>Workbench</div>
+          <div className="display" style={{fontSize: 40, letterSpacing: "-0.01em"}}>Projects.</div>
+          <div style={{marginTop: 8, color: "var(--grey-2)", maxWidth: "60ch", fontSize: 14}}>
+            Per-engagement collections. Save insight cards from the Intelligence pane, review them here, and remove ones you've reconsidered.
+          </div>
+        </div>
+        <button className="btn primary" onClick={() => setShowCreate(true)}>+ New project</button>
+      </div>
+
+      {error && <div className="public-promote-error" style={{marginBottom: 12}}>{error}</div>}
+      {loading && <div style={{color: "var(--grey-2)"}}>Loading projects…</div>}
+
+      {!loading && !selected && (
+        <div>
+          {projects.length === 0 ? (
+            <div style={{color: "var(--grey-2)", fontStyle: "italic", padding: "24px 0"}}>No projects yet. Create one to start saving cards.</div>
+          ) : (
+            <div className="project-list-grid" style={{display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))"}}>
+              {projects.map(p => (
+                <div key={p.id} className="project-card" style={{
+                  background: "var(--paper-2, #f4f3ed)",
+                  border: "1px solid var(--iron, #e2e2dc)",
+                  borderRadius: 6,
+                  padding: 16,
+                  cursor: "pointer",
+                }} onClick={() => setSelectedId(p.id)}>
+                  <div style={{display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6}}>
+                    <div style={{fontFamily: "var(--font-display, Georgia, serif)", fontSize: 18, color: "var(--ink, #1a1a17)"}}>{p.name}</div>
+                    <div style={{fontFamily: "var(--font-mono, monospace)", fontSize: 11, color: "var(--iron-darker, #5a5a55)"}}>{p.card_count || 0} card{p.card_count === 1 ? '' : 's'}</div>
+                  </div>
+                  {p.notes && <div style={{fontSize: 12.5, color: "var(--iron-darker, #5a5a55)", marginBottom: 8, lineHeight: 1.4}}>{p.notes}</div>}
+                  <div style={{fontFamily: "var(--font-mono, monospace)", fontSize: 10, color: "var(--iron-darker, #5a5a55)", textTransform: "uppercase", letterSpacing: "0.06em"}}>
+                    Updated {new Date(p.updated_at).toLocaleDateString()}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {!loading && selected && (
+        <div>
+          <div style={{display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12}}>
+            <button className="btn ghost" onClick={() => { setSelectedId(null); setCards([]); }}>&larr; All projects</button>
+            <div style={{display: "flex", gap: 8}}>
+              <button className="btn ghost" onClick={() => setRenaming({ id: selected.id, name: selected.name, notes: selected.notes || '' })}>Rename / notes</button>
+              <button className="btn ghost" onClick={() => archive(selected.id)}>Archive</button>
+            </div>
+          </div>
+          <div style={{marginBottom: 20}}>
+            <div style={{fontFamily: "var(--font-display, Georgia, serif)", fontSize: 30, color: "var(--ink, #1a1a17)"}}>{selected.name}</div>
+            {selected.notes && <div style={{color: "var(--grey-2)", fontSize: 14, marginTop: 4}}>{selected.notes}</div>}
+            <div style={{fontFamily: "var(--font-mono, monospace)", fontSize: 11, color: "var(--iron-darker, #5a5a55)", textTransform: "uppercase", letterSpacing: "0.06em", marginTop: 4}}>
+              {cards.length} card{cards.length === 1 ? '' : 's'} saved
+            </div>
+          </div>
+
+          {cardsLoading && <div style={{color: "var(--grey-2)"}}>Loading cards…</div>}
+          {!cardsLoading && cards.length === 0 && (
+            <div style={{color: "var(--grey-2)", fontStyle: "italic", padding: "16px 0"}}>Nothing saved yet. Save cards from the Intelligence pane and they'll land here.</div>
+          )}
+          <div className="blocks-container">
+            {cards.map(card => (
+              <div key={card.id} className="block-view">
+                <div className="block-claim">{card.claim}</div>
+                {card.frame && <div className="block-frame">{card.frame}</div>}
+                {Array.isArray(card.evidence) && card.evidence.length > 0 && (
+                  <ul className="block-evidence">
+                    {card.evidence.map((line, i) => (
+                      <li key={i}>{typeof line === 'string' ? line : JSON.stringify(line)}</li>
+                    ))}
+                  </ul>
+                )}
+                {card.implication && <div className="block-implication">{card.implication}</div>}
+                <div className="block-actions" style={{justifyContent: "space-between"}}>
+                  <span style={{fontFamily: "var(--font-mono, monospace)", fontSize: 10, color: "var(--iron-darker, #5a5a55)", textTransform: "uppercase", letterSpacing: "0.06em"}}>
+                    Saved {new Date(card.saved_at).toLocaleDateString()}
+                  </span>
+                  <button className="btn ghost" onClick={async () => {
+                    if (!confirm('Remove this card from the project? Soft-delete; nothing else is affected.')) return;
+                    try { await deleteProjectCardApi(card.id); setCards(prev => prev.filter(c => c.id !== card.id)); }
+                    catch (e) { alert('Remove failed: ' + (e.message || e)); }
+                  }}>Remove</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <CreateProjectModal
+        isOpen={showCreate}
+        onClose={() => setShowCreate(false)}
+        onCreated={(p) => {
+          setShowCreate(false);
+          setProjects(prev => [p, ...prev.filter(x => x.id !== p.id)]);
+          setSelectedId(p.id);
+        }}
+      />
+
+      {renaming && (
+        <div className="public-promote-overlay" onClick={() => !savingRename && setRenaming(null)}>
+          <div className="public-promote-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Edit project</h3>
+            <label>Name
+              <input type="text" value={renaming.name} onChange={(e) => setRenaming({ ...renaming, name: e.target.value })} />
+            </label>
+            <label>Notes
+              <textarea rows={3} value={renaming.notes || ''} onChange={(e) => setRenaming({ ...renaming, notes: e.target.value })} />
+            </label>
+            <div className="public-promote-actions">
+              <button className="btn ghost" onClick={() => setRenaming(null)} disabled={savingRename}>Cancel</button>
+              <button className="btn primary" onClick={submitRename} disabled={savingRename || !renaming.name.trim()}>
+                {savingRename ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const PublicCorpusMode = () => {
   const [tab, setTab] = useState('insights');  // 'insights' | 'questions' | 'analytics'
   const [insights, setInsights] = useState([]);
@@ -5363,6 +5734,219 @@ const PUBLIC_CORPUS_CATEGORIES = [
   'general',
 ];
 
+/* -------------------------------------------------------------------------
+ * BlockView + SaveToProjectButton
+ * -------------------------------------------------------------------------
+ * The Intelligence pane renders each insight block as a card with a
+ * "Save to project" button. Blocks come from the synth output's blocks[]
+ * field (persisted in the structured_synth_output scratch meta entry).
+ * Save flow: click -> if no active project, prompt to pick or create ->
+ * POST bjl-project-cards with the block + full structured payload as
+ * provenance.
+ * ------------------------------------------------------------------------- */
+
+const BlockView = ({ block, blockIndex, structured, jobId, question, activeProjectId, projects, onSaved, onNeedProject }) => {
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState(null);
+
+  if (!block || !block.claim) return null;
+
+  const evidence = Array.isArray(block.evidence) ? block.evidence : [];
+
+  const save = async () => {
+    if (!activeProjectId) { onNeedProject && onNeedProject(); return; }
+    setSaving(true); setError(null);
+    try {
+      const card = await saveProjectCardApi({
+        project_id:         activeProjectId,
+        claim:              block.claim,
+        frame:              block.frame || null,
+        evidence:           evidence,
+        implication:        block.implication || null,
+        provenance:         structured || null,
+        source_job_id:      jobId || null,
+        source_block_index: Number.isFinite(blockIndex) ? blockIndex : null,
+        source_question:    question || null,
+      });
+      setSaved(true);
+      onSaved && onSaved(card);
+    } catch (e) {
+      setError(String(e.message || e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const activeProject = (projects || []).find(p => p.id === activeProjectId) || null;
+
+  return (
+    <div className="block-view">
+      <div className="block-claim">{block.claim}</div>
+      {block.frame && <div className="block-frame">{block.frame}</div>}
+      {evidence.length > 0 && (
+        <ul className="block-evidence">
+          {evidence.map((line, i) => (
+            <li key={i}>{typeof line === 'string' ? line : JSON.stringify(line)}</li>
+          ))}
+        </ul>
+      )}
+      {block.implication && <div className="block-implication">{block.implication}</div>}
+      <div className="block-actions">
+        {saved ? (
+          <span className="block-saved-note">Saved to {activeProject ? activeProject.name : 'project'}.</span>
+        ) : (
+          <button className="btn ghost block-save-btn"
+            onClick={save}
+            disabled={saving}
+            title={activeProjectId ? `Save this insight to ${activeProject ? activeProject.name : 'the active project'}` : 'Pick a project first'}>
+            {saving ? 'Saving…' : (activeProjectId ? 'Save to project' : 'Save to project…')}
+          </button>
+        )}
+        {error && <span className="block-save-error">{error}</span>}
+      </div>
+    </div>
+  );
+};
+
+/* -------------------------------------------------------------------------
+ * ProjectSelector — header dropdown for the Intelligence pane.
+ * -------------------------------------------------------------------------
+ * Shows the active project by name, opens a menu to switch, and includes
+ * a "+ New project" affordance that pops the create modal.
+ * ------------------------------------------------------------------------- */
+const ProjectSelector = ({ projects, activeProjectId, onSelect, onOpenCreate }) => {
+  const [open, setOpen] = useState(false);
+  const active = (projects || []).find(p => p.id === activeProjectId) || null;
+
+  return (
+    <div className="project-selector">
+      <button type="button" className="project-selector-trigger"
+        onClick={() => setOpen(o => !o)}
+        title="Switch project">
+        <span className="project-selector-label">Project</span>
+        <span className="project-selector-value">{active ? active.name : '— none —'}</span>
+        <span className="project-selector-caret">{open ? '▲' : '▼'}</span>
+      </button>
+      {open && (
+        <div className="project-selector-menu" onMouseLeave={() => setOpen(false)}>
+          {(projects || []).length === 0 && (
+            <div className="project-selector-empty">No projects yet.</div>
+          )}
+          {(projects || []).map(p => (
+            <button key={p.id} type="button"
+              className={"project-selector-item" + (p.id === activeProjectId ? " active" : "")}
+              onClick={() => { onSelect(p.id); setOpen(false); }}>
+              <span className="project-selector-item-name">{p.name}</span>
+              <span className="project-selector-item-count">{p.card_count || 0}</span>
+            </button>
+          ))}
+          <button type="button" className="project-selector-create"
+            onClick={() => { setOpen(false); onOpenCreate(); }}>
+            + New project
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* -------------------------------------------------------------------------
+ * CreateProjectModal — minimal name + notes creation form.
+ * ------------------------------------------------------------------------- */
+const CreateProjectModal = ({ isOpen, onClose, onCreated }) => {
+  const [name, setName] = useState('');
+  const [notes, setNotes] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(null);
+
+  useEffect(() => { if (!isOpen) { setName(''); setNotes(''); setError(null); } }, [isOpen]);
+  if (!isOpen) return null;
+
+  const submit = async () => {
+    if (!name.trim()) { setError('name required'); return; }
+    setSubmitting(true); setError(null);
+    try {
+      const project = await createProjectApi({ name: name.trim(), notes: notes.trim() || null });
+      onCreated && onCreated(project);
+    } catch (e) {
+      setError(String(e.message || e));
+    } finally { setSubmitting(false); }
+  };
+
+  return (
+    <div className="public-promote-overlay" onClick={onClose}>
+      <div className="public-promote-modal" onClick={(e) => e.stopPropagation()}>
+        <h3>New project</h3>
+        <p className="public-promote-help">A project is a per-engagement scratch set. Saved insight cards land in the active project.</p>
+        <label>Name
+          <input type="text" value={name} onChange={(e) => setName(e.target.value)}
+            placeholder="e.g. HI USA — spring pitch" autoFocus />
+        </label>
+        <label>Notes (optional)
+          <textarea rows={3} value={notes} onChange={(e) => setNotes(e.target.value)}
+            placeholder="Brand, brief, dates — anything a synthesis run should reference later." />
+        </label>
+        {error && <div className="public-promote-error">{error}</div>}
+        <div className="public-promote-actions">
+          <button className="btn ghost" onClick={onClose} disabled={submitting}>Cancel</button>
+          <button className="btn primary" onClick={submit} disabled={submitting}>
+            {submitting ? 'Creating…' : 'Create project'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* -------------------------------------------------------------------------
+ * SavedCardsDrawer — right-side toggle showing the active project's cards.
+ * ------------------------------------------------------------------------- */
+const SavedCardsDrawer = ({ isOpen, onClose, project, cards, loading, onRemove, onReload }) => {
+  if (!isOpen) return null;
+  const list = Array.isArray(cards) ? cards : [];
+  return (
+    <div className="saved-cards-drawer">
+      <div className="saved-cards-drawer-head">
+        <div>
+          <div className="saved-cards-drawer-title">{project ? project.name : 'No project selected'}</div>
+          <div className="saved-cards-drawer-subtitle">{list.length} card{list.length === 1 ? '' : 's'} saved</div>
+        </div>
+        <button className="btn ghost" onClick={onClose} title="Close drawer">×</button>
+      </div>
+      {loading && <div className="saved-cards-loading">Loading…</div>}
+      {!loading && list.length === 0 && (
+        <div className="saved-cards-empty">Nothing saved yet. Click "Save to project" on any block to add it here.</div>
+      )}
+      <div className="saved-cards-list">
+        {list.map(card => (
+          <div key={card.id} className="saved-card">
+            <div className="saved-card-claim">{card.claim}</div>
+            {card.frame && <div className="saved-card-frame">{card.frame}</div>}
+            {Array.isArray(card.evidence) && card.evidence.length > 0 && (
+              <ul className="saved-card-evidence">
+                {card.evidence.map((line, i) => (
+                  <li key={i}>{typeof line === 'string' ? line : JSON.stringify(line)}</li>
+                ))}
+              </ul>
+            )}
+            {card.implication && <div className="saved-card-implication">{card.implication}</div>}
+            <div className="saved-card-meta">
+              <span>Saved {new Date(card.saved_at).toLocaleDateString()}</span>
+              <button className="btn ghost saved-card-remove"
+                onClick={async () => {
+                  if (!confirm('Remove this card from the project? This is soft-delete; nothing else is affected.')) return;
+                  try { await deleteProjectCardApi(card.id); onRemove && onRemove(card.id); }
+                  catch (e) { alert('Remove failed: ' + (e.message || e)); }
+                }}>Remove</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
 // Reusable inline action on Joy Map / Audience Map / Intelligence-pane
 // finding cards. Renders a small "Add to public corpus" link; opens a
 // modal that pre-fills from the finding and posts to bjl-public-promote.
@@ -5527,7 +6111,7 @@ const App = ({ authedUser = null, onSignOut = null } = {}) => {
     intelligence:  ["Workbench", "Intelligence engine", "Ask the Lab"],
     outreach:      ["Workbench", "Outreach", "Accounts"],
     joy_map:       ["Workbench", "Joy Map"],
-    public_corpus: ["Workbench", "Public Corpus"],
+    public_corpus: ["Workbench", "Projects"],
   }[mode] || ["Workbench"];
 
   const showDrawer = drawerOpen && mode !== "outreach" && mode !== "joy_map" && mode !== "public_corpus";
@@ -5576,8 +6160,8 @@ const App = ({ authedUser = null, onSignOut = null } = {}) => {
               setStrategistContext={setStrategistContext} />}
             {mode === "joy_map" && <JoyMapMode
               key={`joymap-${sessionKey}`} />}
-            {mode === "public_corpus" && <PublicCorpusMode
-              key={`pubcorp-${sessionKey}`} />}
+            {mode === "public_corpus" && <ProjectsMode
+              key={`projects-${sessionKey}`} />}
           </div>
           {showDrawer && <EvidenceDrawer rows={evidenceRows} filter={drawerFilter} onFilter={setDrawerFilter} />}
         </div>
