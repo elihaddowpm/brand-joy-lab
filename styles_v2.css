@@ -3867,3 +3867,222 @@ textarea { font-family: var(--font-text); }
   font-weight: 500;
   color: var(--iron-darker, #5a5a55);
 }
+
+/* -------------------------------------------------------------------------
+ * Move 2 — project collections: BlockView, ProjectSelector, SavedCardsDrawer
+ * ------------------------------------------------------------------------- */
+.blocks-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin: 16px 0;
+}
+.block-view {
+  background: var(--paper-2, #f4f3ed);
+  border: 1px solid var(--iron, #e2e2dc);
+  border-radius: 6px;
+  padding: 16px 18px;
+}
+.block-claim {
+  font-family: var(--font-display, Georgia, serif);
+  font-size: 18px;
+  line-height: 1.35;
+  color: var(--ink, #1a1a17);
+  margin-bottom: 6px;
+}
+.block-frame {
+  color: var(--iron-darker, #5a5a55);
+  font-size: 14px;
+  margin-bottom: 10px;
+}
+.block-evidence {
+  margin: 0 0 10px 0;
+  padding-left: 20px;
+  font-size: 13.5px;
+  color: var(--ink, #1a1a17);
+}
+.block-evidence li { margin: 4px 0; line-height: 1.5; font-variant-numeric: tabular-nums; }
+.block-implication {
+  font-size: 13.5px;
+  color: var(--ink, #1a1a17);
+  border-top: 1px dashed var(--iron, #e2e2dc);
+  padding-top: 8px;
+  margin-top: 6px;
+  font-style: italic;
+}
+.block-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+.block-save-btn { font-size: 12px; }
+.block-saved-note { font-size: 12px; color: var(--iron-darker, #5a5a55); font-style: italic; }
+.block-save-error { font-size: 11px; color: #a24a2a; }
+
+.project-selector { position: relative; }
+.project-selector-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: 1px solid var(--iron, #e2e2dc);
+  border-radius: 4px;
+  padding: 5px 10px;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--iron-darker, #5a5a55);
+  cursor: pointer;
+}
+.project-selector-trigger:hover { background: var(--paper-2, #f4f3ed); }
+.project-selector-label { text-transform: uppercase; letter-spacing: 0.08em; }
+.project-selector-value { color: var(--ink, #1a1a17); font-weight: 500; }
+.project-selector-caret { font-size: 8px; color: var(--iron-darker, #5a5a55); }
+.project-selector-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 240px;
+  background: var(--paper, #fbfaf6);
+  border: 1px solid var(--iron, #e2e2dc);
+  border-radius: 4px;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.08);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+}
+.project-selector-empty { padding: 10px 12px; font-size: 12px; color: var(--iron-darker, #5a5a55); }
+.project-selector-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--iron-light, #ededea);
+  text-align: left;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--ink, #1a1a17);
+}
+.project-selector-item:hover { background: var(--paper-2, #f4f3ed); }
+.project-selector-item.active { background: var(--paper-2, #f4f3ed); font-weight: 500; }
+.project-selector-item-count {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--iron-darker, #5a5a55);
+}
+.project-selector-create {
+  padding: 8px 12px;
+  background: transparent;
+  border: 0;
+  text-align: left;
+  color: var(--iron-darker, #5a5a55);
+  font-size: 12px;
+  cursor: pointer;
+}
+.project-selector-create:hover { background: var(--paper-2, #f4f3ed); color: var(--ink, #1a1a17); }
+
+.intel-saved-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  padding: 5px 10px;
+}
+.saved-count-badge {
+  display: inline-block;
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--iron, #e2e2dc);
+  color: var(--ink, #1a1a17);
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  text-align: center;
+}
+
+.saved-cards-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(420px, 92vw);
+  background: var(--paper, #fbfaf6);
+  border-left: 1px solid var(--iron, #e2e2dc);
+  box-shadow: -6px 0 20px rgba(0,0,0,0.08);
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+}
+.saved-cards-drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--iron, #e2e2dc);
+}
+.saved-cards-drawer-title {
+  font-family: var(--font-display, Georgia, serif);
+  font-size: 18px;
+  color: var(--ink, #1a1a17);
+}
+.saved-cards-drawer-subtitle {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--iron-darker, #5a5a55);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-top: 2px;
+}
+.saved-cards-loading, .saved-cards-empty {
+  padding: 20px;
+  color: var(--iron-darker, #5a5a55);
+  font-size: 13px;
+}
+.saved-cards-empty { font-style: italic; }
+.saved-cards-list {
+  overflow-y: auto;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.saved-card {
+  background: var(--paper-2, #f4f3ed);
+  border: 1px solid var(--iron, #e2e2dc);
+  border-radius: 5px;
+  padding: 12px 14px;
+}
+.saved-card-claim {
+  font-family: var(--font-display, Georgia, serif);
+  font-size: 15px;
+  color: var(--ink, #1a1a17);
+  margin-bottom: 4px;
+  line-height: 1.35;
+}
+.saved-card-frame { font-size: 12.5px; color: var(--iron-darker, #5a5a55); margin-bottom: 8px; }
+.saved-card-evidence { margin: 4px 0 8px 0; padding-left: 18px; font-size: 12.5px; }
+.saved-card-evidence li { margin: 3px 0; line-height: 1.45; }
+.saved-card-implication { font-size: 12.5px; font-style: italic; margin-top: 6px; }
+.saved-card-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--iron, #e2e2dc);
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  color: var(--iron-darker, #5a5a55);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.saved-card-remove { font-size: 10px; padding: 3px 8px; }
+
+.public-promote-help + .public-promote-error,
+.public-promote-error {
+  color: #a24a2a;
+  font-size: 12px;
+  margin-top: 6px;
+}
