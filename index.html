@@ -2675,57 +2675,11 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
     window.location.replace(cleanUrl);
   }, []);
 
-  // v6.1 — Auto-extract publishable candidates from each completed turn.
-  // Runs as Haiku in the background after a turn lands; never blocks the
-  // response flow. Skips clarification turns and any turn that already
-  // has candidates set. Stores them on the turn as
-  // turn.publicCandidates (array; empty array means "ran but nothing
-  // qualified", null/undefined means "not yet attempted").
-  useEffect(() => {
-    if (running) return;
-    if (turns.length === 0) return;
-    const lastIdx = turns.length - 1;
-    const lastTurn = turns[lastIdx];
-    if (!lastTurn) return;
-    if (lastTurn.isClarification) return;
-    if (lastTurn.publicCandidates !== undefined) return;
-    if (!lastTurn.response || lastTurn.response.trim().length < 200) return;
-
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await fetch('/.netlify/functions/bjl-extract-public-candidates', authedFetchInit({
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            original_question: lastTurn.prompt || '',
-            response_text:     lastTurn.response || '',
-            turn_id:           `t${lastIdx}-${Date.now()}`,
-          }),
-        }));
-        if (!r.ok || cancelled) {
-          if (!cancelled) {
-            setTurns(prev => prev.map((t, i) =>
-              i === lastIdx ? { ...t, publicCandidates: [] } : t
-            ));
-          }
-          return;
-        }
-        const j = await r.json();
-        if (cancelled) return;
-        setTurns(prev => prev.map((t, i) =>
-          i === lastIdx ? { ...t, publicCandidates: Array.isArray(j.candidates) ? j.candidates : [] } : t
-        ));
-      } catch (_err) {
-        if (!cancelled) {
-          setTurns(prev => prev.map((t, i) =>
-            i === lastIdx ? { ...t, publicCandidates: [] } : t
-          ));
-        }
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [turns, running]);
+  // The v6.1 auto-extract-publishable-candidates effect was removed with
+  // the Projects redesign. Insights now save to project collections via
+  // the BlockView Save-to-project button, not to a public corpus staging
+  // pile. The bjl-extract-public-candidates endpoint remains callable but
+  // no code in the Intelligence pane pings it.
 
   const copyConversation = useCallback(() => {
     const all = turns.map((t, i) =>
@@ -2941,12 +2895,9 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
                       ))}
                     </div>
                   )}
-                  {/* v6.1 — Public Corpus candidate insights, auto-extracted
-                      from this turn. Empty array means the extractor ran and
-                      found nothing publishable. */}
-                  {Array.isArray(t.publicCandidates) && t.publicCandidates.length > 0 && (
-                    <PublicCandidatesPanel candidates={t.publicCandidates} sourceTurnPrompt={t.prompt} />
-                  )}
+                  {/* PublicCandidatesPanel removed with the Projects redesign.
+                      Insights save via BlockView above, targeted at the active
+                      project rather than the public corpus staging pile. */}
                   {/* Triage-provided followup chips. Only on the last turn so the
                       conversation feed stays clean. Clicking a chip submits it
                       as the next follow-up question. */}
