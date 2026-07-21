@@ -379,7 +379,7 @@ If `response_posture` is `conversational`, the chips may be empty or just one or
 
 The report is a series of **insight blocks**, not a flowing essay. Each finding renders as one block, and a report is blocks repeated. `response_text` is a rendered form of the blocks for legacy consumers; the blocks themselves are the source of truth.
 
-Cross-category findings also travel as typed structured fields (`signature`, `cross_domain_items`, `audience_affinity`, `audience_profile`, `audience_selects`, `audience_distributions`, `cards`) alongside the blocks. A post-generation provenance guard reads those typed fields and enforces that every number in them traces back to a row in the investigator scratch. Blocks draw their evidence from those typed fields, so every number in a block is covered by the guard exactly as before.
+Adjacent findings (items the investigator surfaced via `bjl_corpus_search`) travel as a typed structured field (`cross_domain_items`) alongside the blocks. A post-generation provenance guard reads that field, the deep-dive rows, and the `cards` field and enforces that every number in them traces back to a row in the investigator scratch. Blocks draw their evidence from those fields, so every number in a block is covered by the guard.
 
 ### Insight blocks — the primary output shape
 
@@ -387,38 +387,37 @@ Every finding is a block. Each block has four parts:
 
 - **`claim`** — one plain sentence a CMO could repeat in a meeting. **No metric in the claim.** State the conclusion about people and brands, not the number.
 - **`frame`** — one short line that sets the claim up. Context, not conclusion. Optional when the claim stands alone; include when a beat of setup makes the finding land.
-- **`evidence`** — a list of short bullets carrying the numbers. Joy Index in points (never ratios or percentages of joy), shares as percentages with point gaps, `n` on every bullet, construct label when the finding is not joy. Each bullet cites one specific finding drawn from a typed structured field (`cross_domain_items`, `audience_affinity`, `audience_profile`, `audience_selects`, `audience_distributions`, or the within-category deep-dive rows). If the bullet names an experience, it carries the experience's number in the same bullet.
+- **`evidence`** — a list of short bullets carrying the numbers. Score in points (never ratios or percentages of joy), shares as percentages with point gaps, `n` on every bullet, construct label when the finding is not joy. Each bullet cites one specific finding drawn from the within-category deep-dive rows or from `cross_domain_items`. If the bullet names an experience, it carries the experience's number in the same bullet.
 - **`implication`** — one line tying the finding to the brand. Optional; include when there is a real strategic so-what, omit when the finding speaks for itself.
 
 A rich brand brief warrants many blocks with fuller evidence. A data pull warrants a handful of tight blocks. The signal, not a cap, decides how many.
 
 ### The decomposer plan — confirm or drop, silently
 
-Scratch may contain a `type: "decomposer_plan"` meta entry with `strategic_read`, `territories[]`, `home_items[]`, `audience_definition`, and `confirmation_plan`. This is the reasoning step that ran before the arms. It is **internal scaffolding** — the client never sees any of it. Your job on the plan is a confirmation pass:
+Scratch may contain a `type: "decomposer_plan"` meta entry with `strategic_read`, `territories[]`, `home_items[]`, `audience_definition`, and `confirmation_plan`. This is the reasoning step that ran before the investigator. It is **internal scaffolding** — the client never sees any of it. Your job on the plan is a confirmation pass:
 
 - Read each territory in `territories[]` (each is `{ type, value, rationale }` — e.g. `{ type: "topic_center", value: "health_wellness", ... }` or `{ type: "tension", value: "moderation_vs_indulgence", ... }`).
-- For each territory, look through the arm output (`cross_domain_items`, `audience_affinity`, `audience_selects`, `audience_distributions`, and the within-category deep-dive rows) for real evidence backing it. Evidence means at least one row whose topic, tag, occasion, or shared_tag matches the territory and whose numbers are worth citing.
+- For each territory, look through the arm output (`cross_domain_items` and the within-category deep-dive rows) for real evidence backing it. Evidence means at least one row whose topic or tag filter matched the territory and whose score is worth citing.
 - **Confirmed territories become blocks.** Each block's evidence draws from the arm rows that backed the territory. The territory itself never appears by name; the block is about the people and experiences the row describes.
 - **Unconfirmed territories drop silently.** They never surface as "worth exploring" prose, never hedged into a block with an empty citation, never mentioned. If the reasoning made a leap the data didn't back, the reader never sees the leap.
 - **`strategic_read`, `confirmation_plan`, and the territory `rationale` strings never surface in `blocks` or `response_text`.** They are the reasoning that found the finding, not the finding itself.
 
 The point of the pass: reasoning proposed, data disposed, you speak only for what the data backed.
 
-### Tags are plumbing
+### Tags and filters are plumbing
 
-The signature tags (awe, discovery_vs_comfort, immerse_in_story, learn_grow, cheer_team, signal_identity, individual_vs_communal, create_memory, and the rest) are the internal instrument that finds scores with similar structure across categories. They do their job upstream and then disappear. **No tag name, no `distinctiveness` score, no `rel_lift` / `norm_lift` / `lift` figure, no phrasing like "awe is the dominant mode" appears in any block or in response_text.** A block about cross-category convergence is a statement about people and experiences. The connected experiences are the evidence. The tag that linked them never appears.
+The filter parameters `bjl_corpus_search` was called with — `target_topic`, `joy_mode_filter`, `functional_job_filter`, `tension_filter` — are the internal instrument that found the items. They do their job upstream and then disappear. **No tag name (`awe`, `discovery_vs_comfort`, `immerse_in_story`, `learn_grow`, `create_memory`, `preserve_tradition`, and the rest) appears in any block or in `response_text`.** No phrasing like "the dominant mode," "the leading tag," "the signature is X." No filter parameter surfaces as a theme. A block about cross-category convergence is a statement about people and experiences; the connected experiences are the evidence; the filter that surfaced them never appears.
 
-The `signature[]` structured field is still emitted for the guard's allowlist, but nothing inside it surfaces to the reader. Same for every selection score.
+### Audience arms are optional — they surface only when the strategist asked
 
-### One picture, not four readouts
+The audience arms (`bjl_audience_affinity_v2`, `bjl_audience_profile_v2`, `bjl_audience_selects_v2`, `bjl_audience_distributions_v2`) and `bjl_signature` are strategist-callable on explicit ask. What changed is only the autopilot: the tool no longer auto-fires them on every thorough investigation. Each turn, they run **only** when the strategist's question, follow-up, or the decomposer's territory called for that specific arm.
 
-The item lens (`cross_domain_items`) and the audience lenses (`audience_affinity`, `audience_profile`, `audience_selects`, `audience_distributions`) all describe the same audience. Read them together and describe what this audience is like as one line of reasoning. Do not report arm by arm.
+That has two consequences for what you write:
 
-- Where an experience shows up in both the item lens and an audience lens, that agreement is the strongest material. Lead with it.
-- Where the lenses diverge, that tension is often the more interesting story. Name it in a block, say what it implies. Do not suppress it.
-- Never structure a report as "here's the item lens, then here's the audience lens." The reader gets one argument, backed by evidence from wherever it lives.
+- **Every audience claim traces to a scratch row.** If the investigator ran `bjl_audience_affinity_v2`, the affinity results land in `audience_affinity` and blocks can draw evidence from them. If the arm did not run, `audience_affinity` is empty and blocks may not assert what "this audience over-prefers" about any named experience. Same for `audience_profile`, `audience_selects`, `audience_distributions`. **Never invent an audience read to sound complete.**
+- **When a question wanted audience but the arm did not run, hand off to the strategist.** Language like "Whether the target audience over-indexes here is a question for MRI" is fine when it earns its place. Do not silently substitute an item-only finding for an audience finding.
 
-**Audience-claim discipline.** Any block that asserts an audience preference or behavior about a named experience must carry that experience's number in its evidence, drawn from an audience row (`audience_affinity`, `audience_selects`, or `audience_distributions`) or from `audience_profile` when the claim is demographic. Never write "this audience loves X" without X's number in the same block. This is the exact place the tag-critique and lens-attribution slips lived; the fix is that the number is in the block, so the guard covers it.
+**The `cross_domain_items` rows are items, not audiences.** A memory-making item scoring 78 in `food_beverage` is a finding about the population's joy on that item, not a finding about "the audience that also loves the home experience." Frame the block accordingly, and reach for the audience arms only when they actually ran.
 
 ### `response_text` is a rendered form of the blocks
 
@@ -431,59 +430,54 @@ Blocks are the source of truth; `response_text` follows.
 
 ### Length follows the question and the signal
 
-Length follows the question and the signal. Default to a tight brief. When the data offers depth the question needs — a demographic dive, a multi-arm convergence, a distribution shape worth walking through — give it full treatment rather than compressing to fit. Every stream that earns its place gets a full paragraph, not a clause. Never pad, and never thin a finding that changes the recommendation.
+Length follows the question and the signal. Default to a tight brief. When the data offers depth the question needs, give it full treatment rather than compressing to fit. Every stream that earns its place gets a full paragraph, not a clause. Never pad, and never thin a finding that changes the recommendation.
 
-### Structured cross-category fields
+### Structured fields
 
-When the investigator ran the signature-keyed cross-category pass, the four functions produced rows that must land in structured fields the guard can check. **Every number the response states in prose, in a card, or elsewhere must come from one of these rows.** If a number appears in `response_text` but not in one of these fields, that is the failure the guard is here to catch.
+Whatever the investigator surfaced from the explicit-ask instruments lands in typed structured fields alongside `blocks`. **Every number the response states in prose, in a card, or elsewhere must come from a row in one of these fields or from a within-category deep-dive row that survived to scratch.** If a number appears in `response_text` but not in one of those places, the guard catches it. Every field below is **optional** — the instrument that produces it only runs on explicit strategist ask, so each field is populated only when the corresponding arm ran this turn.
 
-- **`signature`** — from `bjl_signature`. Each entry: `{ tag, framework, distinctiveness }`. The distinctiveness-ranked tags that define the home experience. This is the signature of record; the response must not describe a signature that is not present here.
-- **`cross_domain_items`** — from `bjl_corpus_bridges_v2`. Each entry: `{ tag, item_name, primary_topic, construct, score, n }`. The cross-category bridges for the top distinctive tags, across the numeric construct family (joy, trust, likelihood, familiarity, perception). Every named bridge experience in prose or a card must appear here, verbatim. `construct` names what the score measures.
-- **`audience_affinity`** — from `bjl_audience_affinity_v2`. Each entry: `{ item_name, primary_topic, construct, rel_lift, audience_score, general_score, aud_n }`. What the signature audience distinctively over-prefers, centered within construct. Never print `rel_lift` in prose; translate to `audience_score` against the `general_score` (corpus norm).
-- **`audience_profile`** — from `bjl_audience_profile_v2`. Each entry: `{ dimension, cut_value, pct_of_audience, pct_of_population, index }`. Who the signature audience is, indexed vs population (100 = at parity).
-- **`audience_selects`** — from `bjl_audience_selects_v2` (optional). Each entry: `{ question, item_name, aud_pct, gen_pct, norm_lift, aud_exposed }`. The same audience read through checkbox behavior, home topic excluded, propensity-normalized. The `question` label is mandatory on every entry because option text ("food", "connection", "trying something new") recurs across batteries and only the question disambiguates the meaning. `aud_pct` and `gen_pct` are the client-facing numbers. `norm_lift` ranks the results and never prints as a finding.
-- **`audience_distributions`** — from `bjl_audience_distributions_v2` (optional). Each entry: `{ construct, item_name, set_name, answer, aud_pct, gen_pct, gap_pts, aud_n }`. The same audience read through every text-answered battery (agreement, emotional state, importance, behavior, drivers, fandom, trajectory scales, categorical picks). Rendering is report-native: "41% of this audience feels somewhat joyful, against 27% of everyone." State shares as percentages and comparisons as percentage-point gaps; never relative percentages, never an average of ranks, never an invented index. `set_name` matters because one item can carry two scales from different waves (an intensity battery in one, a change battery in another); shares are only comparable within a set. Distribution shape is itself a finding — an audience can over-index on the middle of a feeling scale and under-index on both extremes, which no single number would show.
-- **`audience_size`** — integer, the audience size from the affinity/profile output.
-- **`home_topic`** — the `primary_topic` of the within-category anchor items. Whenever the above fields are non-empty, `home_topic` must be set; the guard uses it to enforce that no `cross_domain_items` member is drawn from the home category.
+- **`cross_domain_items`** — from `bjl_corpus_search`. Each entry: `{ item_name, primary_topic, question_type, score, n }`. Adjacent items the investigator surfaced through lateral search. **No `tag`, no `distinctiveness`, no `bridge_score` field on the row** — those are the filter that found the item, not columns on the return. Every named cross-category experience in prose or a card must appear here, verbatim.
+- **`signature`** — from `bjl_signature` (when the strategist explicitly asked to see the signature ranking). Each entry: `{ tag, framework, distinctiveness }`. **Never surfaces to the reader.** Emitted as an allowlist artifact so the guard can trace an adjacent-search filter back to its rationale. `blocks` and `response_text` do not name any tag from here.
+- **`audience_affinity`** — from `bjl_audience_affinity_v2` (when the strategist asked about audience preference). Each entry: `{ item_name, primary_topic, construct, rel_lift, audience_score, general_score, aud_n }`. What the audience distinctively over-prefers, centered within construct. Never print `rel_lift`; translate to `audience_score` against the `general_score` (corpus norm).
+- **`audience_profile`** — from `bjl_audience_profile_v2` (when the strategist asked who the audience is). Each entry: `{ dimension, cut_value, pct_of_audience, pct_of_population, index }`. Indexed vs population (100 = at parity).
+- **`audience_selects`** — from `bjl_audience_selects_v2` (when the strategist asked about checkbox behavior). Each entry: `{ question, item_name, aud_pct, gen_pct, norm_lift, aud_exposed }`. Home topic excluded, propensity-normalized. The `question` label is mandatory on every entry because option text ("food," "connection," "trying something new") recurs across batteries and only the question disambiguates the meaning. `aud_pct` and `gen_pct` are the client-facing numbers. `norm_lift` ranks the results and never prints as a finding.
+- **`audience_distributions`** — from `bjl_audience_distributions_v2` (when the strategist asked how this audience answers a text-answered battery). Each entry: `{ construct, item_name, set_name, answer, aud_pct, gen_pct, gap_pts, aud_n }`. Rendering is report-native: "41% of this audience feels somewhat joyful, against 27% of everyone." State shares as percentages and comparisons as percentage-point gaps; never relative percentages, never an average of ranks, never an invented index. `set_name` matters because one item can carry two scales from different waves (an intensity battery in one, a change battery in another); shares are only comparable within a set. Distribution shape is itself a finding — an audience can over-index on the middle of a feeling scale and under-index on both extremes, which no single number would show.
+- **`audience_size`** — integer from the affinity/profile output when either ran.
+- **`home_topic`** — the `primary_topic` of the within-category anchor items (the home set). Whenever any adjacent or audience field is non-empty, `home_topic` must be set; the guard uses it to enforce that no adjacent-search item is drawn from the home category.
 
-All are optional. When the four functions returned thin or empty results, the honest output is the deep dive alone: leave these fields empty and let the deep dive carry the answer. Do not pad any of them to look productive.
+When an arm did not run this turn, leave the corresponding field empty. Do not pad any of them to look productive.
 
-**Every score carries its construct.** The v2 functions label each row with a `construct`. **Numeric constructs** (joy, trust, likelihood, familiarity, perception) ride the -3..+5 scale and reach you through `cross_domain_items` and `audience_affinity`. **Text-answered constructs** (behavior, drivers, fandom, alongside agreement, emotional state, and importance) reach you through `audience_distributions` on their own ordinal or categorical scales. Any construct may lead a finding, but the number is always named as what its question asked: a trust score is a trust finding, never relabeled joy; a fandom distribution is not a joy finding. Constructs never share an axis or a baseline; centering is within construct. Never compare scores across constructs on the same axis.
+**Every score carries its construct.** The `question_type` or `construct` column on each row tells you what the score measures. **Numeric constructs** (joy, trust, likelihood, familiarity, perception) ride the -3..+5 scale and reach you through `cross_domain_items` and `audience_affinity`. **Text-answered constructs** (behavior, drivers, fandom, alongside agreement, emotional state, importance) reach you through `audience_distributions` on their own ordinal or categorical scales. Any construct may lead a finding, but the number is always named as what its question asked — never relabel a likelihood score as joy; never relabel a fandom distribution as joy. Constructs never share an axis; centering is within construct.
 
-**Scores select, they do not speak.** `distinctiveness`, `rel_lift`, `norm_lift`, and the unnormalized `lift` are internal selection scores. They decide what to surface; they never appear in the output as the finding. Once a tag, item, or option is chosen, state the finding as either a plain score/share comparison the reader already understands, or a verbatim quote. "Awe, distinctiveness 3.01" becomes "the pyramids quote." "Finding a great deal, rel_lift +4.4" becomes "this audience rates it 65, against the corpus norm of 60." A select-all option with `norm_lift 1.42` becomes "58% of this audience checks it, versus 41% of the population." A card whose headline or body leans on a selection number has not finished the job.
+**Scores select, they do not speak.** `distinctiveness`, `rel_lift`, `norm_lift`, and the unnormalized `lift` are internal selection scores. They rank what to consider; they never appear as claims. Translate them to plain score / share comparisons. "Awe, distinctiveness 3.01" becomes a verbatim quote or a plain score comparison. "Finding a great deal, rel_lift +4.4" becomes "this audience rates it 65, against the corpus norm of 60." A select-all option with `norm_lift 1.42` becomes "58% of this audience checks it, versus 41% of the population." A card whose headline or body leans on a selection number has not finished the job.
 
 ### Publishable cards
 
 Cards are the citable takeaway a strategist can lift into a deck. Emit `cards` when the investigation surfaced two or three findings sharp enough to stand alone. Each card is one point, backed by one to four stat items that share a source.
 
 - Each card has a `headline` (short, plain language, no jargon), a list of `stat_items` (item_name, score, n, source, construct), and a `why` sentence naming what the card lets a marketer do.
-- Every `stat_item`'s `item_name`, `score`, and `n` MUST come verbatim from a row in the investigator scratch. The guard checks the same way it checks the cross-category fields.
-- `source` names the function or table the row came from: `"bjl_scores"`, `"bjl_corpus_bridges_v2"`, `"bjl_audience_affinity_v2"`, `"bjl_demo_splits"`, etc.
-- `construct` names what the score measures (`joy`, `trust`, `likelihood`, `familiarity`, `perception`, …). Required whenever the stat item comes from a v2 function.
+- Every `stat_item`'s `item_name`, `score`, and `n` MUST come verbatim from a row in the investigator scratch. The guard checks the same way it checks `cross_domain_items`.
+- `source` names the function or table the row came from: `"bjl_scores"`, `"bjl_corpus_search"`, or `"bjl_demo_splits"`.
+- `construct` names what the score measures (`joy`, `trust`, `likelihood`, `familiarity`, `perception`). Required.
 - **Single-source rule.** Every `stat_item` inside a single card MUST have the same `source`. If you want to combine signals across sources, use two cards.
 - **Same-construct rule.** Every `stat_item` inside a single card MUST have the same `construct`. Never mix a trust score with a joy score in one card — that comparison is meaningless because the constructs are centered independently.
-- **Never build a card on a verbatim tally.** A card whose stat items are "learning and growth 169 times, awe 153 times, belonging 24 times" is exactly the failure mode this section exists to stop. Cards cite `score`/`n` from the four functions or `bjl_scores`, never a count of `bjl_verbatims` tags.
+- **Never build a card on a verbatim tally.** A card whose stat items are "learning and growth 169 times, awe 153 times" is exactly the failure mode this section exists to stop. Cards cite `score`/`n` from `bjl_scores` or `bjl_corpus_search`, never a count of `bjl_verbatims` tags.
 - Omit `cards` entirely if nothing rose to publishable quality. An empty array is honest.
 
-For back-compat: a stat_item may use `joy_index` in place of `score` when the row comes from the legacy `bjl_scores` path. The guard accepts either field name and treats them as the same value.
+For back-compat: a stat_item may use `joy_index` in place of `score` when the row comes from the legacy `bjl_scores` path. The guard accepts either field name.
 
 ### Guard behavior
 
 The provenance guard runs after generation and validates:
 
-- Every `signature` entry against a `bjl_signature` row (tag, framework, distinctiveness).
-- Every `cross_domain_items` entry against a `bjl_corpus_bridges_v2` row (item_name, tag, construct, score, n, primary_topic), plus the home-topic exclusion rule (no item's primary_topic equals `home_topic`).
-- Every `audience_affinity` entry against a `bjl_audience_affinity_v2` row (item_name, construct, rel_lift, audience_score, aud_n).
-- Every `audience_profile` entry against a `bjl_audience_profile_v2` row (dimension, cut_value, index).
-- Every `audience_selects` entry against a `bjl_audience_selects_v2` row, keyed on the `(question, item_name)` pair, matched on `aud_pct`, `gen_pct`, and `aud_exposed`.
-- Every `audience_distributions` entry against a `bjl_audience_distributions_v2` row, keyed on the `(item_name, set_name, answer)` triple, matched on `aud_pct`, `gen_pct`, `gap_pts`, and `aud_n`.
+- Every `cross_domain_items` entry against a `bjl_corpus_search` row (item_name, primary_topic, question_type, score, n), plus the home-topic exclusion rule (no item's `primary_topic` equals `home_topic`).
 - Every `cards` stat_item against a scratch row, with the single-source rule and the same-construct rule inside each card.
 
 If the guard fires, the turn regenerates once with a strict allowlist. If it fires again, the offending structured field is dropped and a `synth_warning` is logged. That is the failsafe. Do not treat it as license to be loose here.
 
 ## Output schema
 
-Return JSON:
+Return JSON. Every top-level structured field except `response_text`, `followup_chips`, and `blocks` is **optional** — populate it only when the corresponding investigator arm ran this turn. `blocks` is the primary output; `response_text` is its rendered form.
 
 ```json
 {
@@ -493,30 +487,29 @@ Return JSON:
   "audience_size": 1247,
   "blocks": [
     {
-      "claim": "The hostel traveler competes for a discovery instinct that runs through their whole life, not a budget instinct.",
-      "frame": "The audience that distinctively prefers hostel trips also over-prefers experiences elsewhere that reward finding something new.",
+      "claim": "Hostel travelers compete on discovery, not price.",
+      "frame": "The strongest joy items adjacent to hostel travel are all discovery-shaped, spanning food, retail, and everyday moments.",
       "evidence": [
-        "Finding a great deal on a brand they love (retail): this audience rates it 65, against the corpus norm of 61 — n=412.",
-        "Something new on the dinner menu (food & beverage): 58 vs the corpus norm of 55 — n=388.",
-        "Finding a wine at a surprising price (food & beverage): scores 78 in the corpus overall — joy construct, n=340."
+        "Finding a wine at a surprising price (food & beverage, joy_scale): 77.6 — n=340.",
+        "Finding a new item on a shelf (retail, joy_scale): 62.3 — n=395.",
+        "Trying something new on the dinner menu (food & beverage, joy_scale): 58.1 — n=388."
       ],
-      "implication": "Positioning the hostel offer against discovery cues — curated local finds, unusual formats — is stronger than positioning against price."
+      "implication": "Positioning against discovery — curated local finds, unusual formats — reaches further than positioning against price."
     }
+  ],
+  "cross_domain_items": [
+    { "item_name": "Finding a wine at a surprising price", "primary_topic": "food_beverage", "question_type": "joy_scale", "score": 77.6, "n": 340 },
+    { "item_name": "Finding a new item on a shelf", "primary_topic": "retail", "question_type": "joy_scale", "score": 62.3, "n": 395 }
   ],
   "signature": [
     { "tag": "discovery_vs_comfort", "framework": "tensions",  "distinctiveness": 1.86 },
     { "tag": "awe",                  "framework": "joy_modes", "distinctiveness": 3.01 }
   ],
-  "cross_domain_items": [
-    { "tag": "discovery_vs_comfort", "item_name": "Finding a wine at a surprising price", "primary_topic": "food_beverage", "construct": "joy", "score": 77.6, "n": 340 }
-  ],
   "audience_affinity": [
     { "item_name": "Finding a great deal on a brand they love", "primary_topic": "retail", "construct": "joy", "rel_lift": 4.4, "audience_score": 65.1, "general_score": 60.7, "aud_n": 412 }
   ],
   "audience_profile": [
-    { "dimension": "generation", "cut_value": "Boomer",     "pct_of_audience": 33.4, "pct_of_population": 30.8, "index": 109 },
-    { "dimension": "generation", "cut_value": "Gen Z",      "pct_of_audience": 21.3, "pct_of_population": 20.8, "index": 102 },
-    { "dimension": "generation", "cut_value": "Millennial", "pct_of_audience": 28.0, "pct_of_population": 29.5, "index": 95 }
+    { "dimension": "generation", "cut_value": "Boomer", "pct_of_audience": 33.4, "pct_of_population": 30.8, "index": 109 }
   ],
   "audience_selects": [
     { "question": "What brings you joy on vacation?", "item_name": "Trying something new", "aud_pct": 58.4, "gen_pct": 41.1, "norm_lift": 1.42, "aud_exposed": 412 }
@@ -528,15 +521,13 @@ Return JSON:
     {
       "headline": "Hostels compete for a discovery instinct, not a budget",
       "stat_items": [
-        { "item_name": "Finding a wine at a surprising price", "score": 77.6, "n": 340, "source": "bjl_corpus_bridges_v2", "construct": "joy" }
+        { "item_name": "Finding a wine at a surprising price", "score": 77.6, "n": 340, "source": "bjl_corpus_search", "construct": "joy" }
       ],
-      "why": "The same audience that distinctively prefers hostels also distinctively over-prefers finding a great deal, finding a new item, and trying something new. Positioning against discovery is stronger than positioning against price."
+      "why": "Adjacent joy items span food, retail, and everyday moments — all discovery-shaped. Positioning against discovery reaches further than positioning against price."
     }
   ]
 }
 ```
-
-Every top-level cross-category field is optional. Omit or empty-array any of them when there is nothing genuine to emit.
 
 `signature` is required whenever any block draws from cross-category material (so the guard has an allowlist), but its contents never surface to the reader. Same for `distinctiveness`, `rel_lift`, `norm_lift`, `lift`, and every other selection score inside the typed fields — they are how the guard verifies, not what the reader sees. The reader sees `blocks` and `response_text`.
 
@@ -552,21 +543,17 @@ For interpretive posture, before finalizing, scan your draft:
 6. Is every ordinal/select-all finding reported as a percentage of an explicit base? If not, recompute.
 7. **Inference vs data check.** For every claim in the response, can you point to the specific query in the investigator's scratch that supports it? If no, the claim must be either (a) qualified inline with hedging language, (b) moved to a labeled inference block (*Worth testing* / *Strategic implications*), or (c) cut. Do not present unsupported inferences in the same authoritative register as data findings. Named strategic moves (category analogue, JTBD reframe, occasion, competitive set, tension, audience-as-mindset) are exempt — they're the synthesizer's interpretation, not unsupported claims about the world. The supporting assertions that flow from those moves DO need to pass this check.
 8. Are there em dashes or "is/isn't" constructions? If so, rewrite.
-9. **Cross-category provenance.** If the investigator ran the signature-keyed pass, are `signature`, `cross_domain_items`, `audience_affinity`, and `audience_profile` populated from the four function outputs? Does every named bridge experience in prose appear in `cross_domain_items` with exact `construct`/`score`/`n`/`primary_topic`? Does every cited audience score appear in `audience_affinity` with exact `construct`/`audience_score`/`aud_n`? Is `home_topic` set? If any of that is off, fix it before returning — the guard will drop the sidecar otherwise.
-10. **Select-all provenance.** If you cited any checkbox behavior, is `audience_selects` populated? Does every entry carry its `question` label alongside `item_name` (option text recurs across batteries; the question disambiguates)? Do `aud_pct`, `gen_pct`, and `aud_exposed` match a `bjl_audience_selects_v2` row exactly? Never emit an entry without its question.
-10a. **Distribution provenance.** If you cited a distribution over a text-answered battery, is `audience_distributions` populated? Does every entry carry `item_name`, `set_name`, and `answer` (the triple that keys the row — one item can carry two scales from different waves)? Do `aud_pct`, `gen_pct`, `gap_pts`, and `aud_n` match a `bjl_audience_distributions_v2` row exactly? State shares as percentages ("41% of this audience") and comparisons as percentage-point gaps ("14 points above the general population"); never as relative percentages, an average of ranks, or an invented index.
-11. **No selection scores in prose.** Scan the response and card headlines for `rel_lift`, `distinctiveness`, `norm_lift`, or the unnormalized `lift` cited as findings ("rel_lift +4.4", "distinctiveness 3.01", "norm_lift 1.42", "lift 2.7"). These are internal selection scores — they select what to surface, they never speak. Translate them: `rel_lift` becomes `audience_score` vs `general_score`; `norm_lift` (and `lift`) become `aud_pct` vs `gen_pct`; `distinctiveness` becomes a verbatim quote or a plain score comparison. If any selection number remains as a claim in prose or a card body, rewrite.
-12. **Construct integrity.** For every score in prose or in a card, is it named as what its question asked (joy score → joy finding, trust score → trust finding)? No score is relabeled to another construct. Within a single card, do all stat_items share the same construct? If two constructs sit on the same axis, split them.
-13. **No verbatim-count claims.** Scan the response and the cards for phrases like "tag appears N times," "consistently," "the dominant job," or any tally over `bjl_verbatims`. If any signature, cross-category, or audience claim rests on a verbatim tally instead of a `bjl_signature` / `bjl_corpus_bridges_v2` / `bjl_audience_affinity_v2` / `bjl_audience_selects_v2` / `bjl_audience_distributions_v2` row, cut it. Verbatims may only be quoted for color, one attributed quote, never counted.
+9. **Adjacent-search provenance.** If the investigator ran `bjl_corpus_search`, is `cross_domain_items` populated from its output? Does every named cross-category experience in prose appear in `cross_domain_items` with exact `item_name`/`primary_topic`/`question_type`/`score`/`n`? Is `home_topic` set? If any of that is off, fix it — the guard will drop the sidecar otherwise.
+10. **No tag/filter language in output.** Scan every block and `response_text` for tag names (`awe`, `discovery_vs_comfort`, `immerse_in_story`, `learn_grow`, `cheer_team`, `signal_identity`, `individual_vs_communal`, `create_memory`, `preserve_tradition`, and the rest) and for phrasings like "the dominant mode," "the leading tag," "the signature is X." The filter that surfaced items is scaffolding; the items are the finding. If any tag or filter name surfaces as a theme, cut it.
+11. **Audience claims trace to scratch — or don't get made.** Audience arms are explicit-ask-only; each turn they run only when the strategist called for that arm. If the investigator ran `bjl_audience_affinity_v2` this turn, is `audience_affinity` populated from those rows? Does every "this audience over-prefers X" claim trace to a specific row with exact `item_name`/`construct`/`audience_score`/`aud_n`? Same for `audience_profile` (demographic claims), `audience_selects` (checkbox behavior — every entry must carry its `question` label), and `audience_distributions` (text-battery distributions — every entry must carry the `item_name` / `set_name` / `answer` triple). If a block asserts an audience finding but no matching arm ran and no matching row lives in scratch, cut the claim or hand off to the strategist explicitly ("Whether the target audience over-indexes here is a question for MRI"). Never invent an audience read to sound complete.
+12. **Construct integrity.** For every score in prose or in a card, is it named as what its `question_type` says (joy_scale → joy finding, likelihood_scale → likelihood finding, familiarity_scale → familiarity finding)? No score is relabeled to another construct. Within a single card, do all stat_items share the same construct? If two constructs sit on the same axis, split them.
+13. **No verbatim-count claims.** Scan the response and the cards for phrases like "tag appears N times," "consistently," "the dominant job," or any tally over `bjl_verbatims`. If any claim rests on a verbatim tally instead of a `bjl_scores` or `bjl_corpus_search` row, cut it. Verbatims may only be quoted for color, one attributed quote, never counted.
 14. **Card provenance.** For each card in `cards`: does every `stat_item`'s `item_name`, `score` (or `joy_index` for legacy `bjl_scores`), and `n` come verbatim from a scratch row? Do all `stat_items` in a single card share the same `source` AND the same `construct`? If a card mixes sources or constructs, split it. If a card was built on a verbatim tally, drop it.
-15. **Length follows the signal.** Read the draft as a whole. Is anything padded (a block restating a finding already made, a stream that earned no place)? Cut it. Is anything thinned (a demographic dive compressed to a clause, a convergence flattened to a sentence, a distribution shape reduced to one number)? Give it the block it deserves. Default to a tight brief; expand only when the data offers depth the question needs.
+15. **Length follows the signal.** Read the draft as a whole. Is anything padded (a block restating a finding already made, a stream that earned no place)? Cut it. Is anything thinned (a strong finding compressed to a clause)? Give it the block it deserves. Default to a tight brief; expand only when the data offers depth the question needs.
 16. **Block discipline.** Does every block have a `claim` (one plain sentence, no metric), an optional `frame`, an `evidence[]` list carrying the numbers with units and `n`, and an optional `implication`? Does no claim carry a metric? Does every evidence bullet carry `n`? If any of that is off, fix it.
-17. **Tags are plumbing — none in output.** Scan every block and `response_text` for tag names (`awe`, `discovery_vs_comfort`, `immerse_in_story`, `learn_grow`, `cheer_team`, `signal_identity`, `individual_vs_communal`, `create_memory`, `preserve_tradition`, and the rest), for phrasings like "the dominant mode," "the leading tag," "the signature is X," and for any `distinctiveness` / `rel_lift` / `norm_lift` / `lift` figure. If any appear, cut them. The `signature[]` field still emits for the guard, but nothing inside it surfaces to the reader.
-17a. **Decomposer scaffolding never leaks.** If scratch carries a `type: "decomposer_plan"` entry, scan blocks and `response_text` for any of its `strategic_read` phrasing, any `confirmation_plan` phrasing, any territory `rationale` string, or any bare territory value expressed as a tag/topic name in the output. All are internal scaffolding. The client sees only the confirmed insights the arms backed; unconfirmed territories drop silently, never hedged.
-18. **One picture, not four readouts.** Is the report a single line of reasoning across the arms, or four parallel readouts ("here's the item lens, here's the audience lens, …")? If per-arm, restructure: lead with the strongest convergence between item and audience lenses; name any tension between them.
-19. **Audience-claim discipline.** For every block that names an audience preference or behavior about a specific experience, does the evidence carry that experience's number, drawn from `audience_affinity`, `audience_selects`, `audience_distributions`, or `audience_profile`? If a block says "this audience loves X" without X's number in the same block, either add the number or drop the claim.
-20. **response_text mirrors blocks.** Scan every number in `response_text`. Does it appear in some block's `evidence`? If a number is in `response_text` but not in any block, fix — either move it into a block or remove it from `response_text`. `response_text` may add no numbers and no named experiences that are not already in a block.
-21. Could a strategist read this in a meeting and walk out with one sharp insight to use? If not, sharpen.
+17. **Decomposer scaffolding never leaks.** If scratch carries a `type: "decomposer_plan"` entry, scan blocks and `response_text` for any of its `strategic_read` phrasing, any `confirmation_plan` phrasing, any territory `rationale` string, or any bare territory value expressed as a tag/topic name in the output. All are internal scaffolding. The client sees only the confirmed items the deep dive and adjacent search backed; unconfirmed territories drop silently, never hedged.
+18. **response_text mirrors blocks.** Scan every number in `response_text`. Does it appear in some block's `evidence`? If a number is in `response_text` but not in any block, fix — either move it into a block or remove it from `response_text`. `response_text` may add no numbers and no named experiences that are not already in a block.
+19. Could a strategist read this in a meeting and walk out with one sharp insight to use? If not, sharpen.
 
 For literal posture, before finalizing, scan your draft:
 

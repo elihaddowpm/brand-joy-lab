@@ -112,14 +112,16 @@ function buildAllowlist(scratch) {
     const q = typeof entry.query === 'string' ? entry.query.toLowerCase() : '';
     // Also handle entries that carry the sql on a different key (some flows
     // use `sql` or `query_text`); the invariant is a string containing the
-    // function name. bjl_corpus_bridges_v2 is the current item-lens source;
-    // bjl_corpus_bridges (v1), bjl_corpus_threads, and bjl_corpus_pivot are
-    // recognized for back-compat.
+    // function name. bjl_corpus_search is the Shape B lateral-search source;
+    // bjl_corpus_bridges_v2 / bjl_corpus_bridges (v1) / bjl_corpus_threads /
+    // bjl_corpus_pivot are recognized for back-compat with any scratch that
+    // still carries them.
     const alt = [entry.sql, entry.query_text]
       .filter(v => typeof v === 'string')
       .map(v => v.toLowerCase());
     const hay = [q, ...alt].join(' ');
     if (
+      !hay.includes('bjl_corpus_search(') &&
       !hay.includes('bjl_corpus_bridges_v2(') &&
       !hay.includes('bjl_corpus_bridges(') &&
       !hay.includes('bjl_corpus_threads(') &&
@@ -612,7 +614,7 @@ function runCrossDomainItemsGuard({ cross_domain_items, home_topic, scratch }) {
     failures.push({
       claim: null,
       reason: 'no_bridges_rows_in_scratch',
-      detail: 'cross_domain_items was populated but bjl_corpus_bridges did not run this turn or returned no rows',
+      detail: 'cross_domain_items was populated but bjl_corpus_search (or the legacy bjl_corpus_bridges) did not run this turn or returned no rows',
     });
     return failures;
   }
@@ -1093,6 +1095,7 @@ function buildRetryAllowlistDigest(scratch) {
       .map(v => v.toLowerCase());
     const hay = [q, ...alt].join(' ');
     if (
+      !hay.includes('bjl_corpus_search(') &&
       !hay.includes('bjl_corpus_bridges_v2(') &&
       !hay.includes('bjl_corpus_bridges(') &&
       !hay.includes('bjl_corpus_threads(') &&
