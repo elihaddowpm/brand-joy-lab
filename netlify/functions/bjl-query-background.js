@@ -799,6 +799,7 @@ async function runSynthesis(triage, scratch, extraContext) {
     const audienceSelectsValue = read('audience_selects');
     const audienceDistributionsValue = read('audience_distributions');
     const audienceSizeValue = read('audience_size');
+    const audienceReadoutPreambleValue = read('audience_readout_preamble');
     const blocksValue = read('blocks');
     const crossDomainThreads = Array.isArray(crossDomainThreadsValue)
       ? crossDomainThreadsValue
@@ -815,6 +816,9 @@ async function runSynthesis(triage, scratch, extraContext) {
     const audienceDistributions = Array.isArray(audienceDistributionsValue) ? audienceDistributionsValue : null;
     const audienceSize = (typeof audienceSizeValue === 'number' && Number.isFinite(audienceSizeValue))
       ? Math.trunc(audienceSizeValue)
+      : null;
+    const audienceReadoutPreamble = (typeof audienceReadoutPreambleValue === 'string' && audienceReadoutPreambleValue.trim())
+      ? audienceReadoutPreambleValue.trim()
       : null;
     const blocks = Array.isArray(blocksValue) ? blocksValue : null;
 
@@ -853,6 +857,7 @@ async function runSynthesis(triage, scratch, extraContext) {
       audience_selects: audienceSelects,
       audience_distributions: audienceDistributions,
       audience_size: audienceSize,
+      audience_readout_preamble: audienceReadoutPreamble,
       blocks,
     };
   } catch (e) {
@@ -936,15 +941,16 @@ async function runSynthesisWithGuard(triage, scratch, extraContext) {
   if (!anyStructured) return initial;
 
   const firstPass = runProvenanceGuard({
-    threads:                structured.threads,
-    cards:                  structured.cards,
-    signature:              structured.signature,
-    cross_domain_items:     structured.cross_domain_items,
-    audience_affinity:      structured.audience_affinity,
-    audience_profile:       structured.audience_profile,
-    audience_selects:       structured.audience_selects,
-    audience_distributions: structured.audience_distributions,
-    home_topic:             initial.home_topic,
+    threads:                    structured.threads,
+    cards:                      structured.cards,
+    signature:                  structured.signature,
+    cross_domain_items:         structured.cross_domain_items,
+    audience_affinity:          structured.audience_affinity,
+    audience_profile:           structured.audience_profile,
+    audience_selects:           structured.audience_selects,
+    audience_distributions:     structured.audience_distributions,
+    audience_readout_preamble:  initial.audience_readout_preamble,
+    home_topic:                 initial.home_topic,
     scratch,
   });
   if (firstPass.ok) return initial;
@@ -963,7 +969,7 @@ async function runSynthesisWithGuard(triage, scratch, extraContext) {
     '',
     'Regenerate the full response now. Rules for this retry:',
     '1. cross_domain_items may only reference items in the ALLOWLIST DIGEST below or in scratch rows returned by bjl_corpus_search (or, for back-compat, bjl_corpus_bridges_v2). You may drop, you may not add or alter. Every item_name, primary_topic, question_type, score, and n MUST be copied exactly. Never emit a `tag` or `distinctiveness` field on the row — the filter that surfaced the item never appears in the output.',
-    '2. audience_affinity, audience_profile, audience_selects, and audience_distributions are OPTIONAL fields — the corresponding arm (bjl_audience_affinity_v2, bjl_audience_profile_v2, bjl_audience_selects_v2, bjl_audience_distributions_v2) is called only on explicit strategist ask. Each field must be populated only when its arm actually ran this turn (scratch will contain matching rows). When populated, every entry MUST match a returned row exactly: item_name, construct, and the score fields (audience_score / aud_pct / gen_pct / aud_n / etc.) copied verbatim; audience_selects entries MUST carry their question label; audience_distributions entries MUST carry item_name, set_name, and answer. When the arm did not run, the field MUST be empty and blocks may not assert an audience finding — either drop the claim or hand off to the strategist explicitly.',
+    '2. audience_affinity, audience_profile, audience_selects, and audience_distributions are OPTIONAL fields — the corresponding arm is called only on explicit strategist ask. Each field must be populated only when its arm actually ran this turn (scratch will contain matching rows). When populated, every entry MUST match a returned row exactly. For audience_affinity specifically: every entry MUST include item_name, construct, rel_lift, audience_score, general_score, aud_n, AND the reportable boolean copied verbatim from the scratch row (rel_lift >= 3.0 marks the row reportable=true). Sub-threshold rows (reportable=false) may appear in audience_affinity but blocks may NOT claim a distinctive preference from them — the honest framing is "no meaningful separation" or the gap-collapse pattern. Never present a raw score gap as the effect size. When any audience_affinity entries are present, audience_readout_preamble MUST also be emitted at the top level as a short paragraph defining raw vs centered for the reader. Audience_selects entries MUST carry their question label; audience_distributions entries MUST carry item_name, set_name, and answer. When the arm did not run, the field MUST be empty and blocks may not assert an audience finding — either drop the claim or hand off to the strategist explicitly.',
     '3. cards may only cite item_name / score / n values that come verbatim from a row in the investigator scratch, and every stat_item in one card MUST share the same source AND the same construct. If a card cannot be grounded that cleanly, drop the card.',
     '4. Rewrite response_text so it does not name any item or number that is not present in the structured fields you kept. If you drop anything, remove any prose that leaned on it.',
     '5. home_topic must equal the primary_topic of the within-category anchors, as before.',
@@ -996,15 +1002,16 @@ async function runSynthesisWithGuard(triage, scratch, extraContext) {
   };
 
   const secondPass = runProvenanceGuard({
-    threads:                retryStructured.threads,
-    cards:                  retryStructured.cards,
-    signature:              retryStructured.signature,
-    cross_domain_items:     retryStructured.cross_domain_items,
-    audience_affinity:      retryStructured.audience_affinity,
-    audience_profile:       retryStructured.audience_profile,
-    audience_selects:       retryStructured.audience_selects,
-    audience_distributions: retryStructured.audience_distributions,
-    home_topic:             retry.home_topic,
+    threads:                    retryStructured.threads,
+    cards:                      retryStructured.cards,
+    signature:                  retryStructured.signature,
+    cross_domain_items:         retryStructured.cross_domain_items,
+    audience_affinity:          retryStructured.audience_affinity,
+    audience_profile:           retryStructured.audience_profile,
+    audience_selects:           retryStructured.audience_selects,
+    audience_distributions:     retryStructured.audience_distributions,
+    audience_readout_preamble:  retry.audience_readout_preamble,
+    home_topic:                 retry.home_topic,
     scratch,
   });
   if (secondPass.ok) return retry;
@@ -1048,6 +1055,15 @@ async function runSynthesisWithGuard(triage, scratch, extraContext) {
     }
   }
 
+  // Preamble drops with the affinity surface — it's only meaningful when
+  // affinity has entries. If affinity survived but the preamble itself was
+  // flagged (surface: 'audience_readout_preamble'), keep affinity and let
+  // the missing preamble ride; the reportability_rule self-check should
+  // catch it next turn.
+  const outAudienceReadoutPreamble = (outAudienceAffinity.length > 0)
+    ? (retry.audience_readout_preamble || null)
+    : null;
+
   return {
     response_text: retry.response_text,
     followup_chips: retry.followup_chips,
@@ -1060,6 +1076,7 @@ async function runSynthesisWithGuard(triage, scratch, extraContext) {
     audience_profile: outAudienceProfile,
     audience_selects: outAudienceSelects,
     audience_distributions: outAudienceDistributions,
+    audience_readout_preamble: outAudienceReadoutPreamble,
     audience_size: retry.audience_size,
     blocks: Array.isArray(retry.blocks) ? retry.blocks : null,
     synth_warning: 'provenance_failed',
@@ -1227,6 +1244,7 @@ exports.handler = async (event) => {
       audience_selects,
       audience_distributions,
       audience_size,
+      audience_readout_preamble,
       blocks,
       synth_warning,
       synth_warning_detail,
@@ -1253,6 +1271,7 @@ exports.handler = async (event) => {
           audience_selects:       Array.isArray(audience_selects) ? audience_selects : [],
           audience_distributions: Array.isArray(audience_distributions) ? audience_distributions : [],
           audience_size:          audience_size ?? null,
+          audience_readout_preamble: audience_readout_preamble || null,
           home_topic:             home_topic || null,
           synth_warning:          synth_warning || null,
           synth_warning_detail:   synth_warning_detail || null,

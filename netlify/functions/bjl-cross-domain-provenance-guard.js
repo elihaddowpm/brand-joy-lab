@@ -265,6 +265,8 @@ function buildAudienceAffinityAllowlist(scratch) {
   // Accept both v2 and v1 function names, plus their score-column aliases:
   //   v2 uses audience_score / general_score
   //   v1 uses audience_ji / general_ji
+  // v2 also carries the reportable boolean (rel_lift >= materiality_floor);
+  // absent on v1 rows, defaults to true so v1 guard behavior is unchanged.
   const rows = collectRowsFromFn(scratch, ['bjl_audience_affinity_v2', 'bjl_audience_affinity']);
   const byItem = new Map();
   for (const r of rows) {
@@ -280,6 +282,7 @@ function buildAudienceAffinityAllowlist(scratch) {
       aud_n:         toInt(r.aud_n),
       primary_topic: typeof r.primary_topic === 'string' ? r.primary_topic : null,
       construct:     typeof r.construct === 'string' ? r.construct : null,
+      reportable:    typeof r.reportable === 'boolean' ? r.reportable : true,
     });
   }
   return byItem;
@@ -399,9 +402,15 @@ function runProvenanceGuard({
   audience_profile,
   audience_selects,
   audience_distributions,
+  audience_readout_preamble,
   home_topic,
   scratch,
 }) {
+  const affinityHasEntries = Array.isArray(audience_affinity) && audience_affinity.length > 0;
+  const preambleMissing = affinityHasEntries && (
+    typeof audience_readout_preamble !== 'string' ||
+    audience_readout_preamble.trim().length < 40
+  );
   const failures = [
     ...runSignatureGuard({ signature, scratch })
       .map(f => Object.assign({ surface: 'signature' }, f)),
@@ -409,6 +418,11 @@ function runProvenanceGuard({
       .map(f => Object.assign({ surface: 'cross_domain_items' }, f)),
     ...runAudienceAffinityGuard({ audience_affinity, scratch })
       .map(f => Object.assign({ surface: 'audience_affinity' }, f)),
+    ...(preambleMissing ? [{
+      surface: 'audience_readout_preamble',
+      reason: 'preamble_required_with_affinity',
+      detail: 'audience_affinity has entries but audience_readout_preamble is missing or too short. The preamble defines raw vs centered for the reader; it must accompany every turn with audience-affinity findings.',
+    }] : []),
     ...runAudienceProfileGuard({ audience_profile, scratch })
       .map(f => Object.assign({ surface: 'audience_profile' }, f)),
     ...runAudienceSelectsGuard({ audience_selects, scratch })
@@ -699,24 +713,61 @@ function runAudienceAffinityGuard({ audience_affinity, scratch }) {
     }
     // v2 claims use `audience_score`; v1 claims use `audience_ji`. Accept either.
     const claimScoreRaw = m.audience_score != null ? m.audience_score : m.audience_ji;
+    const claimGenScoreRaw = m.general_score != null ? m.general_score : m.general_ji;
     const claimLift  = m.rel_lift == null ? null : Math.round(Number(m.rel_lift) * 10) / 10;
     const claimJI    = claimScoreRaw == null ? null : Math.round(Number(claimScoreRaw) * 10) / 10;
+    const claimGen   = claimGenScoreRaw == null ? null : Math.round(Number(claimGenScoreRaw) * 10) / 10;
     const claimN     = toInt(m.aud_n);
+    // Reportability rule: reportable is required on every entry, and the
+    // value the synth emits must match the row's reportable flag. Rows are
+    // never re-tagged in prose; the DB function is the source of truth.
+    const claimReportable = typeof m.reportable === 'boolean' ? m.reportable : null;
     let matched = false;
-    let closest = { lift: null, ji: null, n: null };
+    let matchedRow = null;
+    let closest = { lift: null, ji: null, gen: null, n: null };
     for (const row of bucket) {
       const liftOk = claimLift === null || row.rel_lift === null || claimLift === row.rel_lift;
       const jiOk   = claimJI === null || row.audience_ji === null || claimJI === row.audience_ji;
+      const genOk  = claimGen === null || row.general_ji === null || claimGen === row.general_ji;
       const nOk    = claimN === null || row.aud_n === null || claimN === row.aud_n;
-      if (liftOk && jiOk && nOk) { matched = true; break; }
+      if (liftOk && jiOk && genOk && nOk) { matched = true; matchedRow = row; break; }
       if (!liftOk && closest.lift === null) closest.lift = { claim: claimLift, allowlist: row.rel_lift };
       if (!jiOk   && closest.ji   === null) closest.ji   = { claim: claimJI, allowlist: row.audience_ji };
+      if (!genOk  && closest.gen  === null) closest.gen  = { claim: claimGen, allowlist: row.general_ji };
       if (!nOk    && closest.n    === null) closest.n    = { claim: claimN, allowlist: row.aud_n };
     }
     if (!matched) {
       if (closest.lift) failures.push({ claim: { item_name: m.item_name, rel_lift: m.rel_lift }, reason: 'audience_rel_lift_mismatch', detail: closest.lift });
       else if (closest.ji) failures.push({ claim: { item_name: m.item_name, audience_score: claimScoreRaw }, reason: 'audience_score_mismatch', detail: closest.ji });
+      else if (closest.gen) failures.push({ claim: { item_name: m.item_name, general_score: claimGenScoreRaw }, reason: 'audience_general_score_mismatch', detail: closest.gen });
       else if (closest.n) failures.push({ claim: { item_name: m.item_name, aud_n: m.aud_n }, reason: 'audience_n_mismatch', detail: closest.n });
+      continue;
+    }
+    // Structural reportability check: every audience-affinity entry MUST
+    // carry the reportable boolean, and it must match the row's flag from
+    // scratch. This prevents the synth from silently upgrading a
+    // sub-threshold row into a distinctive-preference finding.
+    if (claimReportable === null) {
+      failures.push({ claim: { item_name: m.item_name }, reason: 'audience_reportable_missing', detail: 'audience_affinity entry omitted the reportable boolean; every entry must carry it (source of truth is the scratch row).' });
+    } else if (matchedRow && typeof matchedRow.reportable === 'boolean' && claimReportable !== matchedRow.reportable) {
+      failures.push({
+        claim: { item_name: m.item_name, reportable: claimReportable },
+        reason: 'audience_reportable_mismatch',
+        detail: { claim: claimReportable, allowlist: matchedRow.reportable, rel_lift: matchedRow.rel_lift },
+      });
+    }
+    // Both raw scores (audience_score AND general_score) must be present on
+    // every entry. The reportability rule requires the reader to see both
+    // numbers alongside rel_lift so a raw gap cannot be inferred as the
+    // effect size.
+    if (claimScoreRaw == null) {
+      failures.push({ claim: { item_name: m.item_name }, reason: 'audience_score_missing' });
+    }
+    if (claimGenScoreRaw == null) {
+      failures.push({ claim: { item_name: m.item_name }, reason: 'audience_general_score_missing', detail: 'audience_affinity entry must include general_score alongside audience_score; the reader must see both numbers, not just one side of the comparison.' });
+    }
+    if (claimLift === null) {
+      failures.push({ claim: { item_name: m.item_name }, reason: 'audience_rel_lift_missing', detail: 'audience_affinity entry must include rel_lift; it is the centered effect size and the honest finding.' });
     }
   }
   return failures;
