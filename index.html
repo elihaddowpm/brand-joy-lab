@@ -2081,6 +2081,7 @@ const Rail = ({ mode, setMode }) => {
     { k: "intelligence",  label: "Intelligence",  num: "01" },
     { k: "joy_map",       label: "Joy Map",       num: "02" },
     { k: "public_corpus", label: "Projects",      num: "03" },
+    { k: "analytics",     label: "Analytics",     num: "04" },
   ];
   return (
     <aside className="rail">
@@ -5432,6 +5433,25 @@ const PublicCorpusMode = () => {
   );
 };
 
+// AnalyticsMode — dedicated workbench pane for the public chat analytics
+// (formerly a tab inside the retired PublicCorpusMode). Wraps
+// PublicCorpusAnalytics in the same pane shell the other modes use so
+// scroll, header, and layout work consistently.
+const AnalyticsMode = () => {
+  return (
+    <div className="brief-scroll" style={{padding: 32, overflowY: "auto", height: "100%", minHeight: 0, boxSizing: "border-box"}}>
+      <div style={{marginBottom: 22}}>
+        <div className="eyebrow" style={{marginBottom: 6}}>Workbench</div>
+        <div className="display" style={{fontSize: 40, letterSpacing: "-0.01em"}}>Analytics.</div>
+        <div style={{marginTop: 8, color: "var(--grey-2)", maxWidth: "60ch", fontSize: 14}}>
+          Public chat usage — visitors, questions asked, leads captured, conversion. Lifetime plus rolling 7- and 30-day windows, with a daily table beneath and a CSV export.
+        </div>
+      </div>
+      <PublicCorpusAnalytics />
+    </div>
+  );
+};
+
 // v8.6 — Public chat analytics tab. Reads the
 // bjl_public_chat_analytics_summary + bjl_public_chat_analytics_daily
 // views via bjl-public-corpus?action=analytics. Lifetime + 7d + 30d
@@ -6186,9 +6206,10 @@ const App = ({ authedUser = null, onSignOut = null } = {}) => {
     intelligence:  ["Workbench", "Intelligence engine", "Ask the Lab"],
     joy_map:       ["Workbench", "Joy Map"],
     public_corpus: ["Workbench", "Projects"],
+    analytics:     ["Workbench", "Analytics", "Public chat"],
   }[mode] || ["Workbench"];
 
-  const showDrawer = drawerOpen && mode !== "joy_map" && mode !== "public_corpus";
+  const showDrawer = drawerOpen && mode !== "joy_map" && mode !== "public_corpus" && mode !== "analytics";
 
   return (
     <div className="app" data-screen-label={`BJL · ${mode}`}>
@@ -6232,6 +6253,8 @@ const App = ({ authedUser = null, onSignOut = null } = {}) => {
               key={`projects-${sessionKey}`}
               setMode={setMode}
               setStrategistContext={setStrategistContext} />}
+            {mode === "analytics" && <AnalyticsMode
+              key={`analytics-${sessionKey}`} />}
           </div>
           {showDrawer && <EvidenceDrawer rows={evidenceRows} filter={drawerFilter} onFilter={setDrawerFilter} />}
         </div>
