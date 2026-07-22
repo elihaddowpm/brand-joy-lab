@@ -81,7 +81,29 @@
     Content-Security-Policy = "frame-ancestors 'self' https://peteramayer.com https://www.peteramayer.com https://petermayer.webflow.io https://hello.peteramayer.com"
     X-Content-Type-Options  = "nosniff"
 
-# The Webflow embed lands as: <iframe src="https://<joylab>/public-chat.html">
+# joylab.peteramayer.com/ask — the memorable public URL. Netlify serves
+# public-chat.html at this path with status 200 (rewrite, not redirect),
+# so the address bar stays on /ask while the file served is the existing
+# public chat surface. Query params (?q=... for autofire) pass through
+# unchanged.
+[[redirects]]
+  from = "/ask"
+  to = "/public-chat.html"
+  status = 200
+
+# Same CSP + no-sniff on the /ask path. Netlify applies [[headers]] to the
+# REQUEST path, not the served file, so a direct hit or an iframe embed at
+# /ask needs its own header block; without this the frame-ancestors rule
+# wouldn't apply on the memorable URL.
+[[headers]]
+  for = "/ask"
+  [headers.values]
+    Content-Security-Policy = "frame-ancestors 'self' https://peteramayer.com https://www.peteramayer.com https://petermayer.webflow.io https://hello.peteramayer.com"
+    X-Content-Type-Options  = "nosniff"
+
+# The Webflow embed lands as: <iframe src="https://joylab.peteramayer.com/ask">
+# (Direct URL joylab.peteramayer.com/public-chat.html still works for
+# backward compatibility with existing embeds.)
 [[redirects]]
   from = "/api/bjl-public-chat"
   to = "/.netlify/functions/bjl-public-chat"
