@@ -760,6 +760,53 @@ async function runSynthesis(triage, scratch, extraContext) {
     }
   }
 
+  // Second retry condition: blocks populated on substantive responses.
+  // If the parsed JSON has a long response_text but blocks[] is empty on
+  // interpretive posture at focused/thorough depth, retry once asking
+  // the model to extract findings from response_text into blocks. Catches
+  // the failure mode where the synth writes a full prose report and
+  // silently emits blocks: [] — the strategist has nothing to save.
+  let parsedPeek = null;
+  try { parsedPeek = JSON.parse(raw); } catch (_) { /* handled below */ }
+  if (parsedPeek && typeof parsedPeek === 'object' && !Array.isArray(parsedPeek)) {
+    const peekRead = makeNormalizedReader(parsedPeek);
+    const peekText = peekRead('response_text');
+    const peekBlocks = peekRead('blocks');
+    const posture = (triage && triage.response_posture) || 'interpretive';
+    const depth = (triage && triage.investigation_depth) || 'focused';
+    const requiresBlocks = posture === 'interpretive' && (depth === 'focused' || depth === 'thorough');
+    const proseLong = typeof peekText === 'string' && peekText.length >= 1500;
+    const blocksEmpty = !Array.isArray(peekBlocks) || peekBlocks.length === 0;
+    if (requiresBlocks && proseLong && blocksEmpty) {
+      console.warn('[synthesis] response_text is ' + peekText.length + ' chars but blocks[] is empty on ' + posture + '/' + depth + '; retrying with populate-blocks reminder');
+      const blocksRetryReminder = '## Populate blocks[] (retry)\n\n'
+        + 'Your previous response emitted a long `response_text` but `blocks` was empty. On `' + posture + '` posture at `' + depth + '` depth, `blocks[]` MUST contain one entry per finding your `response_text` makes — the strategist saves cards from blocks, so an empty `blocks` array means the whole report is unsaveable.\n\n'
+        + 'Regenerate the full JSON object. Extract each finding you made in `response_text` into a block: `{ claim, frame, evidence, implication }`. Claim is one plain sentence with no metric. Evidence carries the numbers with `n` on every bullet. Keep `response_text` as the rendered form of the blocks; it must not name any experience or number that is not also in some block. Every other structured field stays as you had it.';
+      try {
+        const retry = await callSynth(blocksRetryReminder);
+        // Accept the retry only if it now has non-empty blocks and still
+        // parses. Otherwise stay with the empty-blocks first response so
+        // the user at least sees the prose.
+        try {
+          const retryParsed = JSON.parse(retry.raw);
+          const retryReader = makeNormalizedReader(retryParsed);
+          const retryBlocks = retryReader('blocks');
+          if (Array.isArray(retryBlocks) && retryBlocks.length > 0) {
+            response = retry.rsp;
+            raw = retry.raw;
+            console.log('[synthesis] blocks-populated retry succeeded, ' + retryBlocks.length + ' blocks now emitted');
+          } else {
+            console.warn('[synthesis] blocks-populated retry did not populate blocks; keeping first response');
+          }
+        } catch (_) {
+          console.warn('[synthesis] blocks-populated retry did not parse; keeping first response');
+        }
+      } catch (retryErr) {
+        console.warn('[synthesis] blocks-populated retry API call failed; keeping first response:', retryErr.message);
+      }
+    }
+  }
+
   // Helper for the never-dump-raw-JSON fallback: try the permissive
   // string-walking extractor regardless of stop_reason. The extractor
   // already handles case/separator variants for the response_text key.
