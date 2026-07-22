@@ -493,24 +493,49 @@ Adjust `min_score` and `min_n` when the question calls for a wider or tighter ne
 
 ### Step 3a — Audience arms and signature (also explicit-ask-only)
 
-The audience arms and `bjl_signature` remain live and are also **strategist-callable on explicit ask**, alongside `bjl_corpus_search`. What changed from the previous pipeline is only the autopilot: the tool no longer auto-fires these on every thorough investigation. Each one is called deliberately when the strategist's follow-up, the decomposer's territory, or the brief calls for that specific arm.
+The audience arms and `bjl_signature` remain live and are also **strategist-callable on explicit ask**, alongside `bjl_corpus_search`. What changed from the previous pipeline is only the autopilot: the tool no longer auto-fires these on every thorough investigation. Each one is called deliberately when the question calls for it.
+
+**"Explicit ask" is a first-turn condition, not a follow-up condition.** The user's original question can be the ask. If the question is audience-shaped, fire the arm ON THAT TURN. Do not wait for a clarifying follow-up before firing an arm the question clearly asked for.
+
+**Audience-shaped questions — fire the audience arms immediately:**
+
+- "What kind of person enjoys / loves / values [experience]?" → `bjl_audience_affinity_v2` + `bjl_audience_profile_v2`
+- "Who are the people who [prefer / choose / spend on] [experience]?" → same pair
+- "Tell me about the audience for [experience]" → same pair
+- "What else do [these people / this audience / people who love X] like?" → `bjl_audience_affinity_v2`
+- "How might a [new product / campaign / attraction] shift audiences?" → same pair (audience contrast is the point)
+- "Compare the audience for X to the audience for Y" → run each side, compare in scratch
+- Anything that names a group of consumers by preference and asks how they behave, what they choose, or who they are demographically → fire the arms.
+
+Concrete trigger phrases (fire on any): *"what kind of person"*, *"who [buys/loves/prefers]"*, *"the audience for"*, *"the same people who"*, *"these people also"*, *"shift audiences"*, *"multi-gen"*, *"targeting X vs Y"*, *"people who [rate / rank / say / feel]"*.
+
+**Do not require the strategist to type "please run the audience arm."** The question shape IS the ask. When in doubt on whether the question is audience-shaped, fire the arm — a returned empty result is honest; a missing arm on an audience question is a failure.
+
+**Worked examples (map each to the arm calls):**
+
+- *"What kind of person enjoys visiting a theme park?"* — Home set: theme-park items (Magic Kingdom, Universal, Six Flags, Dollywood, Silver Dollar City, etc.). Fire `bjl_audience_affinity_v2(home_items)` for what else they distinctively prefer, plus `bjl_audience_profile_v2(home_items)` for who they are demographically. Both on the first turn.
+- *"How might a new attraction shift audiences?"* — Home set: attraction items. Fire the same pair; the shift question is the audience question in disguise.
+- *"Tell me about people who rank internet as low-joy."* — This defines an audience by negative preference. Fire a bespoke `bjl_audience_affinity_v2` variant where the audience is the low-preference cohort (or, if bespoke is complex, at minimum run `bjl_audience_profile_v2` on the standard cohort with a note about the inversion).
+- *"How does joy differ for Gen Z women 18–24 in QSR?"* — Demographic-scoped question. Fire `bjl_audience_profile_v2` on a QSR home set and cross-reference the demographic index.
+
+**Common failure mode to avoid:** treating "audience" as if it only means "an explicitly-defined cohort the strategist gave me." An audience question can simply mean "the people who like this thing." Define the audience by preference for the home set (which is what `bjl_audience_affinity_v2` does by default) and fire the arm.
 
 The instruments:
 
-- **`bjl_audience_affinity_v2(home_items)`** — the audience defined by preference for the home experience; returns what else that audience distinctively over-prefers across the numeric constructs, centered within construct. Return columns: `construct`, `primary_topic`, `item_name`, `rel_lift`, `audience_score`, `general_score`, `aud_n`, `audience_size`, `reportable`. Use when the strategist explicitly asks about audience preference for adjacent experiences.
+- **`bjl_audience_affinity_v2(home_items)`** — the audience defined by preference for the home experience; returns what else that audience distinctively over-prefers across the numeric constructs, centered within construct. Return columns: `construct`, `primary_topic`, `item_name`, `rel_lift`, `audience_score`, `general_score`, `aud_n`, `audience_size`, `reportable`. Fire on any audience-shaped question — first turn or follow-up (see the trigger phrases above). Do not wait for a follow-up to run the arm on a first-turn audience question.
   - **Reportability.** Every returned row carries a `reportable` boolean. It is `true` when the centered `rel_lift` clears the materiality floor (default 3.0 points). Sub-threshold rows (`reportable=false`) are NOT dropped — they arrive at the caller as context and contrast. The row is honest: `rel_lift` measures each respondent against their own within-construct baseline, so uniform positivity cancels. A row with `rel_lift +0.0` next to a sibling row with `rel_lift +5.2` is not noise, it's the control that proves the +5.2 isn't just positivity. Keep every returned row intact in scratch — including sub-threshold ones — so the synthesizer can use the gap-collapse pattern where the near-zero row IS the evidence.
   - **`min_aud_n` is the hard filter** (default 75). Below that, a centered gap is too noisy to trust and the row is dropped structurally. Above that, `reportable` handles the reporting rule.
   - **Bespoke arc comparisons.** When the strategist wants to see a specific ordered set of items compared audience-vs-general (e.g. the seven phases of vacation), the default TOP-N-by-rel_lift behavior can truncate the sub-threshold rows that carry the analytical move. Write a bespoke SQL query using the same centering approach (`AVG(joy_index - rmean)` for the audience minus the same for general) filtered to the specific item list; return every requested item with its `rel_lift`, `audience_score`, `general_score`, `aud_n`, and a computed `reportable` boolean.
-- **`bjl_audience_profile_v2(home_items)`** — the same audience's demographic index against the population. Return columns: `dimension`, `cut_value`, `pct_of_audience`, `pct_of_population`, `index`. Use when the follow-up asks who this audience is.
-- **`bjl_audience_selects_v2(home_items)`** — the same audience read through checkbox behavior, home topic excluded, propensity-normalized. Return columns: `question`, `item_name`, `aud_pct`, `gen_pct`, `lift`, `norm_lift`, `aud_exposed`. Use when the follow-up asks what boxes this audience checks.
-- **`bjl_audience_distributions_v2(home_items)`** — the same audience read through text-answered batteries (agreement, emotional state, importance, behavior, drivers, fandom, trajectory scales, categorical picks). Return columns: `construct`, `item_name`, `set_name`, `answer`, `aud_pct`, `gen_pct`, `gap_pts`, `aud_n`. Use when the follow-up asks how this audience answers a non-numeric battery.
+- **`bjl_audience_profile_v2(home_items)`** — the same audience's demographic index against the population. Return columns: `dimension`, `cut_value`, `pct_of_audience`, `pct_of_population`, `index`. Fire alongside `bjl_audience_affinity_v2` on any question that asks *who* the audience is, or that would benefit from a demographic read to complicate an assumed target (e.g. "target Gen Z" claims). Run on the first turn when the question is demographic.
+- **`bjl_audience_selects_v2(home_items)`** — the same audience read through checkbox behavior, home topic excluded, propensity-normalized. Return columns: `question`, `item_name`, `aud_pct`, `gen_pct`, `lift`, `norm_lift`, `aud_exposed`. Fire when the question is about what boxes this audience checks — activation triggers, categorical preferences, behavior patterns the numeric affinity read wouldn't see.
+- **`bjl_audience_distributions_v2(home_items)`** — the same audience read through text-answered batteries (agreement, emotional state, importance, behavior, drivers, fandom, trajectory scales, categorical picks). Return columns: `construct`, `item_name`, `set_name`, `answer`, `aud_pct`, `gen_pct`, `gap_pts`, `aud_n`. Fire when the shape of how this audience answers a non-numeric battery is itself the story.
 - **`bjl_signature(home_items)`** — distinctiveness-ranked signature tags for the home set. Return columns: `framework`, `tag`, `distinctiveness`. Use when the strategist explicitly asks to see the signature ranking of their home set. **The output is a reasoning aid; the tags never surface in `blocks` or `response_text`.** If a strategist wants to explore an adjacent territory the signature suggests, translate the top distinctive tag into a `bjl_corpus_search` filter — do not surface the tag itself as the finding.
 
 `home_items` may be an `int[]` of `bjl_scores.item_id` values or a `text[]` of item names for all five functions. Both work; pass whichever is convenient. If the array element type ever raises `function does not exist`, cast explicitly (e.g. `ARRAY[1390,1392]::int[]`).
 
 Common rules for every one of these arms:
 
-- **Never auto-fire.** Only when the strategist's question, follow-up, or the decomposer's territory names the arm explicitly. On a general within-category question, the deep dive is the answer; these arms stay silent.
+- **Never fire on an unrelated question.** Fire only when the question, follow-up, or decomposer territory calls for it — audience-shaped questions (see triggers above) qualify on the first turn. On a general within-category question with no audience frame, the deep dive is the answer; these arms stay silent.
 - **Keep every returned row intact in scratch.** All columns of the returned rows must survive the handoff to the synthesizer, because the provenance guard builds its allowlist from them.
 - **Selection scores never surface as findings.** `distinctiveness`, `rel_lift`, `norm_lift`, and the unnormalized `lift` are internal selection scores — they rank what to consider, they never appear as claims in `blocks` or `response_text`. Translate to a plain score / share comparison the reader already understands (e.g. `rel_lift +4.4` becomes "this audience rates it 65, against the corpus norm of 61 — n=412"; `norm_lift 1.42` becomes "58% of this audience checks it, versus 41% of the population").
 - **Every score carries its construct.** A trust score is a trust finding; a likelihood score is a likelihood finding; a fandom distribution is not a joy finding. Constructs never share an axis; centering is within construct.
