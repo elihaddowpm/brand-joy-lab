@@ -5616,17 +5616,7 @@ const ConnectionsBetaMode = () => {
         </div>
       )}
 
-      {payload && payload.feature_enabled !== false && payload.shape && payload.shape !== 'item' && (
-        <div className="conn-redirect">
-          <div className="conn-redirect-title">Redirect — {payload.shape === 'audience' ? 'audience comparison' : 'not an item-connection question'}</div>
-          <div className="conn-redirect-body">{payload.redirect_message}</div>
-          {payload.shape_reason && (
-            <div className="conn-redirect-reason">Signal: {payload.shape_reason}</div>
-          )}
-        </div>
-      )}
-
-      {payload && payload.feature_enabled !== false && (!payload.shape || payload.shape === 'item') && (
+      {payload && payload.feature_enabled !== false && (
         <>
           <div className="conn-section">
             <div className="conn-section-title">Focal items resolved</div>

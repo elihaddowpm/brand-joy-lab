@@ -82,41 +82,6 @@ const SKEW_LOW  = 25;
 const SKEW_HIGH = 75;
 
 // ---------------------------------------------------------------------
-// Question-shape gate (Fix 3)
-// ---------------------------------------------------------------------
-async function classifyQueryShape(query) {
-  const system = `You classify a strategist's query for a small routing decision. Output a JSON object with two fields: shape and reason.
-
-"shape" is one of:
-- "item" — asks what travels with a specific experience, brand, category, or item inside the same people (e.g. "What connects to going to a theme park?", "What do people who love baseball also love?", "How does joy from wine relate to other things?").
-- "audience" — compares two groups of people (e.g. "What do fans enjoy more than non-fans?", "How does Gen Z differ from Boomers on X?", "Who is the audience for hostels?"). These are answered by the main tool's audience arms, not by the item connectivity ledger.
-- "other" — anything else (methodology, tool navigation, a data pull, meta questions).
-
-"reason" is one short sentence naming the signal that decided it.
-
-Output ONLY the JSON, no preamble.`;
-
-  try {
-    const rsp = await anthropic.messages.create({
-      model: HAIKU_MODEL,
-      max_tokens: 200,
-      system: [{ type: 'text', text: system }],
-      messages: [{ role: 'user', content: query }],
-    });
-    const text = (rsp.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
-    const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
-    const parsed = JSON.parse(cleaned);
-    const shape = ['item', 'audience', 'other'].includes(parsed.shape) ? parsed.shape : 'item';
-    return { shape, reason: typeof parsed.reason === 'string' ? parsed.reason : '' };
-  } catch (e) {
-    // Fail open toward 'item' — the pane's own copy will suggest the
-    // strategist re-run through Intelligence if the ledger turns up junk.
-    console.warn('[connections-beta] shape classify failed, defaulting to item:', e.message);
-    return { shape: 'item', reason: 'classifier failed; defaulted to item' };
-  }
-}
-
-// ---------------------------------------------------------------------
 // Job-id inheritance (Fix 2)
 // ---------------------------------------------------------------------
 async function fetchInvestigatorHomeItems(jobId) {
@@ -489,30 +454,14 @@ exports.handler = async (event) => {
   const jobId = body.job_id && typeof body.job_id === 'string' ? body.job_id.trim() : null;
 
   try {
-    // Fix 3: shape gate first. Route audience-shaped and other-shaped
-    // questions to a redirect message; never try to force-resolve them.
-    const shape = await classifyQueryShape(query);
-    if (shape.shape !== 'item') {
-      const redirect = {
-        ok: true,
-        feature_enabled: true,
-        query,
-        shape: shape.shape,
-        shape_reason: shape.reason,
-        redirect_message: shape.shape === 'audience'
-          ? "This is an audience comparison — the main tool's audience arms answer it. The connections pane maps what travels with a specific experience inside the same people, not what differs between groups of people. Try rephrasing to name a specific experience (e.g. \"what connects to going to a game?\") or run the question through the Intelligence pane."
-          : "This doesn't look like an item-connection question. The connections pane maps what travels with a specific experience inside the same people. Try naming a specific brand, category, or experience — e.g. \"what connects to going to a theme park?\"",
-        focal_items: [],
-        inside_category: [],
-        beyond_category: [],
-        negative_rim_inside: [],
-        negative_rim_beyond: [],
-        unmeasured: [],
-        caveats: [],
-      };
-      await appendScratchEntry(jobId, { type: 'connections_beta', ...redirect });
-      return { statusCode: 200, body: JSON.stringify(redirect) };
-    }
+    // No shape gate. Any query the strategist types goes to the resolver
+    // (v2 shape-gate approach was removed 2026-07-23 as over-blocking —
+    // it redirected direct instructions like "run what connects with
+    // being a fan" because the enclosing sentence had comparison
+    // framing). The guarded two-stage resolver is the honest filter:
+    // if there is a semantic subject to resolve, run the ledger on it;
+    // if there isn't, the empty-focals response carries a soft hint
+    // toward Intelligence for audience-shaped questions.
 
     // Fix 2: prefer investigator-derived focal items when a job_id is
     // supplied. The decomposer has already done the semantic work of
@@ -547,7 +496,6 @@ exports.handler = async (event) => {
         ok: true,
         feature_enabled: true,
         query,
-        shape: 'item',
         focal_items: [],
         inside_category: [],
         beyond_category: [],
@@ -555,7 +503,7 @@ exports.handler = async (event) => {
         negative_rim_beyond: [],
         unmeasured: [{
           reason: 'no_focal_items_resolved',
-          detail: 'The query did not resolve to a semantic subject in bjl_items. Try naming a specific brand, category, or experience, or attach a job_id from an Intelligence run.',
+          detail: 'The query did not resolve to a semantic subject in bjl_items — the resolver looked for a specific experience, brand, or category to run through the ledger and did not find one. Two things to try: (a) rephrase to name a specific experience (e.g. "going to a game", "having coffee at a cafe", "a theme park trip"), or (b) if the question is really about comparing groups of people (fans vs non-fans, Gen Z vs Boomers), that\u2019s an audience read — the main Intelligence pane\u2019s audience arms answer it. Attach an Intelligence job_id here to use its already-resolved focals.',
         }],
         caveats: [],
         resolver_path: resolverPath,
@@ -641,7 +589,6 @@ exports.handler = async (event) => {
       ok: true,
       feature_enabled: true,
       query,
-      shape: 'item',
       resolver_path:   resolverPath,
       resolver_note:   resolverNote,
       focal_items: focalItems.map(f => ({
@@ -663,7 +610,6 @@ exports.handler = async (event) => {
       type:            'connections_beta',
       query,
       user_email:      userEmail,
-      shape:           'item',
       resolver_path:   resolverPath,
       resolver_note:   resolverNote,
       focal_items:     responsePayload.focal_items,
