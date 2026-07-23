@@ -18,12 +18,20 @@
  *         item_ids via SQL exact/normalized match. This is the primary
  *         mode: connections-beside-the-finding, inheriting the
  *         investigator's already-vetted focal items. No LLM resolution.
- *      b) job_id absent — two-stage resolver. A guarded keyword
- *         shortlist (min 5-char tokens, no hyphen-split fragments)
- *         narrows bjl_items to ~30 candidates, then a Haiku call picks
- *         1-4 items that name the semantic subject of the query. The
- *         standalone form is a secondary test harness; job_id is the
- *         intended usage.
+ *      b) job_id absent — three-stage resolver.
+ *           Stage 0: Haiku concept extractor rewrites the query into
+ *             2-5 clean search phrases in natural corpus wording
+ *             ("attending a game", "sports fan"). This clarifies the
+ *             ask before SQL touches it, so short concept nouns like
+ *             "fan" (3 chars) or "game" (4 chars) reach the ledger
+ *             through phrases they anchor.
+ *           Stage 1: ILIKE those phrases against bjl_items.item_name +
+ *             canonical_brand, dedupe on lower(name), take top ~60
+ *             ranked by hit_count then name_len desc.
+ *           Stage 2: Haiku semantic-subject picker chooses 1-4 items
+ *             from the shortlist that actually name what the query is
+ *             asking about. Rejects incidental matches (an item named
+ *             "non" surfacing on a query about non-fans).
  *   4. Per focal: bjl_item_edges(item_id) for every connection, sorted
  *      by |r| desc (r stays server-side).
  *   5. Batch item-skew lookup: one SQL round trip against bjl_conn_
@@ -132,53 +140,83 @@ async function resolveNamesToItemIds(names) {
 }
 
 // ---------------------------------------------------------------------
-// Two-stage resolver — guarded shortlist + Haiku picker (Fix 1)
+// Three-stage resolver — Haiku concept extractor + shortlist + Haiku picker
 // ---------------------------------------------------------------------
+//
+// Prior versions used a raw-token ILIKE stage where the query text was
+// split on whitespace, filtered to 5-char-minimum non-stopword tokens,
+// and matched. That guard killed "non" (the false-match concern) but it
+// also killed the concept nouns the query was actually asking about —
+// "fan" (3 chars), "game" (4 chars). Queries like "What connects with
+// being a fan or attending a game?" produced an empty shortlist because
+// no 5+ char content word matched.
+//
+// The fix: Haiku runs FIRST as a concept extractor. It reads the query
+// and returns 2-5 short phrases that name the experiences, brands, or
+// categories the query is asking about — using natural corpus wording.
+// Those phrases become the ILIKE terms. Because Haiku gives us clean
+// semantic concepts, the token-length guard is unnecessary; a phrase
+// like "attending a game" or "sports fan" IS the search key.
+//
+// Stage 2 (Haiku semantic-subject picker) is unchanged — it prevents
+// any incidental substring match (like an item named "non" surfacing
+// on a query about non-fans) from reaching the ledger, since it only
+// picks items that name the semantic subject of the query.
 
-// Hard-guarded keyword filter. Enforces the spec's guards on top of
-// simple ILIKE matching:
-//  - Tokens under 5 characters are dropped (kills "non", "fan", "the").
-//  - Hyphenated words are NOT split into fragments — the token is the
-//    whole hyphenated form.
-//  - Common stopwords are dropped.
-// The output is a shortlist of ~30 candidate items that the Haiku
-// picker then reasons over.
-const RESOLVER_STOPWORDS = new Set([
-  'about','after','again','against','along','among','around','because',
-  'before','being','below','between','both','could','does','doing',
-  'during','early','experience','experiences','feels','from','general',
-  'given','going','having','including','into','likely','little','local',
-  'looking','maybe','means','might','other','others','people','person',
-  'perhaps','possibly','probably','question','rather','really','recently',
-  'seems','shall','simple','specific','still','their','there','these',
-  'thing','things','those','though','through','throughout','together',
-  'toward','under','until','using','various','versus','well','were',
-  'when','whether','which','while','with','within','without','would',
-  'you','your','yourself',
-]);
+async function extractSearchTermsWithHaiku(query) {
+  const system = `Given a strategist's query for the joy connectivity ledger, extract 2-5 short phrases (each 1-6 words) that name the specific experiences, brands, or categories the query is asking about. These phrases will search the corpus of item names via case-insensitive substring match, so pick phrases in natural corpus wording that would actually appear inside real item names.
 
-function extractGuardedTokens(query) {
-  if (!query) return [];
-  const raw = String(query).toLowerCase();
-  // Split on whitespace, punctuation, and quotes — but NOT hyphens.
-  // A hyphenated word ("non-alcoholic") stays intact so we can't
-  // false-match "non" as an incidental fragment.
-  const words = raw.split(/[^a-z0-9\-']+/).filter(Boolean);
-  const tokens = words
-    .filter(w => w.length >= 5)                 // spec guard: no <5-char tokens
-    .filter(w => !RESOLVER_STOPWORDS.has(w))
-    .filter(w => !/^-+$/.test(w))               // reject pure hyphens
-    .map(w => w.replace(/^['-]+|['-]+$/g, '')); // trim leading/trailing hyphens+apostrophes
-  return Array.from(new Set(tokens.filter(w => w.length >= 5)));
+Examples:
+Query: "What connects with being a fan or attending a game?"
+["sports team","attending a game","sports fan","sports","game"]
+
+Query: "How does joy from a theme park spread to other categories?"
+["theme park","amusement park","theme park trip"]
+
+Query: "Tell me about wine drinkers"
+["drinking wine","glass of wine","wine"]
+
+Query: "What travels with joy from a mortgage?"
+["mortgage","home loan","buying a home"]
+
+Rules:
+- Return 2-5 phrases.
+- Each phrase 1-6 words.
+- Use natural corpus wording ("attending a game", not "game attendance"; "going to a game" is also fine).
+- Include short single-word forms alongside longer phrases ("sports team" AND "sports") when both would help match.
+- If the query names a specific brand, include the brand as one phrase.
+- If the query is very vague, do your best with the strongest 2 phrases.
+- No stopwords as standalone phrases ("about", "with", "the" alone).
+
+Return ONLY a JSON array of strings, no preamble.`;
+
+  try {
+    const rsp = await anthropic.messages.create({
+      model: HAIKU_MODEL,
+      max_tokens: 300,
+      system: [{ type: 'text', text: system }],
+      messages: [{ role: 'user', content: query }],
+    });
+    const text = (rsp.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
+    const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+    const parsed = JSON.parse(cleaned);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map(s => String(s || '').trim().toLowerCase())
+      .filter(s => s.length >= 2 && s.length <= 60)
+      .slice(0, 6);
+  } catch (e) {
+    console.warn('[connections-beta] concept extractor failed:', e.message);
+    return [];
+  }
 }
 
-async function buildFocalShortlist(query) {
-  const tokens = extractGuardedTokens(query);
-  if (tokens.length === 0) return [];
-  const orConds = tokens.map(t =>
+async function buildFocalShortlistFromTerms(terms) {
+  if (terms.length === 0) return [];
+  const orConds = terms.map(t =>
     `(LOWER(item_name) LIKE '%${sqlEscape(t)}%' OR LOWER(COALESCE(canonical_brand, '')) LIKE '%${sqlEscape(t)}%')`
   ).join(' OR ');
-  const scoreExpr = tokens.map(t =>
+  const scoreExpr = terms.map(t =>
     `(CASE WHEN LOWER(item_name) LIKE '%${sqlEscape(t)}%' OR LOWER(COALESCE(canonical_brand, '')) LIKE '%${sqlEscape(t)}%' THEN 1 ELSE 0 END)`
   ).join(' + ');
   // DISTINCT ON collapses duplicates by name (the corpus carries several
@@ -265,15 +303,33 @@ Output ONLY the JSON, no preamble.`;
 }
 
 async function resolveFocalItemsFromQuery(query) {
-  const shortlist = await buildFocalShortlist(query);
+  const terms = await extractSearchTermsWithHaiku(query);
+  if (terms.length === 0) {
+    return { focals: [], resolver_note: 'Concept extractor returned no search terms — the query may be too vague to name a specific experience.' };
+  }
+  const shortlist = await buildFocalShortlistFromTerms(terms);
+  if (shortlist.length === 0) {
+    return {
+      focals: [],
+      resolver_note: `Extracted terms [${terms.join(', ')}] but nothing in bjl_items matched. The specific experience the query names may not be in the corpus, or it may be phrased in a way the item names don't share.`,
+    };
+  }
   const picked = await pickFocalItemsWithHaiku(query, shortlist);
-  if (picked.picks.length === 0) return { focals: [], resolver_note: picked.reason };
+  if (picked.picks.length === 0) {
+    return {
+      focals: [],
+      resolver_note: `Extracted terms [${terms.join(', ')}] surfaced ${shortlist.length} candidates, but the semantic-subject picker rejected all of them: ${picked.reason}`,
+    };
+  }
   const byId = new Map(shortlist.map(c => [c.item_id, c]));
   const focals = picked.picks
     .map(id => byId.get(id))
     .filter(Boolean)
     .map(c => ({ ...c, match_source: 'name' }));
-  return { focals, resolver_note: picked.reason };
+  return {
+    focals,
+    resolver_note: `Extracted [${terms.join(', ')}] via Haiku; ${shortlist.length} candidates; picker selected ${focals.length}. ${picked.reason}`,
+  };
 }
 
 // ---------------------------------------------------------------------
