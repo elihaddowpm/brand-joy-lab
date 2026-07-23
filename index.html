@@ -2342,7 +2342,22 @@ function serverMessagesToTurns(messages) {
   return out;
 }
 
-const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistContext }) => {
+const IntelligenceMode = ({
+  setEvidenceRows,
+  strategistContext,
+  setStrategistContext,
+  // Projects state hoisted to App on 2026-07-23 so a fresh page load
+  // populates the dropdown even when the Intelligence pane happens to
+  // mount before auth is ready.
+  projects,
+  activeProjectId,
+  selectProject,
+  refreshProjects,
+  projectCards,
+  projectCardsLoading,
+  refreshProjectCards,
+  setProjects,
+}) => {
   const [intent, setIntent] = useState(null); // null means no chip selected
   const [prompt, setPrompt] = useState("");
   const [running, setRunning] = useState(false);
@@ -2361,38 +2376,14 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
   const [recentSessions, setRecentSessions] = useState([]);
   const [recentMenuOpen, setRecentMenuOpen] = useState(false);
 
-  // Move 2: active project + saved cards drawer state.
-  const [projects, setProjects] = useState([]);
-  const [activeProjectId, setActiveProjectIdState] = useState(() => getActiveProjectId());
-  const [projectCards, setProjectCards] = useState([]);
-  const [cardsLoading, setCardsLoading] = useState(false);
+  // Move 2 UI-local state (projects/activeProjectId/cards themselves live
+  // at App level and are passed in as props).
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [showCreateProject, setShowCreateProject] = useState(false);
-  const [projectError, setProjectError] = useState(null);
 
-  const activeProject = projects.find(p => p.id === activeProjectId) || null;
-
-  const refreshProjects = useCallback(async () => {
-    try { setProjects(await fetchProjects(false)); }
-    catch (e) { setProjectError(String(e.message || e)); }
-  }, []);
-
-  const refreshCards = useCallback(async (projectId) => {
-    if (!projectId) { setProjectCards([]); return; }
-    setCardsLoading(true);
-    try { setProjectCards(await fetchProjectCards(projectId)); }
-    catch (e) { setProjectError(String(e.message || e)); }
-    finally { setCardsLoading(false); }
-  }, []);
-
-  const selectProject = useCallback((id) => {
-    setActiveProjectIdState(id);
-    setActiveProjectId(id);
-    refreshCards(id);
-  }, [refreshCards]);
-
-  useEffect(() => { refreshProjects(); }, [refreshProjects]);
-  useEffect(() => { refreshCards(activeProjectId); }, [activeProjectId, refreshCards]);
+  const activeProject = (projects || []).find(p => p.id === activeProjectId) || null;
+  const cardsLoading = !!projectCardsLoading;
+  const refreshCards = refreshProjectCards;
 
   // Seed-a-query handoff from ProjectsMode. When the strategist clicks
   // "Take me to Intelligence" with selected saved cards, we land here
@@ -2446,11 +2437,40 @@ const IntelligenceMode = ({ setEvidenceRows, strategistContext, setStrategistCon
           if (cancelled) return;
           if (r.ok) {
             const j = await r.json();
-            const t = serverMessagesToTurns(j.messages);
+            const serverTurns = serverMessagesToTurns(j.messages);
+            // Merge server turns with local: the server session log
+            // stores role/content/context per message but does NOT
+            // persist the per-turn blocks[] / structured / job_id fields
+            // the frontend needs to render the Save-to-project affordance.
+            // Without this merge, every pane switch (which remounts
+            // IntelligenceMode) would overwrite localStorage-restored
+            // blocks with blockless server turns, and the strategist
+            // would lose the "Insights to save" section after leaving
+            // and returning to the pane.
+            const localTurnsById = new Map();
+            if (localCache && Array.isArray(localCache.turns)) {
+              for (const lt of localCache.turns) {
+                if (lt && typeof lt.prompt === 'string') {
+                  localTurnsById.set(lt.prompt.trim(), lt);
+                }
+              }
+            }
+            const merged = serverTurns.map(st => {
+              const key = typeof st.prompt === 'string' ? st.prompt.trim() : '';
+              const lt = key ? localTurnsById.get(key) : null;
+              if (!lt) return st;
+              return {
+                ...st,
+                blocks:            (Array.isArray(lt.blocks) && lt.blocks.length > 0) ? lt.blocks : (st.blocks || null),
+                structured:        lt.structured || st.structured || null,
+                job_id:            lt.job_id || st.job_id || null,
+                investigationMeta: lt.investigationMeta || st.investigationMeta || null,
+              };
+            });
             setSessionId(j.session.id);
-            setTurns(t);
+            setTurns(merged);
             writeSessionToUrl(j.session.id);
-            writeSessionLocal(j.session.id, t);
+            writeSessionLocal(j.session.id, merged);
           } else if (r.status === 404) {
             // Session in URL/localStorage doesn't belong to this user
             // (or was deleted). Stay on fresh state; don't auto-adopt.
@@ -4993,9 +5013,17 @@ const JoyMapMode = () => {
  *          Buttons to create, rename, archive, drill in.
  *  - Detail: one project's saved cards. Rename / archive from here too.
  * ------------------------------------------------------------------------- */
-const ProjectsMode = ({ setMode, setStrategistContext }) => {
-  const [projects, setProjects] = useState([]);
-  const [loading, setLoading] = useState(true);
+const ProjectsMode = ({
+  setMode,
+  setStrategistContext,
+  // Projects state hoisted to App on 2026-07-23.
+  projects,
+  activeProjectId,
+  selectProject,
+  refreshProjects,
+  setProjects,
+}) => {
+  const [loading, setLoading] = useState(!projects || projects.length === 0);
   const [error, setError] = useState(null);
   const [selectedId, setSelectedId] = useState(null);
   const [cards, setCards] = useState([]);
@@ -5055,11 +5083,13 @@ const ProjectsMode = ({ setMode, setStrategistContext }) => {
     if (setMode) setMode('intelligence');
   };
 
-  const selected = projects.find(p => p.id === selectedId) || null;
+  const selected = (projects || []).find(p => p.id === selectedId) || null;
 
+  // reloadProjects delegates to the App-level refresh so the Intelligence
+  // pane's dropdown stays in sync with any create/rename/archive done here.
   const reloadProjects = async () => {
     setLoading(true); setError(null);
-    try { setProjects(await fetchProjects(false)); }
+    try { await refreshProjects(); }
     catch (e) { setError(String(e.message || e)); }
     finally { setLoading(false); }
   };
@@ -5071,10 +5101,17 @@ const ProjectsMode = ({ setMode, setStrategistContext }) => {
     finally { setCardsLoading(false); }
   };
 
-  useEffect(() => { reloadProjects(); }, []);
+  useEffect(() => {
+    // Kick a background refresh on mount so the pane reflects any updates
+    // made in another session; the drop-down still renders from the
+    // App-supplied list without waiting.
+    reloadProjects();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   useEffect(() => {
     clearSelection();
     if (selectedId) reloadCards(selectedId);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId]);
 
   const archive = async (id) => {
@@ -6161,6 +6198,67 @@ const App = ({ authedUser = null, onSignOut = null } = {}) => {
   // wiping its local state (conversation turns, loaded Waldo files, draft
   // results, etc.) without lifting every piece of state into App.
   const [sessionKey, setSessionKey] = useState(0);
+
+  // Projects state lives at App level so both the Intelligence pane and
+  // the Projects pane read from one source. Previously each pane owned
+  // its own copy; the Intelligence pane's copy failed to populate on
+  // fresh page loads (auth-timing race on the first fetch), and only
+  // repaired when the user visited Projects and back (remount refetch).
+  // Hoisting fixes that: App fetches once, retries once on failure, and
+  // hands the same data to every consumer.
+  const [projects, setProjects] = useState([]);
+  const [activeProjectId, setActiveProjectIdState] = useState(() => getActiveProjectId());
+  const [projectsError, setProjectsError] = useState(null);
+  const [projectCards, setProjectCards] = useState([]);
+  const [projectCardsLoading, setProjectCardsLoading] = useState(false);
+
+  const refreshProjects = useCallback(async () => {
+    try {
+      const list = await fetchProjects(false);
+      setProjects(list);
+      setProjectsError(null);
+      return list;
+    } catch (e) {
+      setProjectsError(String(e.message || e));
+      return null;
+    }
+  }, []);
+
+  const refreshProjectCards = useCallback(async (projectId) => {
+    if (!projectId) { setProjectCards([]); return; }
+    setProjectCardsLoading(true);
+    try { setProjectCards(await fetchProjectCards(projectId)); }
+    catch (e) { setProjectsError(String(e.message || e)); }
+    finally { setProjectCardsLoading(false); }
+  }, []);
+
+  const selectProject = useCallback((id) => {
+    setActiveProjectIdState(id);
+    setActiveProjectId(id);
+    refreshProjectCards(id);
+  }, [refreshProjectCards]);
+
+  // Initial fetch on App mount. If the first attempt fails (typical
+  // failure: auth token not yet initialized), retry once after 800 ms
+  // so a slow auth boot doesn't leave projects empty for the whole
+  // session. A single retry is enough; a persistent failure means
+  // something structural is broken and the strategist will see the
+  // error surface elsewhere.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const first = await refreshProjects();
+      if (cancelled) return;
+      if (first === null) {
+        await new Promise(res => setTimeout(res, 800));
+        if (!cancelled) await refreshProjects();
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [refreshProjects]);
+
+  // Refresh saved cards when active project changes.
+  useEffect(() => { refreshProjectCards(activeProjectId); }, [activeProjectId, refreshProjectCards]);
   const newSession = () => {
     // Hard reset via full page navigation to a clean URL. The prior
     // soft-reset (writeSessionToUrl(null) + writeSessionLocal(null, [])
@@ -6246,13 +6344,26 @@ const App = ({ authedUser = null, onSignOut = null } = {}) => {
               key={`intel-${sessionKey}`}
               setEvidenceRows={setEvidenceRows}
               strategistContext={strategistContext}
-              setStrategistContext={setStrategistContext} />}
+              setStrategistContext={setStrategistContext}
+              projects={projects}
+              activeProjectId={activeProjectId}
+              selectProject={selectProject}
+              refreshProjects={refreshProjects}
+              projectCards={projectCards}
+              projectCardsLoading={projectCardsLoading}
+              refreshProjectCards={refreshProjectCards}
+              setProjects={setProjects} />}
             {mode === "joy_map" && <JoyMapMode
               key={`joymap-${sessionKey}`} />}
             {mode === "public_corpus" && <ProjectsMode
               key={`projects-${sessionKey}`}
               setMode={setMode}
-              setStrategistContext={setStrategistContext} />}
+              setStrategistContext={setStrategistContext}
+              projects={projects}
+              activeProjectId={activeProjectId}
+              selectProject={selectProject}
+              refreshProjects={refreshProjects}
+              setProjects={setProjects} />}
             {mode === "analytics" && <AnalyticsMode
               key={`analytics-${sessionKey}`} />}
           </div>
