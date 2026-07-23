@@ -2073,15 +2073,31 @@ const Icon = ({ name, size = 16 }) => {
 /* =========================================================================
  * 7. Rail — three modes, brand mark, PETERMAYER wordmark preserved exactly.
  * ========================================================================= */
-const Rail = ({ mode, setMode }) => {
+// Feature-flag allowlist for the Connections (beta) pane. Mirrored on
+// the backend in netlify/functions/bjl-connections-beta.js — keep the
+// two in sync. Move to bjl_authorized_users.features_enabled once the
+// beta pans out and we want per-user toggles managed in the DB.
+const CONNECTIONS_BETA_ALLOWLIST = new Set([
+  'haddowe@peteramayer.com',
+  'edelmanm@peteramayer.com',
+]);
+const isConnectionsBetaEnabled = (email) =>
+  !!(email && CONNECTIONS_BETA_ALLOWLIST.has(String(email).toLowerCase()));
+
+const Rail = ({ mode, setMode, authedUser }) => {
   // Outreach was removed from the nav on 2026-07-21 — no longer used.
   // BatchMode component definition remains as dead code (safe to delete in
   // a follow-up once we're sure nothing else references it).
+  const showConnectionsBeta = isConnectionsBetaEnabled(authedUser?.email);
   const items = [
-    { k: "intelligence",  label: "Intelligence",  num: "01" },
-    { k: "joy_map",       label: "Joy Map",       num: "02" },
-    { k: "public_corpus", label: "Projects",      num: "03" },
-    { k: "analytics",     label: "Analytics",     num: "04" },
+    { k: "intelligence",  label: "Intelligence",     num: "01" },
+    { k: "joy_map",       label: "Joy Map",          num: "02" },
+    { k: "public_corpus", label: "Projects",         num: "03" },
+    { k: "analytics",     label: "Analytics",        num: "04" },
+    ...(showConnectionsBeta
+      ? [{ k: "connections", label: "Connections β", num: "05" }]
+      : []
+    ),
   ];
   return (
     <aside className="rail">
@@ -5474,6 +5490,210 @@ const PublicCorpusMode = () => {
 // (formerly a tab inside the retired PublicCorpusMode). Wraps
 // PublicCorpusAnalytics in the same pane shell the other modes use so
 // scroll, header, and layout work consistently.
+// ConnectionsBetaMode — the beta pane for the within-person connectivity
+// ledger (bjl_connectivity_ledger). Strategist types a query; endpoint
+// resolves focal items, pulls edges, groups inside/beyond the focal
+// category, and translates each edge into a client-safe card via
+// bjl_pair_plain. Correlation coefficients (r) never render — every
+// connection speaks in shared answerers, pct moving together, and
+// Joy Index point lift.
+const ConnectionsBetaMode = () => {
+  const [query, setQuery] = useState('');
+  const [jobIdInput, setJobIdInput] = useState('');
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState(null);
+  const [payload, setPayload] = useState(null);
+
+  const run = async () => {
+    const q = query.trim();
+    if (!q) return;
+    setRunning(true); setError(null); setPayload(null);
+    try {
+      const r = await fetch('/.netlify/functions/bjl-connections-beta', authedFetchInit({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query: q,
+          job_id: jobIdInput.trim() || null,
+          max_focal_items: 5,
+        }),
+      }));
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || `request failed (${r.status})`);
+      setPayload(j);
+    } catch (e) {
+      setError(String(e.message || e));
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const renderCard = (card, key) => (
+    <div key={key} className="conn-card">
+      <div className="conn-card-pair">
+        <span className="conn-card-focal">{card.focal_item_name}</span>
+        <span className="conn-card-direction">
+          {card.direction === 'rises with' ? ' ↔ ' : ' ⇄ '}
+        </span>
+        <span className="conn-card-other">{card.other_item_name || `(item ${card.other_item_id})`}</span>
+      </div>
+      <div className={"conn-card-direction-line" + (card.direction === 'runs against' ? ' negative' : '')}>
+        <strong>{card.direction === 'rises with' ? 'Rises together' : 'Runs against'}</strong>
+        {card.other_primary_topic && card.other_primary_topic !== card.focal_primary_topic
+          ? <span className="conn-card-topic-badge"> · {card.other_primary_topic.replace(/_/g, ' ')}</span>
+          : null}
+      </div>
+      <div className="conn-card-body">
+        {card.shared_answerers != null && (
+          <>Of the <strong>{card.shared_answerers.toLocaleString()}</strong> people who rated both, </>
+        )}
+        {card.pct_move_together != null && (
+          <><strong>{card.pct_move_together}%</strong> sit on the same side of their own baseline for both. </>
+        )}
+        {card.lift_points != null && card.lift_points !== 0 && (
+          <>People running hot on the first rate the second <strong>{card.lift_points > 0 ? '+' : ''}{card.lift_points.toFixed(1)} points</strong> against their own baseline.</>
+        )}
+      </div>
+    </div>
+  );
+
+  const inside          = Array.isArray(payload?.inside_category) ? payload.inside_category : [];
+  const beyond          = Array.isArray(payload?.beyond_category) ? payload.beyond_category : [];
+  const negRimInside    = Array.isArray(payload?.negative_rim_inside) ? payload.negative_rim_inside : [];
+  const negRimBeyond    = Array.isArray(payload?.negative_rim_beyond) ? payload.negative_rim_beyond : [];
+  const unmeasured      = Array.isArray(payload?.unmeasured) ? payload.unmeasured : [];
+  const caveats         = Array.isArray(payload?.caveats) ? payload.caveats : [];
+  const focalItems      = Array.isArray(payload?.focal_items) ? payload.focal_items : [];
+
+  return (
+    <div className="brief-scroll" style={{padding: 32, overflowY: "auto", height: "100%", minHeight: 0, boxSizing: "border-box"}}>
+      <div style={{marginBottom: 22}}>
+        <div className="eyebrow" style={{marginBottom: 6}}>Workbench · beta</div>
+        <div className="display" style={{fontSize: 40, letterSpacing: "-0.01em"}}>Connections.</div>
+        <div style={{marginTop: 8, color: "var(--grey-2)", maxWidth: "62ch", fontSize: 14}}>
+          Within-person joy connectivity. Shows which experiences move together in the same people (rises with) or against each other (runs against), inside the focal category and beyond it. Numbers are shared answerers, share moving together, and Joy Index point lift — never correlation coefficients.
+        </div>
+      </div>
+
+      <div className="conn-compose">
+        <label className="conn-compose-label">Query
+          <textarea rows={3} value={query} onChange={(e) => setQuery(e.target.value)}
+            placeholder="e.g. What connects to going to a theme park?"
+            disabled={running} />
+        </label>
+        <label className="conn-compose-label">Job ID <span className="conn-compose-optional">(optional — pastes an Intelligence job id so the connections read is logged alongside)</span>
+          <input type="text" value={jobIdInput}
+            onChange={(e) => setJobIdInput(e.target.value)}
+            placeholder="uuid from bjl_query_jobs"
+            disabled={running} />
+        </label>
+        <div className="conn-compose-actions">
+          <button className="btn primary" onClick={run} disabled={running || !query.trim()}>
+            {running ? 'Running…' : 'Run connections'}
+          </button>
+        </div>
+      </div>
+
+      {error && (
+        <div className="conn-error">Error: {error}</div>
+      )}
+
+      {payload && payload.feature_enabled === false && (
+        <div className="conn-blocked">
+          Connections (beta) isn't enabled on this account. Ask Eli to add your email to the allowlist.
+        </div>
+      )}
+
+      {payload && payload.feature_enabled !== false && (
+        <>
+          <div className="conn-section">
+            <div className="conn-section-title">Focal items resolved</div>
+            {focalItems.length === 0 ? (
+              <div className="conn-empty">No items in bjl_items matched the query keywords. Try naming a specific brand, category, or experience.</div>
+            ) : (
+              <ul className="conn-focal-list">
+                {focalItems.map(f => (
+                  <li key={f.item_id}>
+                    <span className="conn-focal-name">{f.item_name}</span>
+                    <span className="conn-focal-meta">
+                      {f.primary_topic ? ` · ${f.primary_topic.replace(/_/g, ' ')}` : ''}
+                      {f.canonical_brand ? ` · brand: ${f.canonical_brand}` : ''}
+                      <span className="conn-focal-source"> · matched by {f.match_source}</span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          {caveats.length > 0 && (
+            <div className="conn-section">
+              <div className="conn-section-title">Caveats</div>
+              <ul className="conn-caveats">
+                {caveats.map((c, i) => (
+                  <li key={i}>
+                    <strong>{c.focal_item_name}</strong>: {c.detail}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {unmeasured.length > 0 && (
+            <div className="conn-section">
+              <div className="conn-section-title">Unmeasured</div>
+              <ul className="conn-caveats">
+                {unmeasured.map((u, i) => (
+                  <li key={i}>
+                    {u.focal_item_name ? <><strong>{u.focal_item_name}</strong>: </> : null}
+                    {u.detail}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {(inside.length > 0 || negRimInside.length > 0) && (
+            <div className="conn-section">
+              <div className="conn-section-title">Inside the category</div>
+              <div className="conn-section-sub">The emotional architecture of the focal experience — which things move together inside the same people.</div>
+              <div className="conn-cards">
+                {inside.map((c, i) => renderCard(c, `in-pos-${i}`))}
+              </div>
+              {negRimInside.length > 0 && (
+                <>
+                  <div className="conn-section-sub conn-section-neg">Joys that run against it</div>
+                  <div className="conn-cards">
+                    {negRimInside.map((c, i) => renderCard(c, `in-neg-${i}`))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {(beyond.length > 0 || negRimBeyond.length > 0) && (
+            <div className="conn-section">
+              <div className="conn-section-title">Beyond the category</div>
+              <div className="conn-section-sub">Cross-category connections — experiences in other topics that move with (or against) the focal set in the same people.</div>
+              <div className="conn-cards">
+                {beyond.map((c, i) => renderCard(c, `by-pos-${i}`))}
+              </div>
+              {negRimBeyond.length > 0 && (
+                <>
+                  <div className="conn-section-sub conn-section-neg">Joys that run against it</div>
+                  <div className="conn-cards">
+                    {negRimBeyond.map((c, i) => renderCard(c, `by-neg-${i}`))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+};
+
 const AnalyticsMode = () => {
   return (
     <div className="brief-scroll" style={{padding: 32, overflowY: "auto", height: "100%", minHeight: 0, boxSizing: "border-box"}}>
@@ -6305,13 +6525,14 @@ const App = ({ authedUser = null, onSignOut = null } = {}) => {
     joy_map:       ["Workbench", "Joy Map"],
     public_corpus: ["Workbench", "Projects"],
     analytics:     ["Workbench", "Analytics", "Public chat"],
+    connections:   ["Workbench", "Connections", "beta"],
   }[mode] || ["Workbench"];
 
-  const showDrawer = drawerOpen && mode !== "joy_map" && mode !== "public_corpus" && mode !== "analytics";
+  const showDrawer = drawerOpen && mode !== "joy_map" && mode !== "public_corpus" && mode !== "analytics" && mode !== "connections";
 
   return (
     <div className="app" data-screen-label={`BJL · ${mode}`}>
-      <Rail mode={mode} setMode={setMode} />
+      <Rail mode={mode} setMode={setMode} authedUser={authedUser} />
       <div className="main">
         <TopBar
           crumbs={crumbs}
@@ -6366,6 +6587,8 @@ const App = ({ authedUser = null, onSignOut = null } = {}) => {
               setProjects={setProjects} />}
             {mode === "analytics" && <AnalyticsMode
               key={`analytics-${sessionKey}`} />}
+            {mode === "connections" && isConnectionsBetaEnabled(authedUser?.email) && <ConnectionsBetaMode
+              key={`connections-${sessionKey}`} />}
           </div>
           {showDrawer && <EvidenceDrawer rows={evidenceRows} filter={drawerFilter} onFilter={setDrawerFilter} />}
         </div>
