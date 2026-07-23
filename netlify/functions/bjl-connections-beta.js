@@ -1,53 +1,35 @@
 /**
  * bjl-connections-beta.js — Connections (beta) endpoint.
  *
- * v2 (2026-07-23): four fixes and a skew-aware suppression, per field
- * feedback from the first live run.
+ * Front-door consumer (2026-07-23): all query understanding — shape
+ * classification, entity resolution, job-id inheritance, needs_
+ * clarification / out_of_scope escalation — moved to
+ * netlify/functions/bjl-front-door.js so every BJL surface shares one
+ * brief. This pane just reads brief.shape and brief.entities and
+ * routes accordingly.
  *
  * Pipeline:
  *   1. Auth + feature-flag check.
- *   2. Question-shape gate — a Haiku classifier decides whether the
- *      query is item-shaped (goes to the ledger), audience-shaped
- *      (redirects to the main tool's audience arms), or something else
- *      (redirects with a note). Prevents misrouted questions from
- *      resolving to junk, which is how the pane would lose trust in
- *      week one.
- *   3. Focal-item resolution. Two paths:
- *      a) job_id supplied — pull the decomposer_plan.home_items[] from
- *         the linked investigator run and resolve those names to
- *         item_ids via SQL exact/normalized match. This is the primary
- *         mode: connections-beside-the-finding, inheriting the
- *         investigator's already-vetted focal items. No LLM resolution.
- *      b) job_id absent — three-stage resolver.
- *           Stage 0: Haiku concept extractor rewrites the query into
- *             2-5 clean search phrases in natural corpus wording
- *             ("attending a game", "sports fan"). This clarifies the
- *             ask before SQL touches it, so short concept nouns like
- *             "fan" (3 chars) or "game" (4 chars) reach the ledger
- *             through phrases they anchor.
- *           Stage 1: ILIKE those phrases against bjl_items.item_name +
- *             canonical_brand, dedupe on lower(name), take top ~60
- *             ranked by hit_count then name_len desc.
- *           Stage 2: Haiku semantic-subject picker chooses 1-4 items
- *             from the shortlist that actually name what the query is
- *             asking about. Rejects incidental matches (an item named
- *             "non" surfacing on a query about non-fans).
- *   4. Per focal: bjl_item_edges(item_id) for every connection, sorted
+ *   2. bjlFrontDoor(query, { surface, prior_job_id, user_email })
+ *      returns the brief. If brief.shape is needs_clarification, echo
+ *      brief.clarifying_question; if out_of_scope, decline politely;
+ *      otherwise convert brief.entities into focal items via
+ *      focalItemsFromBrief().
+ *   3. Per focal: bjl_item_edges(item_id) for every connection, sorted
  *      by |r| desc (r stays server-side).
- *   5. Batch item-skew lookup: one SQL round trip against bjl_conn_
- *      centered to compute pct_positive per involved item. When an
+ *   4. Batch item-skew lookup against bjl_conn_centered. When an
  *      item's centered values are heavily one-sided (< 25% or > 75%
  *      on one side of zero), suppress pct_move_together on cards
- *      involving that item — the metric is unreliable when the
- *      distribution is skewed.
- *   6. Translate each surfaced edge via bjl_pair_plain(a, b), applying
+ *      involving that item — the metric is unreliable under a skewed
+ *      distribution.
+ *   5. Translate each surfaced edge via bjl_pair_plain(a, b), applying
  *      skew suppression. Correlation coefficients (r) never appear in
  *      the response payload.
- *   7. Two variants of unmeasured copy per spec: (a) item outside
- *      ledger (under 50 respondents), (b) no qualifying pair (under
- *      30 shared).
- *   8. Optional scratch log to bjl_query_jobs under key
- *      'connections_beta' when a job_id is supplied.
+ *   6. Two variants of unmeasured copy: (a) item outside ledger (under
+ *      50 respondents), (b) no qualifying pair (under 30 shared).
+ *   7. Optional scratch log to bjl_query_jobs under key
+ *      'connections_beta' when a job_id is supplied. Includes the
+ *      brief for downstream auditing.
  *
  * Hard rule (unchanged): correlation coefficients never leave the
  * server. Every card speaks in shared answerers, pct moving together
@@ -57,16 +39,11 @@
  */
 
 const { createClient } = require('@supabase/supabase-js');
-const Anthropic = require('@anthropic-ai/sdk').default;
 const { verifyAndAuthorize } = require('./bjl-auth-helper');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
-const HAIKU_MODEL = 'claude-haiku-4-5-20251001';
 
 const CONNECTIONS_BETA_ALLOWLIST = new Set([
   'haddowe@peteramayer.com',
@@ -90,246 +67,59 @@ const SKEW_LOW  = 25;
 const SKEW_HIGH = 75;
 
 // ---------------------------------------------------------------------
-// Job-id inheritance (Fix 2)
+// Query understanding — delegated to the front door (bjl-front-door.js).
 // ---------------------------------------------------------------------
-async function fetchInvestigatorHomeItems(jobId) {
-  if (!jobId) return null;
-  const { data, error } = await supabase
-    .from('bjl_query_jobs')
-    .select('scratch')
-    .eq('job_id', jobId)
-    .maybeSingle();
-  if (error || !data) return null;
-  const scratch = Array.isArray(data.scratch) ? data.scratch : [];
-  for (const entry of scratch) {
-    if (entry && entry.type === 'decomposer_plan' && Array.isArray(entry.home_items)) {
-      return entry.home_items.map(s => String(s || '').trim()).filter(Boolean);
+// The connections pane is now a pure consumer of the front-door brief.
+// The local three-stage resolver that lived here previously (Haiku
+// concept extractor + SQL shortlist + Haiku semantic-subject picker)
+// moved into netlify/functions/bjl-front-door.js so every BJL surface
+// shares the same query understanding. The pane reads brief.shape,
+// brief.entities.items, and brief.entities.audiences and routes
+// accordingly.
+
+const { bjlFrontDoor } = require('./bjl-front-door.js');
+
+// Turn the brief into the pane's focal-item list. The pane runs the
+// ledger against whichever items the shape resolved to — items for
+// item_connection, audience anchor items for audience_comparison,
+// items again for brand_lookup / territory_read (when any items came
+// back), etc. Only needs_clarification and out_of_scope skip the
+// ledger entirely; every other shape gets to run if entities resolved.
+async function focalItemsFromBrief(brief) {
+  if (!brief || !brief.entities) return [];
+  const shape = brief.shape;
+  if (shape === 'audience_comparison') {
+    const audiences = Array.isArray(brief.entities.audiences) ? brief.entities.audiences : [];
+    const anchorIds = new Set();
+    for (const aud of audiences) {
+      for (const id of (Array.isArray(aud.anchor_item_ids) ? aud.anchor_item_ids : [])) {
+        anchorIds.add(Number(id));
+      }
     }
-  }
-  return null;
-}
-
-function sqlEscape(s) { return String(s).replace(/'/g, "''"); }
-
-async function resolveNamesToItemIds(names) {
-  if (!names || names.length === 0) return [];
-  const uniq = Array.from(new Set(names.map(n => n.trim()).filter(Boolean)));
-  if (uniq.length === 0) return [];
-  const inList = uniq.map(n => `'${sqlEscape(n)}'`).join(',');
-  // Exact match first; if the decomposer's names are slightly off, we
-  // fall back to case-insensitive equality on trimmed name.
-  const sql = `
-    SELECT item_id, item_name, primary_topic, canonical_brand, is_brand, is_location
-    FROM bjl_items
-    WHERE item_name IN (${inList})
-       OR LOWER(BTRIM(item_name)) IN (${uniq.map(n => `LOWER(BTRIM('${sqlEscape(n)}'))`).join(',')})
-    LIMIT ${Math.max(uniq.length * 2, 10)}
-  `;
-  const { data, error } = await supabase.rpc('execute_read_sql', { query_text: sql });
-  if (error) throw new Error(`resolveNamesToItemIds failed: ${error.message}`);
-  const rows = Array.isArray(data) ? data : [];
-  return rows.map(r => ({
-    item_id:         Number(r.item_id),
-    item_name:       String(r.item_name),
-    primary_topic:   r.primary_topic || null,
-    canonical_brand: r.canonical_brand || null,
-    is_brand:        !!r.is_brand,
-    is_location:     !!r.is_location,
-    match_source:    'investigator_home_items',
-  }));
-}
-
-// ---------------------------------------------------------------------
-// Three-stage resolver — Haiku concept extractor + shortlist + Haiku picker
-// ---------------------------------------------------------------------
-//
-// Prior versions used a raw-token ILIKE stage where the query text was
-// split on whitespace, filtered to 5-char-minimum non-stopword tokens,
-// and matched. That guard killed "non" (the false-match concern) but it
-// also killed the concept nouns the query was actually asking about —
-// "fan" (3 chars), "game" (4 chars). Queries like "What connects with
-// being a fan or attending a game?" produced an empty shortlist because
-// no 5+ char content word matched.
-//
-// The fix: Haiku runs FIRST as a concept extractor. It reads the query
-// and returns 2-5 short phrases that name the experiences, brands, or
-// categories the query is asking about — using natural corpus wording.
-// Those phrases become the ILIKE terms. Because Haiku gives us clean
-// semantic concepts, the token-length guard is unnecessary; a phrase
-// like "attending a game" or "sports fan" IS the search key.
-//
-// Stage 2 (Haiku semantic-subject picker) is unchanged — it prevents
-// any incidental substring match (like an item named "non" surfacing
-// on a query about non-fans) from reaching the ledger, since it only
-// picks items that name the semantic subject of the query.
-
-async function extractSearchTermsWithHaiku(query) {
-  const system = `Given a strategist's query for the joy connectivity ledger, extract 2-5 short phrases (each 1-6 words) that name the specific experiences, brands, or categories the query is asking about. These phrases will search the corpus of item names via case-insensitive substring match, so pick phrases in natural corpus wording that would actually appear inside real item names.
-
-Examples:
-Query: "What connects with being a fan or attending a game?"
-["sports team","attending a game","sports fan","sports","game"]
-
-Query: "How does joy from a theme park spread to other categories?"
-["theme park","amusement park","theme park trip"]
-
-Query: "Tell me about wine drinkers"
-["drinking wine","glass of wine","wine"]
-
-Query: "What travels with joy from a mortgage?"
-["mortgage","home loan","buying a home"]
-
-Rules:
-- Return 2-5 phrases.
-- Each phrase 1-6 words.
-- Use natural corpus wording ("attending a game", not "game attendance"; "going to a game" is also fine).
-- Include short single-word forms alongside longer phrases ("sports team" AND "sports") when both would help match.
-- If the query names a specific brand, include the brand as one phrase.
-- If the query is very vague, do your best with the strongest 2 phrases.
-- No stopwords as standalone phrases ("about", "with", "the" alone).
-
-Return ONLY a JSON array of strings, no preamble.`;
-
-  try {
-    const rsp = await anthropic.messages.create({
-      model: HAIKU_MODEL,
-      max_tokens: 300,
-      system: [{ type: 'text', text: system }],
-      messages: [{ role: 'user', content: query }],
-    });
-    const text = (rsp.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
-    const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
-    const parsed = JSON.parse(cleaned);
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .map(s => String(s || '').trim().toLowerCase())
-      .filter(s => s.length >= 2 && s.length <= 60)
-      .slice(0, 6);
-  } catch (e) {
-    console.warn('[connections-beta] concept extractor failed:', e.message);
+    if (anchorIds.size > 0) {
+      const idList = Array.from(anchorIds).join(',');
+      const sql = `SELECT item_id, item_name, primary_topic, canonical_brand FROM bjl_items WHERE item_id IN (${idList})`;
+      const { data, error } = await supabase.rpc('execute_read_sql', { query_text: sql });
+      if (error) throw new Error(`focal fetch from audience anchors failed: ${error.message}`);
+      return (Array.isArray(data) ? data : []).map(r => ({
+        item_id:         Number(r.item_id),
+        item_name:       String(r.item_name),
+        primary_topic:   r.primary_topic || null,
+        canonical_brand: r.canonical_brand || null,
+        match_source:    'audience_anchor',
+      }));
+    }
     return [];
   }
-}
-
-async function buildFocalShortlistFromTerms(terms) {
-  if (terms.length === 0) return [];
-  const orConds = terms.map(t =>
-    `(LOWER(item_name) LIKE '%${sqlEscape(t)}%' OR LOWER(COALESCE(canonical_brand, '')) LIKE '%${sqlEscape(t)}%')`
-  ).join(' OR ');
-  const scoreExpr = terms.map(t =>
-    `(CASE WHEN LOWER(item_name) LIKE '%${sqlEscape(t)}%' OR LOWER(COALESCE(canonical_brand, '')) LIKE '%${sqlEscape(t)}%' THEN 1 ELSE 0 END)`
-  ).join(' + ');
-  // DISTINCT ON collapses duplicates by name (the corpus carries several
-  // items named "Sports", "Entertainment", "enjoy", etc. — deduping keeps
-  // the shortlist informative). Tiebreak prefers LONGER names on ties:
-  // "GOING TO A GAME of your favorite sports team" carries more semantic
-  // content than the single word "Sports", so on a one-token hit it should
-  // outrank the short duplicate. LIMIT 60 gives the Haiku picker enough
-  // room to see the specific descriptive items even when many short
-  // generic items also match one token.
-  const sql = `
-    WITH matches AS (
-      SELECT DISTINCT ON (LOWER(item_name))
-             item_id, item_name, primary_topic, canonical_brand, is_brand, is_location,
-             (${scoreExpr})::int AS hit_count,
-             CHAR_LENGTH(item_name) AS name_len
-      FROM bjl_items
-      WHERE ${orConds}
-      ORDER BY LOWER(item_name), item_id
-    )
-    SELECT item_id, item_name, primary_topic, canonical_brand, is_brand, is_location, hit_count
-    FROM matches
-    ORDER BY hit_count DESC, name_len DESC
-    LIMIT 60
-  `;
-  const { data, error } = await supabase.rpc('execute_read_sql', { query_text: sql });
-  if (error) throw new Error(`shortlist failed: ${error.message}`);
-  return (Array.isArray(data) ? data : []).map(r => ({
-    item_id:         Number(r.item_id),
-    item_name:       String(r.item_name),
-    primary_topic:   r.primary_topic || null,
-    canonical_brand: r.canonical_brand || null,
-    is_brand:        !!r.is_brand,
-    is_location:     !!r.is_location,
+  // Every other actionable shape uses brief.entities.items directly.
+  const items = Array.isArray(brief.entities.items) ? brief.entities.items : [];
+  return items.map(i => ({
+    item_id:         Number(i.item_id),
+    item_name:       String(i.item_name),
+    primary_topic:   i.primary_topic || null,
+    canonical_brand: null,
+    match_source:    i.match_basis === 'embedding' ? 'embedding' : 'reasoning',
   }));
-}
-
-async function pickFocalItemsWithHaiku(query, shortlist) {
-  if (shortlist.length === 0) return { picks: [], reason: 'shortlist empty' };
-
-  const candidates = shortlist.map(c =>
-    `${c.item_id}: "${c.item_name}"${c.primary_topic ? ` [${c.primary_topic}]` : ''}${c.canonical_brand ? ` (brand: ${c.canonical_brand})` : ''}`
-  ).join('\n');
-
-  const system = `You are choosing which items in the corpus best NAME THE SEMANTIC SUBJECT of a strategist's query, for a connectivity read.
-
-You get a query and a numbered candidate list from the corpus (each item is "id: name [topic] (brand)"). Return a JSON object:
-  {
-    "picks": [<item_id>, ...],   // 0 to 4 item_ids that name what the query is really asking about
-    "reason": "one short sentence"
-  }
-
-Rules:
-- Pick 1 to 4 items MAX. Prefer 1-3 unless the corpus clearly carries the same subject under multiple framings (e.g. theme parks appear as several trip-type items).
-- The item must be the SEMANTIC SUBJECT of the query, not an incidental token match. If the query is "what do fans enjoy," an item called "non" (with 'fans' incidentally elsewhere) is wrong. If the query is "theme parks," "A THEME PARK trip" is right; "Visiting a HISTORY MUSEUM" is wrong even if 'trip' matches.
-- If no candidate is a real semantic match, return empty picks with a reason.
-- Do NOT invent item_ids that aren't in the candidate list.
-
-Output ONLY the JSON, no preamble.`;
-
-  const userMessage = `Query: ${query}\n\nCandidates:\n${candidates}`;
-
-  try {
-    const rsp = await anthropic.messages.create({
-      model: HAIKU_MODEL,
-      max_tokens: 400,
-      system: [{ type: 'text', text: system }],
-      messages: [{ role: 'user', content: userMessage }],
-    });
-    const text = (rsp.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
-    const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
-    const parsed = JSON.parse(cleaned);
-    const idsRaw = Array.isArray(parsed.picks) ? parsed.picks : [];
-    const validIds = new Set(shortlist.map(c => c.item_id));
-    const picks = idsRaw
-      .map(Number)
-      .filter(id => Number.isFinite(id) && validIds.has(id))
-      .slice(0, 4);
-    return { picks, reason: typeof parsed.reason === 'string' ? parsed.reason : '' };
-  } catch (e) {
-    console.warn('[connections-beta] Haiku picker failed:', e.message);
-    return { picks: [], reason: `picker failed: ${e.message}` };
-  }
-}
-
-async function resolveFocalItemsFromQuery(query) {
-  const terms = await extractSearchTermsWithHaiku(query);
-  if (terms.length === 0) {
-    return { focals: [], resolver_note: 'Concept extractor returned no search terms — the query may be too vague to name a specific experience.' };
-  }
-  const shortlist = await buildFocalShortlistFromTerms(terms);
-  if (shortlist.length === 0) {
-    return {
-      focals: [],
-      resolver_note: `Extracted terms [${terms.join(', ')}] but nothing in bjl_items matched. The specific experience the query names may not be in the corpus, or it may be phrased in a way the item names don't share.`,
-    };
-  }
-  const picked = await pickFocalItemsWithHaiku(query, shortlist);
-  if (picked.picks.length === 0) {
-    return {
-      focals: [],
-      resolver_note: `Extracted terms [${terms.join(', ')}] surfaced ${shortlist.length} candidates, but the semantic-subject picker rejected all of them: ${picked.reason}`,
-    };
-  }
-  const byId = new Map(shortlist.map(c => [c.item_id, c]));
-  const focals = picked.picks
-    .map(id => byId.get(id))
-    .filter(Boolean)
-    .map(c => ({ ...c, match_source: 'name' }));
-  return {
-    focals,
-    resolver_note: `Extracted [${terms.join(', ')}] via Haiku; ${shortlist.length} candidates; picker selected ${focals.length}. ${picked.reason}`,
-  };
 }
 
 // ---------------------------------------------------------------------
@@ -510,48 +300,75 @@ exports.handler = async (event) => {
   const jobId = body.job_id && typeof body.job_id === 'string' ? body.job_id.trim() : null;
 
   try {
-    // No shape gate. Any query the strategist types goes to the resolver
-    // (v2 shape-gate approach was removed 2026-07-23 as over-blocking —
-    // it redirected direct instructions like "run what connects with
-    // being a fan" because the enclosing sentence had comparison
-    // framing). The guarded two-stage resolver is the honest filter:
-    // if there is a semantic subject to resolve, run the ledger on it;
-    // if there isn't, the empty-focals response carries a soft hint
-    // toward Intelligence for audience-shaped questions.
+    // Single call to the front door. It owns shape classification,
+    // entity resolution (including job-id inheritance from the
+    // investigator's decomposer_plan when jobId is supplied), and
+    // needs_clarification / out_of_scope escalation. The pane just
+    // consumes the brief.
+    const brief = await bjlFrontDoor(query, {
+      surface: 'connections',
+      prior_job_id: jobId,
+      user_email: userEmail,
+    });
 
-    // Fix 2: prefer investigator-derived focal items when a job_id is
-    // supplied. The decomposer has already done the semantic work of
-    // choosing home_items; skip Haiku resolution.
-    let focalItems = [];
-    let resolverPath = null;
-    let resolverNote = null;
-
-    if (jobId) {
-      const invNames = await fetchInvestigatorHomeItems(jobId);
-      if (invNames && invNames.length > 0) {
-        focalItems = await resolveNamesToItemIds(invNames);
-        resolverPath = 'investigator_home_items';
-        if (focalItems.length === 0) {
-          resolverNote = `Job ${jobId} had ${invNames.length} home_items but none resolved to bjl_items rows — likely a mismatch between the investigator's item names and the canonical bjl_items.item_name.`;
-        }
-      }
+    // Shapes that never reach the ledger: return the front door's
+    // clarifying question (or a polite decline) unchanged.
+    if (brief.shape === 'needs_clarification') {
+      const payload = {
+        ok: true,
+        feature_enabled: true,
+        query,
+        brief,
+        focal_items: [],
+        inside_category: [],
+        beyond_category: [],
+        negative_rim_inside: [],
+        negative_rim_beyond: [],
+        unmeasured: [{
+          reason: 'needs_clarification',
+          detail: brief.clarifying_question || 'Could you rephrase — I need a specific experience, brand, or category to run this against.',
+        }],
+        caveats: [],
+        resolver_path: 'front_door',
+        resolver_note: brief.resolver_note,
+      };
+      await appendScratchEntry(jobId, { type: 'connections_beta', ...payload });
+      return { statusCode: 200, body: JSON.stringify(payload) };
     }
 
-    // Fix 1: two-stage resolver as the fallback path. Guarded shortlist
-    // (min 5-char tokens, no hyphen-split fragments) then Haiku picker
-    // on semantic subject.
-    if (focalItems.length === 0) {
-      const r = await resolveFocalItemsFromQuery(query);
-      focalItems = r.focals;
-      resolverPath = resolverPath || 'query_text_two_stage';
-      resolverNote = r.resolver_note;
+    if (brief.shape === 'out_of_scope') {
+      const payload = {
+        ok: true,
+        feature_enabled: true,
+        query,
+        brief,
+        focal_items: [],
+        inside_category: [],
+        beyond_category: [],
+        negative_rim_inside: [],
+        negative_rim_beyond: [],
+        unmeasured: [{
+          reason: 'out_of_scope',
+          detail: "That's outside what the Joy Lab corpus can answer. This pane runs the within-person connectivity ledger — try a question about how experiences, brands, or categories move together in people's joy.",
+        }],
+        caveats: [],
+        resolver_path: 'front_door',
+        resolver_note: brief.resolver_note,
+      };
+      await appendScratchEntry(jobId, { type: 'connections_beta', ...payload });
+      return { statusCode: 200, body: JSON.stringify(payload) };
     }
+
+    const focalItems = await focalItemsFromBrief(brief);
+    const resolverPath = 'front_door';
+    const resolverNote = brief.resolver_note;
 
     if (focalItems.length === 0) {
       const empty = {
         ok: true,
         feature_enabled: true,
         query,
+        brief,
         focal_items: [],
         inside_category: [],
         beyond_category: [],
@@ -559,7 +376,7 @@ exports.handler = async (event) => {
         negative_rim_beyond: [],
         unmeasured: [{
           reason: 'no_focal_items_resolved',
-          detail: 'The query did not resolve to a semantic subject in bjl_items — the resolver looked for a specific experience, brand, or category to run through the ledger and did not find one. Two things to try: (a) rephrase to name a specific experience (e.g. "going to a game", "having coffee at a cafe", "a theme park trip"), or (b) if the question is really about comparing groups of people (fans vs non-fans, Gen Z vs Boomers), that\u2019s an audience read — the main Intelligence pane\u2019s audience arms answer it. Attach an Intelligence job_id here to use its already-resolved focals.',
+          detail: 'The front door classified this query but no focal items resolved for the ledger. Two things to try: (a) rephrase to name a specific experience (e.g. "going to a game", "having coffee at a cafe", "a theme park trip"), or (b) if the question is really about comparing groups of people (fans vs non-fans, Gen Z vs Boomers), the main Intelligence pane\u2019s audience arms answer it. Attach an Intelligence job_id here to use its already-resolved focals.',
         }],
         caveats: [],
         resolver_path: resolverPath,
@@ -645,6 +462,7 @@ exports.handler = async (event) => {
       ok: true,
       feature_enabled: true,
       query,
+      brief,
       resolver_path:   resolverPath,
       resolver_note:   resolverNote,
       focal_items: focalItems.map(f => ({
@@ -666,6 +484,7 @@ exports.handler = async (event) => {
       type:            'connections_beta',
       query,
       user_email:      userEmail,
+      brief,
       resolver_path:   resolverPath,
       resolver_note:   resolverNote,
       focal_items:     responsePayload.focal_items,

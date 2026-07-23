@@ -5622,7 +5622,9 @@ const ConnectionsBetaMode = () => {
             <div className="conn-section-title">Focal items resolved</div>
             {payload.resolver_path && (
               <div className="conn-focal-source-note">
-                Resolved via {payload.resolver_path === 'investigator_home_items' ? 'the linked Intelligence job\u2019s decomposer plan' : 'a two-stage keyword shortlist plus semantic-subject picker'}.
+                Resolved via the front door
+                {payload.brief && payload.brief.shape ? ` · shape: ${payload.brief.shape.replace(/_/g, ' ')}` : ''}
+                {payload.resolver_note ? `. ${payload.resolver_note}` : '.'}
               </div>
             )}
             {focalItems.length === 0 ? (
