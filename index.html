@@ -5528,34 +5528,46 @@ const ConnectionsBetaMode = () => {
     }
   };
 
-  const renderCard = (card, key) => (
-    <div key={key} className="conn-card">
-      <div className="conn-card-pair">
-        <span className="conn-card-focal">{card.focal_item_name}</span>
-        <span className="conn-card-direction">
-          {card.direction === 'rises with' ? ' ↔ ' : ' ⇄ '}
-        </span>
-        <span className="conn-card-other">{card.other_item_name || `(item ${card.other_item_id})`}</span>
-      </div>
-      <div className={"conn-card-direction-line" + (card.direction === 'runs against' ? ' negative' : '')}>
-        <strong>{card.direction === 'rises with' ? 'Rises together' : 'Runs against'}</strong>
-        {card.other_primary_topic && card.other_primary_topic !== card.focal_primary_topic
-          ? <span className="conn-card-topic-badge"> · {card.other_primary_topic.replace(/_/g, ' ')}</span>
-          : null}
-      </div>
-      <div className="conn-card-body">
-        {card.shared_answerers != null && (
-          <>Of the <strong>{card.shared_answerers.toLocaleString()}</strong> people who rated both, </>
+  const renderCard = (card, key) => {
+    // Skew suppression: when either side of the pair has a heavily
+    // one-sided distribution, pct_move_together loses meaning. Lead
+    // with lift_points and shared_answerers; hide the pct with a
+    // caveat so the strategist sees why it's missing.
+    const pctSuppressed = !!card.pct_move_together_suppressed;
+    return (
+      <div key={key} className="conn-card">
+        <div className="conn-card-pair">
+          <span className="conn-card-focal">{card.focal_item_name}</span>
+          <span className="conn-card-direction">
+            {card.direction === 'rises with' ? ' ↔ ' : ' ⇄ '}
+          </span>
+          <span className="conn-card-other">{card.other_item_name || `(item ${card.other_item_id})`}</span>
+        </div>
+        <div className={"conn-card-direction-line" + (card.direction === 'runs against' ? ' negative' : '')}>
+          <strong>{card.direction === 'rises with' ? 'Rises together' : 'Runs against'}</strong>
+          {card.other_primary_topic && card.other_primary_topic !== card.focal_primary_topic
+            ? <span className="conn-card-topic-badge"> · {card.other_primary_topic.replace(/_/g, ' ')}</span>
+            : null}
+        </div>
+        <div className="conn-card-body">
+          {card.lift_points != null && (
+            <>People running hot on the first rate the second <strong>{card.lift_points > 0 ? '+' : ''}{card.lift_points.toFixed(1)} points</strong> against their own baseline. </>
+          )}
+          {card.shared_answerers != null && (
+            <>Based on <strong>{card.shared_answerers.toLocaleString()}</strong> people who rated both. </>
+          )}
+          {!pctSuppressed && card.pct_move_together != null && (
+            <><strong>{card.pct_move_together}%</strong> sit on the same side of their own baseline for both.</>
+          )}
+        </div>
+        {pctSuppressed && (
+          <div className="conn-card-caveat">
+            Percent moving together is suppressed on this pair: one side has a heavily one-sided distribution (over 75% or under 25% on one side of zero), which makes the metric unreliable. Lift and shared answerers stand as reported.
+          </div>
         )}
-        {card.pct_move_together != null && (
-          <><strong>{card.pct_move_together}%</strong> sit on the same side of their own baseline for both. </>
-        )}
-        {card.lift_points != null && card.lift_points !== 0 && (
-          <>People running hot on the first rate the second <strong>{card.lift_points > 0 ? '+' : ''}{card.lift_points.toFixed(1)} points</strong> against their own baseline.</>
-        )}
       </div>
-    </div>
-  );
+    );
+  };
 
   const inside          = Array.isArray(payload?.inside_category) ? payload.inside_category : [];
   const beyond          = Array.isArray(payload?.beyond_category) ? payload.beyond_category : [];
@@ -5604,10 +5616,25 @@ const ConnectionsBetaMode = () => {
         </div>
       )}
 
-      {payload && payload.feature_enabled !== false && (
+      {payload && payload.feature_enabled !== false && payload.shape && payload.shape !== 'item' && (
+        <div className="conn-redirect">
+          <div className="conn-redirect-title">Redirect — {payload.shape === 'audience' ? 'audience comparison' : 'not an item-connection question'}</div>
+          <div className="conn-redirect-body">{payload.redirect_message}</div>
+          {payload.shape_reason && (
+            <div className="conn-redirect-reason">Signal: {payload.shape_reason}</div>
+          )}
+        </div>
+      )}
+
+      {payload && payload.feature_enabled !== false && (!payload.shape || payload.shape === 'item') && (
         <>
           <div className="conn-section">
             <div className="conn-section-title">Focal items resolved</div>
+            {payload.resolver_path && (
+              <div className="conn-focal-source-note">
+                Resolved via {payload.resolver_path === 'investigator_home_items' ? 'the linked Intelligence job\u2019s decomposer plan' : 'a two-stage keyword shortlist plus semantic-subject picker'}.
+              </div>
+            )}
             {focalItems.length === 0 ? (
               <div className="conn-empty">No items in bjl_items matched the query keywords. Try naming a specific brand, category, or experience.</div>
             ) : (
