@@ -7,10 +7,16 @@
  * reasoning at the front, v2 arms behind it for confirmation and
  * quantification.
  *
- * This file ships Step 1 of the front-door migration (shape + entities,
- * connections pane consumer). Capability (Step 2) and route (Step 3)
- * are stubbed in the brief schema so consumers can begin reading them
- * defensively; they populate in later PRs.
+ * This file ships Steps 1 and 2 of the front-door migration:
+ *   Step 1: shape classification + entity resolution (connections pane
+ *           consumer).
+ *   Step 2: capability computation — ledger_degree + verbatim_depth
+ *           per resolved item plus a rolled-up verdict. Two batch
+ *           SQL calls; no per-item round trips. Consumers read
+ *           brief.capability rather than re-running the coverage math
+ *           per surface.
+ * Route (Step 3) is stubbed in the brief schema so consumers can read
+ * it defensively; it populates in a later PR.
  *
  * Contract:
  *   const brief = await bjlFrontDoor(query, context);
@@ -71,7 +77,20 @@ function sqlEscape(s) { return String(s).replace(/'/g, "''"); }
 
 async function classifyShape(query, context) {
   const surface = (context && context.surface) || null;
-  const surfaceHint = surface ? `\nCalling surface: ${surface}` : '';
+  // Surface-specific default. The connections pane's whole purpose is
+  // "what connects to X" — a bare item, brand, or experience typed
+  // into it is by convention a connection query, not an ambiguous
+  // ask. Without this bias, log ids 4-7 in bjl_front_door_log show
+  // the classifier over-escalating bare inputs ("Mcdonalds", "Being
+  // a fan of something", "Going to a fast food restaurant") to
+  // needs_clarification, forcing a three-retry burst on a surface
+  // that could have just run the ledger.
+  const surfaceHint = surface === 'connections'
+    ? `\nCalling surface: connections
+CONNECTIONS-SURFACE DEFAULT: this pane runs the within-person connectivity ledger on a specific item or brand. A bare noun phrase typed here means "what connects to it" — classify bare items/experiences as item_connection and bare brand names as brand_lookup. Do NOT escalate to needs_clarification for a bare item, bare brand, or a query missing only a verb; the surface default supplies the verb. Reserve needs_clarification for pronouns without antecedents, meta questions about the tool, or genuinely empty asks.`
+    : surface
+    ? `\nCalling surface: ${surface}`
+    : '';
   const system = `You classify a strategist's query into ONE shape for the BJL front door. Every downstream surface reads the shape and gates behavior on it, so misclassification cascades.
 
 Shapes (choose exactly one):
@@ -415,18 +434,131 @@ async function resolveEntities(query, shape, context) {
 }
 
 // ---------------------------------------------------------------------
-// Decision 3 (capability): stubbed in Step 1. Populates in Step 2.
-// Decision 4 (route):       stubbed in Step 1. Populates in Step 3.
+// Decision 3: Capability
 // ---------------------------------------------------------------------
+// Two thresholds set from the connections pane's live behavior. The
+// pane's own EDGE_DIVERSITY_FLOOR (50) is the boundary between "we
+// can read this item's neighborhood confidently" and "this item's
+// edges may all come from one co-fielding module — treat cross-
+// category reads with care." Verbatim depth uses looser tiers because
+// the corpus is deep; 100 shared answerers' verbatims is comfortably
+// "measurable" for a qualitative texture read.
+const LEDGER_MEASURABLE = 50;
+const VERBATIM_MEASURABLE = 100;
+const VERBATIM_THIN = 20;
 
+// One batch call per metric. When entities.items is empty, returns
+// a stub verdict (no items → nothing to measure) so downstream can
+// still switch on capability shape.
+async function computeCapability(entities) {
+  const items = Array.isArray(entities && entities.items) ? entities.items : [];
+  if (items.length === 0) {
+    return {
+      ledger_degree: {},
+      verbatim_depth: {},
+      verdict: 'unmeasured',
+      unmeasured_detail: 'No items resolved; nothing to measure.',
+    };
+  }
+  const ids = items.map(i => Number(i.item_id)).filter(Number.isFinite);
+  if (ids.length === 0) {
+    return {
+      ledger_degree: {},
+      verbatim_depth: {},
+      verdict: 'unmeasured',
+      unmeasured_detail: 'Resolved items had no numeric ids.',
+    };
+  }
+  const idList = ids.join(',');
+
+  // ledger_degree — count of ledger rows mentioning each item on
+  // either side. Single scan; no per-item round trip.
+  const ledgerSql = `
+    WITH ids(item_id) AS (VALUES ${ids.map(id => `(${id})`).join(',')})
+    SELECT ids.item_id,
+           (SELECT COUNT(*) FROM bjl_connectivity_ledger l
+            WHERE l.item_a = ids.item_id OR l.item_b = ids.item_id) AS degree
+    FROM ids
+  `;
+
+  // verbatim_depth — count of verbatims from respondents who
+  // answered the item at all. is_selected is a multi-select flag
+  // that zeroes out scale/Likert items (their raw_value carries the
+  // rating instead), so we join on item_id alone. LEFT JOIN so items
+  // with no responses return zero rather than dropping out.
+  const verbatimSql = `
+    WITH ids(item_id) AS (VALUES ${ids.map(id => `(${id})`).join(',')})
+    SELECT ids.item_id, COUNT(DISTINCT v.id)::int AS depth
+    FROM ids
+    LEFT JOIN bjl_responses r ON r.item_id = ids.item_id
+    LEFT JOIN bjl_verbatims v ON v.respondent_id = r.respondent_id
+    GROUP BY ids.item_id
+  `;
+
+  const ledgerDegree = {};
+  const verbatimDepth = {};
+  try {
+    const { data: lRows, error: lErr } = await supabase.rpc('execute_read_sql', { query_text: ledgerSql });
+    if (lErr) throw new Error(`ledger_degree query: ${lErr.message}`);
+    for (const row of (Array.isArray(lRows) ? lRows : [])) {
+      ledgerDegree[String(row.item_id)] = Number(row.degree || 0);
+    }
+  } catch (e) {
+    console.warn('[front-door] ledger_degree failed:', e.message);
+  }
+  try {
+    const { data: vRows, error: vErr } = await supabase.rpc('execute_read_sql', { query_text: verbatimSql });
+    if (vErr) throw new Error(`verbatim_depth query: ${vErr.message}`);
+    for (const row of (Array.isArray(vRows) ? vRows : [])) {
+      verbatimDepth[String(row.item_id)] = Number(row.depth || 0);
+    }
+  } catch (e) {
+    console.warn('[front-door] verbatim_depth failed:', e.message);
+  }
+
+  // Rollup verdict — best-case across resolved items. If ANY item
+  // clears both floors, the query is measurable. If any has any
+  // ledger presence at all, it's thin. Otherwise unmeasured.
+  let maxLedger = 0, maxVerbatim = 0;
+  for (const id of ids) {
+    const l = ledgerDegree[String(id)] || 0;
+    const v = verbatimDepth[String(id)] || 0;
+    if (l > maxLedger) maxLedger = l;
+    if (v > maxVerbatim) maxVerbatim = v;
+  }
+  let verdict, unmeasuredDetail = null;
+  if (maxLedger >= LEDGER_MEASURABLE || maxVerbatim >= VERBATIM_MEASURABLE) {
+    verdict = 'measurable';
+  } else if (maxLedger > 0 || maxVerbatim >= VERBATIM_THIN) {
+    verdict = 'thin';
+    unmeasuredDetail = `Best-case coverage across resolved items: ${maxLedger} ledger edges, ${maxVerbatim} verbatims. Reads may be directional but under the confidence floor (${LEDGER_MEASURABLE} edges / ${VERBATIM_MEASURABLE} verbatims).`;
+  } else {
+    verdict = 'unmeasured';
+    unmeasuredDetail = `No resolved item has ledger presence at all (max ${maxLedger} edges) and verbatim depth is below the thin floor (max ${maxVerbatim} verbatims). Candidate for co-fielding.`;
+  }
+
+  return {
+    ledger_degree: ledgerDegree,
+    verbatim_depth: verbatimDepth,
+    verdict,
+    unmeasured_detail: unmeasuredDetail,
+  };
+}
+
+// Empty capability shape for shapes that never resolve items
+// (out_of_scope, needs_clarification). Consumers switch on verdict.
 function emptyCapability() {
   return {
     ledger_degree: {},
     verbatim_depth: {},
-    verdict: 'unmeasured',       // one of: measurable | thin | unmeasured
+    verdict: 'unmeasured',
     unmeasured_detail: null,
   };
 }
+
+// ---------------------------------------------------------------------
+// Decision 4 (route): stubbed in Step 1. Populates in Step 3.
+// ---------------------------------------------------------------------
 
 function emptyRoute() {
   return {
@@ -522,11 +654,20 @@ async function bjlFrontDoor(query, context = {}) {
       : "I couldn't identify a specific experience, brand, or category to run this against. Can you name the experience you're asking about? For example: \"how does joy from theme parks connect to other things\" or \"what do people who love a specific brand also love.\"";
   }
 
+  // Capability — computed here so every consumer reads the same
+  // ledger_degree / verbatim_depth off the brief instead of
+  // re-computing per surface. If shape flipped to needs_clarification
+  // above, entities is empty and computeCapability returns the empty
+  // shape.
+  const capability = shape === 'needs_clarification'
+    ? emptyCapability()
+    : await computeCapability(entities);
+
   const brief = {
     shape,
     shape_reasoning,
     entities,
-    capability: emptyCapability(),   // Step 2 populates.
+    capability,
     route: emptyRoute(),             // Step 3 populates.
     clarifying_question: shape === 'needs_clarification' ? clarifying_question : null,
     resolver_note: entitiesResult.resolver_note,

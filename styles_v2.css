@@ -4222,6 +4222,38 @@ textarea { font-family: var(--font-text); }
   margin-bottom: 16px;
 }
 
+/* Clarification card — distinct treatment for front-door
+   needs_clarification / out_of_scope so the question reads as a call
+   to action, not a technical footnote. */
+.conn-clarify {
+  background: var(--paper-2, #f4f3ed);
+  border-left: 3px solid var(--ink, #1a1a17);
+  border-radius: 2px;
+  padding: 16px 20px;
+  margin-bottom: 20px;
+}
+.conn-clarify-eyebrow {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--iron-darker, #5a5a55);
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+.conn-clarify-question {
+  font-size: 16px;
+  color: var(--ink, #1a1a17);
+  line-height: 1.45;
+  max-width: 62ch;
+}
+.conn-clarify-reason {
+  font-size: 12px;
+  color: var(--iron-darker, #5a5a55);
+  font-style: italic;
+  margin-top: 10px;
+}
+
 .conn-section {
   margin-bottom: 24px;
 }
