@@ -5616,7 +5616,35 @@ const ConnectionsBetaMode = () => {
         </div>
       )}
 
-      {payload && payload.feature_enabled !== false && (
+      {/* Clarification renderer — distinct top-of-pane card when the
+          front door escalated to needs_clarification or out_of_scope.
+          Was previously stuffed into the unmeasured block, which
+          looked like a technical footnote and produced the three-
+          retry burst on log ids 4-7. */}
+      {payload && payload.feature_enabled !== false && payload.brief && payload.brief.shape === 'needs_clarification' && (
+        <div className="conn-clarify">
+          <div className="conn-clarify-eyebrow">Clarification needed</div>
+          <div className="conn-clarify-question">
+            {payload.brief.clarifying_question || 'Could you rephrase — I need a specific experience, brand, or category to run this against.'}
+          </div>
+          {payload.brief.shape_reasoning && (
+            <div className="conn-clarify-reason">Front door: {payload.brief.shape_reasoning}</div>
+          )}
+        </div>
+      )}
+      {payload && payload.feature_enabled !== false && payload.brief && payload.brief.shape === 'out_of_scope' && (
+        <div className="conn-clarify">
+          <div className="conn-clarify-eyebrow">Out of scope for the ledger</div>
+          <div className="conn-clarify-question">
+            That's outside what this pane can answer. The Connections ledger surfaces experiences, brands, and categories that move together in the same people — try a question of that shape.
+          </div>
+          {payload.brief.shape_reasoning && (
+            <div className="conn-clarify-reason">Front door: {payload.brief.shape_reasoning}</div>
+          )}
+        </div>
+      )}
+
+      {payload && payload.feature_enabled !== false && payload.brief && payload.brief.shape !== 'needs_clarification' && payload.brief.shape !== 'out_of_scope' && (
         <>
           <div className="conn-section">
             <div className="conn-section-title">Focal items resolved</div>
@@ -5644,6 +5672,33 @@ const ConnectionsBetaMode = () => {
               </ul>
             )}
           </div>
+
+          {payload.brief && payload.brief.capability && payload.brief.capability.verdict && (
+            <div className="conn-section">
+              <div className="conn-section-title">Coverage verdict</div>
+              <div className="conn-focal-source-note">
+                <strong>{payload.brief.capability.verdict}</strong>
+                {payload.brief.capability.unmeasured_detail ? ` — ${payload.brief.capability.unmeasured_detail}` : ''}
+              </div>
+              {Object.keys(payload.brief.capability.ledger_degree || {}).length > 0 && (
+                <ul className="conn-focal-list">
+                  {focalItems.map(f => {
+                    const deg = payload.brief.capability.ledger_degree[String(f.item_id)];
+                    const dep = (payload.brief.capability.verbatim_depth || {})[String(f.item_id)];
+                    return (
+                      <li key={f.item_id}>
+                        <span className="conn-focal-name">{f.item_name}</span>
+                        <span className="conn-focal-meta">
+                          {deg != null ? ` · ${deg} ledger edges` : ''}
+                          {dep != null ? ` · ${dep} verbatims` : ''}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          )}
 
           {caveats.length > 0 && (
             <div className="conn-section">

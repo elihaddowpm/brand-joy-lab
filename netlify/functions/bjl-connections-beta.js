@@ -311,9 +311,13 @@ exports.handler = async (event) => {
       user_email: userEmail,
     });
 
-    // Shapes that never reach the ledger: return the front door's
-    // clarifying question (or a polite decline) unchanged.
-    if (brief.shape === 'needs_clarification') {
+    // Shapes that never reach the ledger. The clarifying question and
+    // the out-of-scope note live on the brief — the frontend has a
+    // distinct clarification card that reads them. The pane no longer
+    // stuffs those into `unmeasured`, which used to hide the question
+    // in a technical footnote and produced the three-retry burst
+    // captured on log ids 4-7.
+    if (brief.shape === 'needs_clarification' || brief.shape === 'out_of_scope') {
       const payload = {
         ok: true,
         feature_enabled: true,
@@ -324,33 +328,7 @@ exports.handler = async (event) => {
         beyond_category: [],
         negative_rim_inside: [],
         negative_rim_beyond: [],
-        unmeasured: [{
-          reason: 'needs_clarification',
-          detail: brief.clarifying_question || 'Could you rephrase — I need a specific experience, brand, or category to run this against.',
-        }],
-        caveats: [],
-        resolver_path: 'front_door',
-        resolver_note: brief.resolver_note,
-      };
-      await appendScratchEntry(jobId, { type: 'connections_beta', ...payload });
-      return { statusCode: 200, body: JSON.stringify(payload) };
-    }
-
-    if (brief.shape === 'out_of_scope') {
-      const payload = {
-        ok: true,
-        feature_enabled: true,
-        query,
-        brief,
-        focal_items: [],
-        inside_category: [],
-        beyond_category: [],
-        negative_rim_inside: [],
-        negative_rim_beyond: [],
-        unmeasured: [{
-          reason: 'out_of_scope',
-          detail: "That's outside what the Joy Lab corpus can answer. This pane runs the within-person connectivity ledger — try a question about how experiences, brands, or categories move together in people's joy.",
-        }],
+        unmeasured: [],
         caveats: [],
         resolver_path: 'front_door',
         resolver_note: brief.resolver_note,
@@ -395,29 +373,32 @@ exports.handler = async (event) => {
     const caveats            = [];
     const rInternalLog       = [];
 
-    // First pass: gather every other_item_id across all focals so we
-    // can do ONE batch fetch for item meta + item skew.
+    // First pass: fetch edges per focal. Coverage/caveat verdicts
+    // come from brief.capability.ledger_degree (front door already
+    // did the coverage math). The pane no longer computes its own
+    // edge-count thresholds — one source of truth per capability.
     const allEdgesPerFocal = new Map();
     const allOtherIds = new Set();
+    const ledgerDegree = (brief && brief.capability && brief.capability.ledger_degree) || {};
     for (const focal of focalItems) {
       const edges = await fetchEdges(focal.item_id);
       allEdgesPerFocal.set(focal.item_id, edges);
       for (const e of edges) allOtherIds.add(e.other_item);
-      if (edges.length === 0) {
-        // Fix 4a: item outside the ledger — under 50 respondents.
+      const degree = Number(ledgerDegree[String(focal.item_id)] || 0);
+      if (edges.length === 0 || degree === 0) {
         unmeasured.push({
           focal_item_id:   focal.item_id,
           focal_item_name: focal.item_name,
           reason:          'item_below_ledger_floor',
-          detail:          `This item has too few respondents to enter the connectivity ledger (under 50). Unmeasured — candidate for co-fielding.`,
+          detail:          `This item has too few respondents to enter the connectivity ledger. Unmeasured — candidate for co-fielding.`,
         });
-      } else if (edges.length < EDGE_DIVERSITY_FLOOR) {
+      } else if (degree < EDGE_DIVERSITY_FLOOR) {
         caveats.push({
           focal_item_id:   focal.item_id,
           focal_item_name: focal.item_name,
-          edge_count:      edges.length,
+          edge_count:      degree,
           warning:         'edge_diversity_low',
-          detail:          `Only ${edges.length} edges in the ledger for this item — its neighborhood may all come from one co-fielding module. Treat cross-category connections here with extra care.`,
+          detail:          `Only ${degree} edges in the ledger for this item — its neighborhood may all come from one co-fielding module. Treat cross-category connections here with extra care.`,
         });
       }
     }
