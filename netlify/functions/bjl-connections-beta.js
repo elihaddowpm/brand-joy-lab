@@ -89,9 +89,32 @@ const { bjlFrontDoor } = require('./bjl-front-door.js');
 // items again for brand_lookup / territory_read (when any items came
 // back), etc. Only needs_clarification and out_of_scope skip the
 // ledger entirely; every other shape gets to run if entities resolved.
+//
+// Anchor-fallback substitution: when brief.capability.anchor_fallback
+// carries anchors (item_connection queries whose resolved items are
+// outside the ledger), the pane substitutes those anchors as focals.
+// The resolved items still surface as unmeasured in the response so
+// the co-fielding candidacy stays visible; the substitution is
+// labeled explicitly in the payload.
 async function focalItemsFromBrief(brief) {
   if (!brief || !brief.entities) return [];
   const shape = brief.shape;
+
+  // Anchor-fallback path — only fires when computeCapability
+  // populated the anchor_fallback field. Substitution happens here,
+  // not in the front door, because the pane owns which items run
+  // through the ledger.
+  const fallback = brief.capability && brief.capability.anchor_fallback;
+  if (fallback && Array.isArray(fallback.anchors) && fallback.anchors.length > 0) {
+    return fallback.anchors.map(a => ({
+      item_id:         Number(a.item_id),
+      item_name:       String(a.item_name),
+      primary_topic:   a.primary_topic || null,
+      canonical_brand: null,
+      match_source:    'anchor_fallback',
+    }));
+  }
+
   if (shape === 'audience_comparison') {
     const audiences = Array.isArray(brief.entities.audiences) ? brief.entities.audiences : [];
     const anchorIds = new Set();
@@ -433,15 +456,59 @@ exports.handler = async (event) => {
       return { statusCode: 200, body: JSON.stringify(payload) };
     }
 
+    // Anchor-fallback bookkeeping. When the front door detected that
+    // the resolved item_connection items are all outside the ledger
+    // and returned anchor substitutes, the pane runs the ledger on
+    // the anchors (already swapped in by focalItemsFromBrief) BUT
+    // keeps the resolved items visible in `unmeasured` so
+    // co-fielding candidacy stays on the page. Standing rule
+    // enforced: unmeasured is a rendered verdict, never a silent
+    // fallback.
+    const anchorFallback = capability.anchor_fallback || null;
+    const usedAnchorFallback = !!(anchorFallback && Array.isArray(anchorFallback.anchors) && anchorFallback.anchors.length > 0);
+    const resolvedItemsUnmeasured = [];
+    if (usedAnchorFallback) {
+      const briefItems = Array.isArray(brief.entities && brief.entities.items) ? brief.entities.items : [];
+      const verbDepth = capability.verbatim_depth || {};
+      const respondentsMap = capability.respondents || {};
+      for (const item of briefItems) {
+        const key = String(item.item_id);
+        const nResp = Number(respondentsMap[key] || 0);
+        const nVerb = Number(verbDepth[key] || 0);
+        resolvedItemsUnmeasured.push({
+          item_id:   Number(item.item_id),
+          item_name: String(item.item_name),
+          respondents: nResp,
+          verbatim_depth: nVerb,
+        });
+      }
+    }
+
     // First pass: fetch edges per focal. Coverage/caveat verdicts
     // come from brief.capability (front door already ran the checks
     // via bjl_item_capability). The pane consumes in_ledger for the
     // 50-respondent floor and ledger_degree for edge-diversity caveats.
+    //
+    // When we're running anchor-fallback focals, brief.capability
+    // reflects the RESOLVED items, not the anchors. So the pane
+    // reads from anchor_fallback.anchors[].degree/respondents for
+    // the substituted focals, and skips the item-below-floor block
+    // for anchors (they are, by construction, all in-ledger).
     const allEdgesPerFocal = new Map();
     const allOtherIds = new Set();
     const ledgerDegree = capability.ledger_degree || {};
     const inLedger = capability.in_ledger || {};
     const respondentsByItem = capability.respondents || {};
+    // Overlay anchor capability so the below-floor / edge-diversity
+    // checks work when we're on the fallback path.
+    if (usedAnchorFallback) {
+      for (const a of anchorFallback.anchors) {
+        const k = String(a.item_id);
+        ledgerDegree[k]      = Number(a.degree || 0);
+        inLedger[k]          = !!a.in_ledger;
+        respondentsByItem[k] = Number(a.respondents || 0);
+      }
+    }
     for (const focal of focalItems) {
       const edges = await fetchEdges(focal.item_id);
       allEdgesPerFocal.set(focal.item_id, edges);
@@ -552,6 +619,15 @@ exports.handler = async (event) => {
       negative_rim_beyond: negativeRimBeyond,
       unmeasured,
       caveats,
+      used_anchor_fallback: usedAnchorFallback,
+      anchor_fallback: usedAnchorFallback
+        ? {
+            reason:            anchorFallback.reason,
+            anchors:           anchorFallback.anchors,
+            resolved_items_unmeasured: resolvedItemsUnmeasured,
+          }
+        : null,
+      voices_offer: capability.voices_offer || null,
     };
 
     await appendScratchEntry(jobId, {

@@ -5874,32 +5874,109 @@ const ConnectionsBetaMode = () => {
 
       {payload && payload.feature_enabled !== false && !payload.capability_error && payload.brief && payload.brief.shape !== 'needs_clarification' && payload.brief.shape !== 'out_of_scope' && (
         <>
-          <div className="conn-section">
-            <div className="conn-section-title">Focal items resolved</div>
-            {payload.resolver_path && (
+          {/* Focal-items section — hidden when the anchor fallback
+              fired, because "Measured anchors for this concept" below
+              carries the same list with the explicit substitution
+              framing. */}
+          {!payload.used_anchor_fallback && (
+            <div className="conn-section">
+              <div className="conn-section-title">Focal items resolved</div>
+              {payload.resolver_path && (
+                <div className="conn-focal-source-note">
+                  Resolved via the front door
+                  {payload.brief && payload.brief.shape ? ` · shape: ${payload.brief.shape.replace(/_/g, ' ')}` : ''}
+                  {payload.resolver_note ? `. ${payload.resolver_note}` : '.'}
+                </div>
+              )}
+              {focalItems.length === 0 ? (
+                <div className="conn-empty">No items in bjl_items matched the query keywords. Try naming a specific brand, category, or experience.</div>
+              ) : (
+                <ul className="conn-focal-list">
+                  {focalItems.map(f => (
+                    <li key={f.item_id}>
+                      <span className="conn-focal-name">{f.item_name}</span>
+                      <span className="conn-focal-meta">
+                        {f.primary_topic ? ` · ${f.primary_topic.replace(/_/g, ' ')}` : ''}
+                        {f.canonical_brand ? ` · brand: ${f.canonical_brand}` : ''}
+                        <span className="conn-focal-source"> · matched by {f.match_source}</span>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+
+          {/* Unmeasured — original resolved items when the anchor
+              fallback ran. Kept ABOVE the anchors so the strategist
+              sees the co-fielding candidacy first. Standing rule:
+              unmeasured is a rendered verdict. */}
+          {payload.used_anchor_fallback && payload.anchor_fallback && Array.isArray(payload.anchor_fallback.resolved_items_unmeasured) && payload.anchor_fallback.resolved_items_unmeasured.length > 0 && (
+            <div className="conn-section">
+              <div className="conn-section-title">Original ask — unmeasured (co-fielding candidates)</div>
               <div className="conn-focal-source-note">
-                Resolved via the front door
-                {payload.brief && payload.brief.shape ? ` · shape: ${payload.brief.shape.replace(/_/g, ' ')}` : ''}
-                {payload.resolver_note ? `. ${payload.resolver_note}` : '.'}
+                The items you asked about sit outside the connectivity ledger (under the 50-respondent floor). They stay flagged here so the co-fielding candidacy is visible.
               </div>
-            )}
-            {focalItems.length === 0 ? (
-              <div className="conn-empty">No items in bjl_items matched the query keywords. Try naming a specific brand, category, or experience.</div>
-            ) : (
               <ul className="conn-focal-list">
-                {focalItems.map(f => (
-                  <li key={f.item_id}>
-                    <span className="conn-focal-name">{f.item_name}</span>
+                {payload.anchor_fallback.resolved_items_unmeasured.map(item => (
+                  <li key={item.item_id}>
+                    <span className="conn-focal-name">{item.item_name}</span>
                     <span className="conn-focal-meta">
-                      {f.primary_topic ? ` · ${f.primary_topic.replace(/_/g, ' ')}` : ''}
-                      {f.canonical_brand ? ` · brand: ${f.canonical_brand}` : ''}
-                      <span className="conn-focal-source"> · matched by {f.match_source}</span>
+                      {` · ${item.respondents} respondents`}
+                      {item.verbatim_depth != null ? ` · ${item.verbatim_depth} verbatims` : ''}
                     </span>
                   </li>
                 ))}
               </ul>
-            )}
-          </div>
+            </div>
+          )}
+
+          {/* Measured anchors — substituted focals the ledger actually
+              ran on. Explicit label so the substitution is honest. */}
+          {payload.used_anchor_fallback && payload.anchor_fallback && Array.isArray(payload.anchor_fallback.anchors) && payload.anchor_fallback.anchors.length > 0 && (
+            <div className="conn-section">
+              <div className="conn-section-title">Measured anchors for this concept</div>
+              <div className="conn-focal-source-note">
+                {payload.anchor_fallback.reason || 'Substituting the nearest in-ledger items so the read can run.'} The rows below run against these anchors, not the original ask.
+              </div>
+              <ul className="conn-focal-list">
+                {payload.anchor_fallback.anchors.map(a => (
+                  <li key={a.item_id}>
+                    <span className="conn-focal-name">{a.item_name}</span>
+                    <span className="conn-focal-meta">
+                      {a.primary_topic ? ` · ${a.primary_topic.replace(/_/g, ' ')}` : ''}
+                      {a.name_similarity != null ? ` · name sim ${a.name_similarity}` : ''}
+                      {a.topic_match ? ' · topic match' : ''}
+                      {a.degree != null ? ` · ${a.degree} edges` : ''}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Voices offer — surface verbatim_depth >= 30 as an offered
+              qualitative read even when the ledger is silent. This is
+              how you honor a co-fielding candidate while quant catches
+              up. */}
+          {payload.voices_offer && payload.voices_offer.available && Array.isArray(payload.voices_offer.items) && payload.voices_offer.items.length > 0 && (
+            <div className="conn-section">
+              <div className="conn-section-title">Voices available</div>
+              <div className="conn-focal-source-note">
+                {payload.voices_offer.detail || 'Verbatim depth is above the offer floor on the resolved items; a voices read is available.'}
+              </div>
+              <ul className="conn-focal-list">
+                {payload.voices_offer.items.map(v => (
+                  <li key={v.item_id}>
+                    <span className="conn-focal-name">{v.item_name}</span>
+                    <span className="conn-focal-meta">
+                      {` · ${v.verbatim_depth} verbatims`}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {payload.brief && payload.brief.capability && payload.brief.capability.verdict && (
             <div className="conn-section">
