@@ -55,6 +55,10 @@ const INSIDE_MAX_NEGATIVE   = 3;
 const BEYOND_MAX_POSITIVE   = 8;
 const BEYOND_MAX_NEGATIVE   = 3;
 const EDGE_DIVERSITY_FLOOR  = 50;
+// Pair-level 30-shared floor. A pair with fewer than 30 shared
+// answerers is not statistically usable — surface as rendered
+// unmeasured (never a silent drop).
+const PAIR_SHARED_FLOOR     = 30;
 
 // Skew thresholds. If an item's centered values are heavily one-sided
 // (fewer than 25% on one side of zero, or more than 75%), the pct-
@@ -201,6 +205,11 @@ async function translateEdge(focal, edge, otherMeta, skewByItem) {
   const focalSkew = skewByItem.get(focal.item_id) || { skewed: false };
   const otherSkew = skewByItem.get(edge.other_item) || { skewed: false };
   const suppressPct = focalSkew.skewed || otherSkew.skewed;
+  const sharedAnswerers = Number(row.shared_answerers);
+  // Pair-level 30-shared floor. Card carries the flag; handler
+  // decides whether it enters the ledger cards or the rendered
+  // unmeasured block.
+  const belowPairFloor = Number.isFinite(sharedAnswerers) && sharedAnswerers < PAIR_SHARED_FLOOR;
   return {
     focal_item_id:       focal.item_id,
     focal_item_name:     focal.item_name,
@@ -209,7 +218,7 @@ async function translateEdge(focal, edge, otherMeta, skewByItem) {
     other_item_name:     otherMeta ? otherMeta.item_name : null,
     other_primary_topic: otherMeta ? otherMeta.primary_topic : null,
     direction:           edge.r >= 0 ? 'rises with' : 'runs against',
-    shared_answerers:    Number(row.shared_answerers),
+    shared_answerers:    sharedAnswerers,
     pct_move_together:   suppressPct
       ? null
       : (row.pct_move_together == null ? null : Math.round(Number(row.pct_move_together))),
@@ -218,6 +227,7 @@ async function translateEdge(focal, edge, otherMeta, skewByItem) {
       ? 'One side of this pair has a heavily one-sided distribution (>75% or <25% on one side of zero). Percent moving together loses meaning when there is little variance to co-move with.'
       : null,
     lift_points: row.lift_points == null ? null : Math.round(Number(row.lift_points) * 10) / 10,
+    below_pair_floor: belowPairFloor,
   };
 }
 
@@ -274,10 +284,29 @@ exports.handler = async (event) => {
 
   const auth = await verifyAndAuthorize(event.headers.authorization || event.headers.Authorization);
   if (!auth.ok) {
+    // Log the auth failure to bjl_front_door_log with auth_failed=true
+    // so the health view surfaces auth churn. The frontend also gets a
+    // structured signal (auth_failed: true) so it can retry once with
+    // a refreshed session before showing the user an error.
+    try {
+      let attemptedQuery = '';
+      try { const parsed = JSON.parse(event.body || '{}'); attemptedQuery = String(parsed.query || ''); }
+      catch (_) { /* body may be absent on GETs or malformed POSTs */ }
+      await supabase.from('bjl_front_door_log').insert({
+        query: attemptedQuery,
+        brief: {},
+        surface: 'connections',
+        user_email: null,
+        context: { auth_status: auth.status, auth_error: auth.error || null },
+        auth_failed: true,
+      });
+    } catch (e) {
+      console.warn('[connections-beta] auth-failure log write failed:', e.message);
+    }
     return {
       statusCode: auth.status,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ error: auth.error, message: auth.message }),
+      body: JSON.stringify({ error: auth.error, message: auth.message, auth_failed: true }),
     };
   }
 
@@ -373,24 +402,61 @@ exports.handler = async (event) => {
     const caveats            = [];
     const rInternalLog       = [];
 
+    // Capability_error short-circuit. When the front door could not
+    // even run the coverage check, do NOT present the ledger read as
+    // authoritative — surface the error and stop. Distinct from
+    // unmeasured so the caller does not treat "we don't know" as
+    // "no coverage exists."
+    const capability = (brief && brief.capability) || {};
+    if (capability.verdict === 'capability_error') {
+      const payload = {
+        ok: true,
+        feature_enabled: true,
+        query,
+        brief,
+        focal_items: focalItems.map(f => ({
+          item_id: f.item_id, item_name: f.item_name,
+          primary_topic: f.primary_topic, canonical_brand: f.canonical_brand,
+          match_source: f.match_source,
+        })),
+        inside_category: [],
+        beyond_category: [],
+        negative_rim_inside: [],
+        negative_rim_beyond: [],
+        unmeasured: [],
+        caveats: [],
+        capability_error: capability.error_detail || 'Capability check failed; unable to verify coverage before rendering.',
+        resolver_path: 'front_door',
+        resolver_note: brief.resolver_note,
+      };
+      await appendScratchEntry(jobId, { type: 'connections_beta', ...payload });
+      return { statusCode: 200, body: JSON.stringify(payload) };
+    }
+
     // First pass: fetch edges per focal. Coverage/caveat verdicts
-    // come from brief.capability.ledger_degree (front door already
-    // did the coverage math). The pane no longer computes its own
-    // edge-count thresholds — one source of truth per capability.
+    // come from brief.capability (front door already ran the checks
+    // via bjl_item_capability). The pane consumes in_ledger for the
+    // 50-respondent floor and ledger_degree for edge-diversity caveats.
     const allEdgesPerFocal = new Map();
     const allOtherIds = new Set();
-    const ledgerDegree = (brief && brief.capability && brief.capability.ledger_degree) || {};
+    const ledgerDegree = capability.ledger_degree || {};
+    const inLedger = capability.in_ledger || {};
+    const respondentsByItem = capability.respondents || {};
     for (const focal of focalItems) {
       const edges = await fetchEdges(focal.item_id);
       allEdgesPerFocal.set(focal.item_id, edges);
       for (const e of edges) allOtherIds.add(e.other_item);
-      const degree = Number(ledgerDegree[String(focal.item_id)] || 0);
-      if (edges.length === 0 || degree === 0) {
+      const key = String(focal.item_id);
+      const itemInLedger = inLedger[key] === true;
+      const degree = Number(ledgerDegree[key] || 0);
+      const nResp = Number(respondentsByItem[key] || 0);
+      if (!itemInLedger) {
+        // Threshold 1 of 2 — item-level 50-respondent floor.
         unmeasured.push({
           focal_item_id:   focal.item_id,
           focal_item_name: focal.item_name,
           reason:          'item_below_ledger_floor',
-          detail:          `This item has too few respondents to enter the connectivity ledger. Unmeasured — candidate for co-fielding.`,
+          detail:          `${focal.item_name} has ${nResp} respondents in the corpus — under the 50-respondent floor required to enter the connectivity ledger. Unmeasured at the item level — candidate for co-fielding.`,
         });
       } else if (degree < EDGE_DIVERSITY_FLOOR) {
         caveats.push({
@@ -398,7 +464,7 @@ exports.handler = async (event) => {
           focal_item_name: focal.item_name,
           edge_count:      degree,
           warning:         'edge_diversity_low',
-          detail:          `Only ${degree} edges in the ledger for this item — its neighborhood may all come from one co-fielding module. Treat cross-category connections here with extra care.`,
+          detail:          `Only ${degree} edges in the ledger for this item (${nResp} respondents) — its neighborhood may all come from one co-fielding module. Treat cross-category connections here with extra care.`,
         });
       }
     }
@@ -410,7 +476,13 @@ exports.handler = async (event) => {
     const metaById = await fetchItemMeta(Array.from(allItemIdsForLookup));
     const skewByItem = await fetchItemSkew(Array.from(allItemIdsForLookup));
 
-    // Translate + partition per focal.
+    // Threshold 2 of 2 — pair-level 30-shared floor. When a card
+    // returns from translateEdge with below_pair_floor === true, it
+    // does NOT enter the ledger cards. It enters a rendered
+    // unmeasured entry so the reader sees "this pair exists in the
+    // ledger but the shared answerer count is too low to trust,"
+    // never a silent drop. Standing rule: unmeasured is a rendered
+    // verdict, never a silent fallback.
     for (const focal of focalItems) {
       const edges = allEdgesPerFocal.get(focal.item_id) || [];
       if (edges.length === 0) continue;
@@ -419,8 +491,16 @@ exports.handler = async (event) => {
         for (const edge of bucket) {
           const meta = metaById.get(edge.other_item) || null;
           const card = await translateEdge(focal, edge, meta, skewByItem);
-          if (card) {
-            targetArr.push(card);
+          if (!card) continue;
+          if (card.below_pair_floor) {
+            unmeasured.push({
+              focal_item_id:   focal.item_id,
+              focal_item_name: focal.item_name,
+              other_item_id:   edge.other_item,
+              other_item_name: card.other_item_name,
+              reason:          'pair_below_shared_floor',
+              detail:          `${focal.item_name} × ${card.other_item_name || 'other'}: only ${card.shared_answerers} shared answerers, under the 30-shared floor. Pair exists in the ledger but is unmeasured at the pair level.`,
+            });
             rInternalLog.push({
               focal_item_id: focal.item_id,
               other_item_id: edge.other_item,
@@ -429,8 +509,21 @@ exports.handler = async (event) => {
               same_topic:    meta && meta.primary_topic === focal.primary_topic,
               direction:     edge.r >= 0 ? 'positive' : 'negative',
               pct_suppressed: card.pct_move_together_suppressed || false,
+              below_pair_floor: true,
             });
+            continue;
           }
+          targetArr.push(card);
+          rInternalLog.push({
+            focal_item_id: focal.item_id,
+            other_item_id: edge.other_item,
+            r:             edge.r,
+            n_pair:        edge.n_pair,
+            same_topic:    meta && meta.primary_topic === focal.primary_topic,
+            direction:     edge.r >= 0 ? 'positive' : 'negative',
+            pct_suppressed: card.pct_move_together_suppressed || false,
+            below_pair_floor: false,
+          });
         }
       };
       await translateBatch(parts.positiveInside, insideCategory);
