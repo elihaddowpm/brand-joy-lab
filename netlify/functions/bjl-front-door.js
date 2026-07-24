@@ -436,112 +436,135 @@ async function resolveEntities(query, shape, context) {
 // ---------------------------------------------------------------------
 // Decision 3: Capability
 // ---------------------------------------------------------------------
-// Two thresholds set from the connections pane's live behavior. The
-// pane's own EDGE_DIVERSITY_FLOOR (50) is the boundary between "we
-// can read this item's neighborhood confidently" and "this item's
-// edges may all come from one co-fielding module — treat cross-
-// category reads with care." Verbatim depth uses looser tiers because
-// the corpus is deep; 100 shared answerers' verbatims is comfortably
-// "measurable" for a qualitative texture read.
-const LEDGER_MEASURABLE = 50;
-const VERBATIM_MEASURABLE = 100;
-const VERBATIM_THIN = 20;
+// Two thresholds anchor the rendered unmeasured copy:
+//   Item-level 50-respondents floor: an item that fewer than 50
+//     respondents answered never entered the connectivity ledger.
+//     Encoded by bjl_item_capability(...).in_ledger (server-side).
+//   Pair-level 30-shared floor: a pair with fewer than 30 shared
+//     answerers is enforced per-pair by the connections pane; the
+//     front door reports item-level capability, the pane reports
+//     pair-level capability.
+// Front-door verdict values:
+//   'measurable'       — at least one item has degree >= EDGE_MEASURABLE
+//   'thin'             — item is in the ledger but neighborhood small
+//   'unmeasured'       — no resolved item cleared the 50-respondent floor
+//   'capability_error' — helper calls errored out; distinct so consumers
+//                        do not silently downgrade to "no coverage" when
+//                        they actually do not know. Never renders as
+//                        connection language.
+const EDGE_MEASURABLE = 50;
 
-// One batch call per metric. When entities.items is empty, returns
-// a stub verdict (no items → nothing to measure) so downstream can
-// still switch on capability shape.
+// bjl_item_capability + bjl_verbatim_depth are the server-side helpers.
+// One RPC call for the batch ledger triple (respondents, in_ledger,
+// degree); one RPC per item for verbatim depth (function takes a text
+// query, so per-item, dispatched in parallel).
 async function computeCapability(entities) {
   const items = Array.isArray(entities && entities.items) ? entities.items : [];
   if (items.length === 0) {
     return {
       ledger_degree: {},
+      respondents: {},
+      in_ledger: {},
       verbatim_depth: {},
       verdict: 'unmeasured',
       unmeasured_detail: 'No items resolved; nothing to measure.',
+      error_detail: null,
     };
   }
   const ids = items.map(i => Number(i.item_id)).filter(Number.isFinite);
   if (ids.length === 0) {
     return {
       ledger_degree: {},
+      respondents: {},
+      in_ledger: {},
       verbatim_depth: {},
       verdict: 'unmeasured',
       unmeasured_detail: 'Resolved items had no numeric ids.',
+      error_detail: null,
     };
   }
-  const idList = ids.join(',');
-
-  // ledger_degree — count of ledger rows mentioning each item on
-  // either side. Single scan; no per-item round trip.
-  const ledgerSql = `
-    WITH ids(item_id) AS (VALUES ${ids.map(id => `(${id})`).join(',')})
-    SELECT ids.item_id,
-           (SELECT COUNT(*) FROM bjl_connectivity_ledger l
-            WHERE l.item_a = ids.item_id OR l.item_b = ids.item_id) AS degree
-    FROM ids
-  `;
-
-  // verbatim_depth — count of verbatims from respondents who
-  // answered the item at all. is_selected is a multi-select flag
-  // that zeroes out scale/Likert items (their raw_value carries the
-  // rating instead), so we join on item_id alone. LEFT JOIN so items
-  // with no responses return zero rather than dropping out.
-  const verbatimSql = `
-    WITH ids(item_id) AS (VALUES ${ids.map(id => `(${id})`).join(',')})
-    SELECT ids.item_id, COUNT(DISTINCT v.id)::int AS depth
-    FROM ids
-    LEFT JOIN bjl_responses r ON r.item_id = ids.item_id
-    LEFT JOIN bjl_verbatims v ON v.respondent_id = r.respondent_id
-    GROUP BY ids.item_id
-  `;
 
   const ledgerDegree = {};
+  const respondents = {};
+  const inLedger = {};
   const verbatimDepth = {};
+  const errors = [];
+
+  // Batch ledger capability — bjl_item_capability(int[]).
   try {
-    const { data: lRows, error: lErr } = await supabase.rpc('execute_read_sql', { query_text: ledgerSql });
-    if (lErr) throw new Error(`ledger_degree query: ${lErr.message}`);
-    for (const row of (Array.isArray(lRows) ? lRows : [])) {
-      ledgerDegree[String(row.item_id)] = Number(row.degree || 0);
+    const { data, error } = await supabase.rpc('bjl_item_capability', { p_items: ids });
+    if (error) throw new Error(error.message);
+    for (const row of (Array.isArray(data) ? data : [])) {
+      const key = String(row.item_id);
+      ledgerDegree[key] = Number(row.degree || 0);
+      respondents[key] = Number(row.respondents || 0);
+      inLedger[key] = !!row.in_ledger;
     }
   } catch (e) {
-    console.warn('[front-door] ledger_degree failed:', e.message);
-  }
-  try {
-    const { data: vRows, error: vErr } = await supabase.rpc('execute_read_sql', { query_text: verbatimSql });
-    if (vErr) throw new Error(`verbatim_depth query: ${vErr.message}`);
-    for (const row of (Array.isArray(vRows) ? vRows : [])) {
-      verbatimDepth[String(row.item_id)] = Number(row.depth || 0);
-    }
-  } catch (e) {
-    console.warn('[front-door] verbatim_depth failed:', e.message);
+    console.warn('[front-door] bjl_item_capability failed:', e.message);
+    errors.push(`ledger capability: ${e.message}`);
   }
 
-  // Rollup verdict — best-case across resolved items. If ANY item
-  // clears both floors, the query is measurable. If any has any
-  // ledger presence at all, it's thin. Otherwise unmeasured.
-  let maxLedger = 0, maxVerbatim = 0;
-  for (const id of ids) {
-    const l = ledgerDegree[String(id)] || 0;
-    const v = verbatimDepth[String(id)] || 0;
-    if (l > maxLedger) maxLedger = l;
-    if (v > maxVerbatim) maxVerbatim = v;
+  // Per-item verbatim depth — function signature takes a text query,
+  // so one call per item name, dispatched in parallel.
+  const depthCalls = items.map(async (it) => {
+    try {
+      const { data, error } = await supabase.rpc('bjl_verbatim_depth', { p_query: it.item_name });
+      if (error) throw new Error(error.message);
+      return { id: it.item_id, depth: Number(data || 0) };
+    } catch (e) {
+      errors.push(`verbatim depth (${it.item_name}): ${e.message}`);
+      return { id: it.item_id, depth: null };
+    }
+  });
+  const depthResults = await Promise.all(depthCalls);
+  for (const r of depthResults) {
+    if (r.depth != null) verbatimDepth[String(r.id)] = r.depth;
   }
+
+  // Capability_error: total ledger failure with no items resolved from
+  // that path. Distinct verdict so downstream consumers do not present
+  // the ledger read as authoritative when the coverage check itself
+  // could not run.
+  const ledgerRan = Object.keys(ledgerDegree).length > 0;
+  if (!ledgerRan && errors.length > 0) {
+    return {
+      ledger_degree: ledgerDegree,
+      respondents,
+      in_ledger: inLedger,
+      verbatim_depth: verbatimDepth,
+      verdict: 'capability_error',
+      unmeasured_detail: null,
+      error_detail: errors.join('; '),
+    };
+  }
+
+  // Verdict — item-level, anchored on the 50-respondent floor via
+  // in_ledger. Verbatim depth is exposed as data but does not drive
+  // the verdict; it is a secondary qualitative signal.
+  const anyInLedger = ids.some(id => inLedger[String(id)]);
+  const maxDegree = ids.reduce((m, id) => Math.max(m, ledgerDegree[String(id)] || 0), 0);
+  const maxRespondents = ids.reduce((m, id) => Math.max(m, respondents[String(id)] || 0), 0);
+
   let verdict, unmeasuredDetail = null;
-  if (maxLedger >= LEDGER_MEASURABLE || maxVerbatim >= VERBATIM_MEASURABLE) {
-    verdict = 'measurable';
-  } else if (maxLedger > 0 || maxVerbatim >= VERBATIM_THIN) {
-    verdict = 'thin';
-    unmeasuredDetail = `Best-case coverage across resolved items: ${maxLedger} ledger edges, ${maxVerbatim} verbatims. Reads may be directional but under the confidence floor (${LEDGER_MEASURABLE} edges / ${VERBATIM_MEASURABLE} verbatims).`;
-  } else {
+  if (!anyInLedger) {
     verdict = 'unmeasured';
-    unmeasuredDetail = `No resolved item has ledger presence at all (max ${maxLedger} edges) and verbatim depth is below the thin floor (max ${maxVerbatim} verbatims). Candidate for co-fielding.`;
+    unmeasuredDetail = `No resolved item cleared the 50-respondent floor to enter the connectivity ledger (best-case ${maxRespondents} respondents). Unmeasured at the item level — candidate for co-fielding.`;
+  } else if (maxDegree >= EDGE_MEASURABLE) {
+    verdict = 'measurable';
+  } else {
+    verdict = 'thin';
+    unmeasuredDetail = `Ledger carries at least one resolved item but the neighborhood is small (${maxDegree} edges, ${maxRespondents} respondents). Reads may be directional but sit under the edge-diversity floor of ${EDGE_MEASURABLE}.`;
   }
 
   return {
     ledger_degree: ledgerDegree,
+    respondents,
+    in_ledger: inLedger,
     verbatim_depth: verbatimDepth,
     verdict,
     unmeasured_detail: unmeasuredDetail,
+    error_detail: errors.length > 0 ? errors.join('; ') : null,
   };
 }
 
@@ -550,9 +573,12 @@ async function computeCapability(entities) {
 function emptyCapability() {
   return {
     ledger_degree: {},
+    respondents: {},
+    in_ledger: {},
     verbatim_depth: {},
     verdict: 'unmeasured',
     unmeasured_detail: null,
+    error_detail: null,
   };
 }
 

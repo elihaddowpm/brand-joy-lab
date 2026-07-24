@@ -5508,18 +5508,44 @@ const ConnectionsBetaMode = () => {
     const q = query.trim();
     if (!q) return;
     setRunning(true); setError(null); setPayload(null);
+
+    // Session-token plumbing:
+    //  1. Force a session refresh before invoke so the token attached
+    //     by authedFetchInit is the freshest one available.
+    //  2. On a structured 401 (auth_failed: true), refresh once more
+    //     and retry exactly once. Two-strike then give up — the
+    //     backend already logged the auth failure to
+    //     bjl_front_door_log for both attempts.
+    const invoke = async () => fetch('/.netlify/functions/bjl-connections-beta', authedFetchInit({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query: q,
+        job_id: jobIdInput.trim() || null,
+        max_focal_items: 5,
+      }),
+    }));
+
     try {
-      const r = await fetch('/.netlify/functions/bjl-connections-beta', authedFetchInit({
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          query: q,
-          job_id: jobIdInput.trim() || null,
-          max_focal_items: 5,
-        }),
-      }));
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error || `request failed (${r.status})`);
+      if (window.__bjlAuth && window.__bjlAuth.getSession) {
+        await window.__bjlAuth.getSession();
+      }
+      let r = await invoke();
+      let j = await r.json();
+      if (r.status === 401 && j && j.auth_failed) {
+        // One auto-retry with a freshly refreshed session.
+        if (window.__bjlAuth && window.__bjlAuth.getSession) {
+          await window.__bjlAuth.getSession();
+        }
+        r = await invoke();
+        j = await r.json();
+      }
+      if (!r.ok) {
+        const detail = (j && (j.auth_failed
+          ? 'Session token was rejected after a fresh refresh. Sign out and sign back in to reset the session.'
+          : j.error)) || `request failed (${r.status})`;
+        throw new Error(detail);
+      }
       setPayload(j);
     } catch (e) {
       setError(String(e.message || e));
@@ -5644,7 +5670,20 @@ const ConnectionsBetaMode = () => {
         </div>
       )}
 
-      {payload && payload.feature_enabled !== false && payload.brief && payload.brief.shape !== 'needs_clarification' && payload.brief.shape !== 'out_of_scope' && (
+      {/* Capability_error — distinct from unmeasured. The coverage
+          check itself could not run, so the pane refuses to present
+          the ledger read as authoritative. */}
+      {payload && payload.feature_enabled !== false && payload.capability_error && (
+        <div className="conn-clarify">
+          <div className="conn-clarify-eyebrow">Capability check failed</div>
+          <div className="conn-clarify-question">
+            Coverage could not be verified before rendering, so the pane is holding the ledger read back. Try again in a moment — this is not "no coverage exists," it's "we don't know yet."
+          </div>
+          <div className="conn-clarify-reason">{payload.capability_error}</div>
+        </div>
+      )}
+
+      {payload && payload.feature_enabled !== false && !payload.capability_error && payload.brief && payload.brief.shape !== 'needs_clarification' && payload.brief.shape !== 'out_of_scope' && (
         <>
           <div className="conn-section">
             <div className="conn-section-title">Focal items resolved</div>
@@ -5713,19 +5752,49 @@ const ConnectionsBetaMode = () => {
             </div>
           )}
 
-          {unmeasured.length > 0 && (
-            <div className="conn-section">
-              <div className="conn-section-title">Unmeasured</div>
-              <ul className="conn-caveats">
-                {unmeasured.map((u, i) => (
-                  <li key={i}>
-                    {u.focal_item_name ? <><strong>{u.focal_item_name}</strong>: </> : null}
-                    {u.detail}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
+          {unmeasured.length > 0 && (() => {
+            const itemLevel = unmeasured.filter(u => u.reason === 'item_below_ledger_floor');
+            const pairLevel = unmeasured.filter(u => u.reason === 'pair_below_shared_floor');
+            const other     = unmeasured.filter(u => u.reason !== 'item_below_ledger_floor' && u.reason !== 'pair_below_shared_floor');
+            return (
+              <div className="conn-section">
+                <div className="conn-section-title">Unmeasured</div>
+                {itemLevel.length > 0 && (
+                  <>
+                    <div className="conn-section-sub">Items under the 50-respondent floor (never entered the ledger)</div>
+                    <ul className="conn-caveats">
+                      {itemLevel.map((u, i) => (
+                        <li key={`i-${i}`}>
+                          {u.focal_item_name ? <><strong>{u.focal_item_name}</strong>: </> : null}
+                          {u.detail}
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+                {pairLevel.length > 0 && (
+                  <>
+                    <div className="conn-section-sub">Pairs under the 30-shared-answerer floor (exist in the ledger but can't be trusted per-pair)</div>
+                    <ul className="conn-caveats">
+                      {pairLevel.map((u, i) => (
+                        <li key={`p-${i}`}>{u.detail}</li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+                {other.length > 0 && (
+                  <ul className="conn-caveats">
+                    {other.map((u, i) => (
+                      <li key={`o-${i}`}>
+                        {u.focal_item_name ? <><strong>{u.focal_item_name}</strong>: </> : null}
+                        {u.detail}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            );
+          })()}
 
           {(inside.length > 0 || negRimInside.length > 0) && (
             <div className="conn-section">
@@ -6821,6 +6890,25 @@ const AuthGate = () => {
   useEffect(() => {
     window.__bjlAuth = {
       getToken: () => (session && session.access_token) || null,
+      // Force a fresh session read from the Supabase client. Callers
+      // that need to be certain the token is current (e.g. the beta
+      // pane, which sees users idle long enough for tokens to lapse)
+      // await this immediately before invoke. Returns the refreshed
+      // access token, or null if the session is gone. Also updates
+      // the React session state so subsequent authedFetchInit reads
+      // pick up the new token.
+      getSession: async () => {
+        if (!client) return null;
+        try {
+          const { data } = await client.auth.getSession();
+          const fresh = (data && data.session) || null;
+          if (fresh) setSession(fresh);
+          return (fresh && fresh.access_token) || null;
+        } catch (e) {
+          console.warn("[__bjlAuth.getSession] refresh threw:", e);
+          return null;
+        }
+      },
       signOut,
       user: session && session.user ? {
         id: session.user.id,
