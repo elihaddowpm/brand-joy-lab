@@ -453,12 +453,108 @@ async function resolveEntities(query, shape, context) {
 //                        they actually do not know. Never renders as
 //                        connection language.
 const EDGE_MEASURABLE = 50;
+// Anchor-fallback tuning. When shape=item_connection resolves items
+// that are all outside the ledger, we retrieve up to this many
+// in-ledger anchors nearest by name (pg_trgm similarity) with
+// primary_topic as tiebreak. The connections pane then substitutes
+// these anchors as focals and labels the substitution explicitly;
+// the unmeasured card for the resolved items stays visible above
+// so co-fielding candidacy remains a rendered verdict.
+const ANCHOR_FALLBACK_MAX = 5;
+const ANCHOR_FALLBACK_SHORTLIST = 30;
+const VOICES_OFFER_MIN_DEPTH = 30;
+
+// Fallback anchor retrieval. Trigram similarity on lowercased
+// item_name against every resolved item name; take best-scoring
+// in-ledger items across the whole corpus, use primary_topic match
+// as tiebreak. Substitutes for a name-embedding lookup — bjl_items
+// carries no embedding column and no per-item embedding table
+// exists yet, so pg_trgm is the shipped substitute; if an
+// embedding column arrives later, only this helper needs replacing.
+async function fetchAnchorFallback(resolvedItems) {
+  if (!Array.isArray(resolvedItems) || resolvedItems.length === 0) {
+    return { anchors: [], reason: null };
+  }
+  const nameLiterals = resolvedItems
+    .map(i => `'${sqlEscape(String(i.item_name || '').toLowerCase())}'`)
+    .join(',');
+  const topicLiterals = Array.from(new Set(
+    resolvedItems.map(i => i.primary_topic).filter(Boolean)
+  )).map(t => `'${sqlEscape(t)}'`).join(',');
+  const excludeIds = resolvedItems
+    .map(i => Number(i.item_id))
+    .filter(Number.isFinite)
+    .join(',');
+  const topicJoinCond = topicLiterals.length > 0
+    ? `MAX(CASE WHEN i.primary_topic IN (${topicLiterals}) THEN 1 ELSE 0 END) = 1`
+    : `FALSE`;
+  // Filter to in-ledger items via bjl_connectivity_ledger before
+  // trigram-ranking, so the shortlist can never come back empty just
+  // because the top name matches happen to all be out-of-ledger
+  // variants of the resolved items (which was log id 12's failure
+  // mode: three fan-question phrasings dominate name similarity but
+  // none entered the ledger).
+  const sql = `
+    WITH resolved(name) AS (SELECT UNNEST(ARRAY[${nameLiterals}]::text[])),
+    in_ledger_ids AS (
+      SELECT DISTINCT item_id FROM (
+        SELECT item_a AS item_id FROM bjl_connectivity_ledger
+        UNION
+        SELECT item_b FROM bjl_connectivity_ledger
+      ) u
+    ),
+    scored AS (
+      SELECT i.item_id, i.item_name, i.primary_topic,
+             MAX(similarity(LOWER(i.item_name), r.name)) AS name_sim,
+             ${topicJoinCond} AS topic_match
+      FROM bjl_items i
+      JOIN in_ledger_ids l ON l.item_id = i.item_id
+      CROSS JOIN resolved r
+      WHERE i.item_id NOT IN (${excludeIds || '0'})
+      GROUP BY i.item_id, i.item_name, i.primary_topic
+    ),
+    top_picks AS (
+      SELECT * FROM scored
+      ORDER BY topic_match DESC, name_sim DESC
+      LIMIT ${ANCHOR_FALLBACK_MAX}
+    )
+    SELECT t.item_id, t.item_name, t.primary_topic, t.name_sim, t.topic_match,
+           c.respondents, c.in_ledger, c.degree
+    FROM top_picks t
+    JOIN bjl_item_capability(ARRAY(SELECT item_id FROM top_picks)::int[]) c
+      ON c.item_id = t.item_id
+    ORDER BY t.topic_match DESC, t.name_sim DESC, c.degree DESC
+  `;
+  try {
+    const { data, error } = await supabase.rpc('execute_read_sql', { query_text: sql });
+    if (error) throw new Error(error.message);
+    const anchors = (Array.isArray(data) ? data : []).map(r => ({
+      item_id:       Number(r.item_id),
+      item_name:     String(r.item_name),
+      primary_topic: r.primary_topic || null,
+      name_similarity: r.name_sim == null ? null : Math.round(Number(r.name_sim) * 1000) / 1000,
+      topic_match:   !!r.topic_match,
+      respondents:   Number(r.respondents || 0),
+      in_ledger:     !!r.in_ledger,
+      degree:        Number(r.degree || 0),
+    }));
+    return {
+      anchors,
+      reason: anchors.length > 0
+        ? 'Resolved items are outside the connectivity ledger; substituting the nearest in-ledger items by name similarity so the read can still run. The strategist sees which anchors carried each connection.'
+        : 'No in-ledger anchors nearby enough to substitute; no fallback available.',
+    };
+  } catch (e) {
+    console.warn('[front-door] anchor fallback failed:', e.message);
+    return { anchors: [], reason: `anchor fallback errored: ${e.message}` };
+  }
+}
 
 // bjl_item_capability + bjl_verbatim_depth are the server-side helpers.
 // One RPC call for the batch ledger triple (respondents, in_ledger,
 // degree); one RPC per item for verbatim depth (function takes a text
 // query, so per-item, dispatched in parallel).
-async function computeCapability(entities) {
+async function computeCapability(entities, shape) {
   const items = Array.isArray(entities && entities.items) ? entities.items : [];
   if (items.length === 0) {
     return {
@@ -557,6 +653,36 @@ async function computeCapability(entities) {
     unmeasuredDetail = `Ledger carries at least one resolved item but the neighborhood is small (${maxDegree} edges, ${maxRespondents} respondents). Reads may be directional but sit under the edge-diversity floor of ${EDGE_MEASURABLE}.`;
   }
 
+  // Anchor fallback — only fires on item_connection queries whose
+  // resolved items are all outside the ledger. When it fires, the
+  // resolved items still surface as unmeasured (co-fielding
+  // candidacy stays visible); the anchors are substituted in as
+  // focals downstream and the substitution is labeled explicitly.
+  let anchorFallback = null;
+  if (shape === 'item_connection' && verdict === 'unmeasured') {
+    anchorFallback = await fetchAnchorFallback(items);
+  }
+
+  // Voices offer — surface verbatim_depth >= 30 as an offered
+  // qualitative read even when the ledger side is unmeasured.
+  // Voices are how you honor a co-fielding candidate before the
+  // quant catches up.
+  const voicesItems = items
+    .map(i => ({
+      item_id:      i.item_id,
+      item_name:    i.item_name,
+      verbatim_depth: verbatimDepth[String(i.item_id)] || 0,
+    }))
+    .filter(v => v.verbatim_depth >= VOICES_OFFER_MIN_DEPTH);
+  const voicesOffer = voicesItems.length > 0
+    ? {
+        available:  true,
+        min_depth:  VOICES_OFFER_MIN_DEPTH,
+        items:      voicesItems,
+        detail:     `Verbatim depth is at or above the offer floor (${VOICES_OFFER_MIN_DEPTH}) on ${voicesItems.length} resolved item(s). A voices read is available even when the ledger is silent.`,
+      }
+    : { available: false, min_depth: VOICES_OFFER_MIN_DEPTH, items: [], detail: null };
+
   return {
     ledger_degree: ledgerDegree,
     respondents,
@@ -565,6 +691,8 @@ async function computeCapability(entities) {
     verdict,
     unmeasured_detail: unmeasuredDetail,
     error_detail: errors.length > 0 ? errors.join('; ') : null,
+    anchor_fallback: anchorFallback,
+    voices_offer: voicesOffer,
   };
 }
 
@@ -579,6 +707,8 @@ function emptyCapability() {
     verdict: 'unmeasured',
     unmeasured_detail: null,
     error_detail: null,
+    anchor_fallback: null,
+    voices_offer: { available: false, min_depth: VOICES_OFFER_MIN_DEPTH, items: [], detail: null },
   };
 }
 
@@ -682,12 +812,14 @@ async function bjlFrontDoor(query, context = {}) {
 
   // Capability — computed here so every consumer reads the same
   // ledger_degree / verbatim_depth off the brief instead of
-  // re-computing per surface. If shape flipped to needs_clarification
-  // above, entities is empty and computeCapability returns the empty
-  // shape.
+  // re-computing per surface. Shape is passed so item_connection
+  // queries whose items land outside the ledger can pick up the
+  // anchor-fallback substitution. If shape flipped to
+  // needs_clarification above, entities is empty and
+  // computeCapability returns the empty shape.
   const capability = shape === 'needs_clarification'
     ? emptyCapability()
-    : await computeCapability(entities);
+    : await computeCapability(entities, shape);
 
   const brief = {
     shape,
