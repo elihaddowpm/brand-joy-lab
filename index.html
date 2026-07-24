@@ -4810,6 +4810,54 @@ const JoyMapMode = () => {
   const [dmRunning, setDmRunning] = useState(false);
   const [dmError, setDmError] = useState(null);
   const [dmFinding, setDmFinding] = useState(null);
+  // Connections state — one map per column, up to two columns for
+  // side-by-side (Herschend two-door format). Each column carries its
+  // own label + focal-id csv + running/error/result state.
+  const [cxColumns, setCxColumns] = useState([
+    { id: 'A', label: 'Door A', focalIdsCsv: '', running: false, error: null, result: null },
+    { id: 'B', label: 'Door B', focalIdsCsv: '', running: false, error: null, result: null },
+  ]);
+  const setCxColumn = (id, patch) => setCxColumns(prev => prev.map(c => c.id === id ? { ...c, ...patch } : c));
+
+  const runConnectionsColumn = async (columnId) => {
+    const col = cxColumns.find(c => c.id === columnId);
+    if (!col) return;
+    const ids = col.focalIdsCsv
+      .split(/[,\s]+/)
+      .map(s => parseInt(s, 10))
+      .filter(n => Number.isFinite(n) && n > 0);
+    if (ids.length === 0) {
+      setCxColumn(columnId, { error: 'Enter one or more focal item ids (comma-separated).', result: null });
+      return;
+    }
+    setCxColumn(columnId, { running: true, error: null, result: null });
+    const invoke = async () => fetch('/.netlify/functions/bjl-joy-map-connections', authedFetchInit({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ focal_item_ids: ids }),
+    }));
+    try {
+      if (window.__bjlAuth && window.__bjlAuth.getSession) await window.__bjlAuth.getSession();
+      let r = await invoke();
+      let j = await r.json();
+      if (r.status === 401 && j && j.auth_failed) {
+        if (window.__bjlAuth && window.__bjlAuth.getSession) await window.__bjlAuth.getSession();
+        r = await invoke();
+        j = await r.json();
+      }
+      if (!r.ok) {
+        const detail = (j && (j.auth_failed
+          ? 'Session token was rejected after a fresh refresh. Sign out and sign back in.'
+          : j.error)) || `request failed (${r.status})`;
+        throw new Error(detail);
+      }
+      setCxColumn(columnId, { result: j });
+    } catch (e) {
+      setCxColumn(columnId, { error: String(e.message || e) });
+    } finally {
+      setCxColumn(columnId, { running: false });
+    }
+  };
 
   const handleAudienceMapRun = async () => {
     setAmError(null);
@@ -4917,6 +4965,7 @@ const JoyMapMode = () => {
       <div className="joy-map-toolbar">
         <button className={`btn ${subView === 'audience_map' ? 'primary' : 'ghost'}`} onClick={() => setSubView('audience_map')}>Audience Map</button>
         <button className={`btn ${subView === 'dance_map' ? 'primary' : 'ghost'}`} onClick={() => setSubView('dance_map')}>Dance Map</button>
+        <button className={`btn ${subView === 'connections' ? 'primary' : 'ghost'}`} onClick={() => setSubView('connections')}>Connections</button>
       </div>
 
       {subView === 'audience_map' && (
@@ -5010,6 +5059,146 @@ const JoyMapMode = () => {
           {dmFinding && <JoyMapDanceMapResults finding={dmFinding} />}
         </div>
       )}
+
+      {subView === 'connections' && (
+        <div className="joy-map-inputs">
+          <div className="joy-map-input-group">
+            <div className="joy-map-input-label">Connections across the 13 life domains</div>
+            <div style={{fontSize: 13, color: 'var(--iron-darker, #5a5a55)', maxWidth: '68ch', marginBottom: 12}}>
+              Runs the joy-map sweep across all 13 fixed domains for a small set of focal items. Every domain returns one row — the lead pair for that domain across the focals — with a verdict of measured, flat, or unmeasured. Flat and unmeasured are content, not empty states; they carry information about where the focal does <em>not</em> travel. Two columns for the Herschend two-door format; fill one column for a single map. r never renders.
+            </div>
+          </div>
+          <div className="joy-map-cx-grid">
+            {cxColumns.map(col => (
+              <div key={col.id} className="joy-map-cx-column">
+                <div className="joy-map-cx-column-head">
+                  <input
+                    className="joy-map-cx-label-input"
+                    value={col.label}
+                    onChange={(e) => setCxColumn(col.id, { label: e.target.value })}
+                    placeholder="Column label (e.g. Door A)"
+                  />
+                </div>
+                <label className="joy-map-cx-input-label">Focal item ids (comma-separated, 1–4)
+                  <input
+                    type="text"
+                    value={col.focalIdsCsv}
+                    onChange={(e) => setCxColumn(col.id, { focalIdsCsv: e.target.value })}
+                    placeholder="e.g. 1408, 4607"
+                    disabled={col.running}
+                  />
+                </label>
+                <div style={{marginTop: 8}}>
+                  <button className="btn primary"
+                    onClick={() => runConnectionsColumn(col.id)}
+                    disabled={col.running || !col.focalIdsCsv.trim()}>
+                    {col.running ? 'Running…' : 'Run sweep'}
+                  </button>
+                </div>
+                {col.error && <div className="joy-map-error" style={{marginTop: 10}}>Error: {col.error}</div>}
+                {col.result && <JoyMapConnectionsSweep result={col.result} />}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// -------------------------------------------------------------------------
+// JoyMapConnectionsSweep — renders the 13-row output of
+// bjl-joy-map-connections. Fixed domain order (comes back sorted by
+// ord). Three verdict styles: measured / flat / unmeasured. Flat and
+// unmeasured render as content, not empty states, per spec.
+// Each measured row shows BOTH item wordings visible (focal + domain
+// item) so provenance is load-bearing — the two-bath divergence is
+// the cautionary case where the same physical experience under
+// different framings goes opposite directions.
+// r never renders.
+// -------------------------------------------------------------------------
+const JoyMapConnectionsSweep = ({ result }) => {
+  if (!result || !Array.isArray(result.rows)) return null;
+  const focals = Array.isArray(result.focals) ? result.focals : [];
+  const rows = result.rows;
+  const focalColorByName = new Map();
+  const colorPalette = ['#7a2e10', '#1d6a58', '#40527a', '#7a5b1d'];
+  focals.forEach((f, i) => {
+    if (f.item_name) focalColorByName.set(f.item_name, colorPalette[i % colorPalette.length]);
+  });
+  return (
+    <div className="joy-map-cx-sweep">
+      <div className="joy-map-cx-sweep-focals">
+        <div className="joy-map-cx-sweep-focals-label">Focals:</div>
+        {focals.map(f => (
+          <div key={f.item_id} className="joy-map-cx-sweep-focal-chip"
+               style={{borderLeftColor: focalColorByName.get(f.item_name) || '#5a5a55'}}>
+            <span className="joy-map-cx-sweep-focal-name">{f.item_name || `#${f.item_id}`}</span>
+            <span className="joy-map-cx-sweep-focal-id"> · id {f.item_id}</span>
+          </div>
+        ))}
+      </div>
+      <ul className="joy-map-cx-sweep-rows">
+        {rows.map(row => {
+          const focalColor = row.focal_item ? (focalColorByName.get(row.focal_item) || '#5a5a55') : '#5a5a55';
+          return (
+            <li key={row.ord} className={`joy-map-cx-row verdict-${row.verdict}`}>
+              <div className="joy-map-cx-row-head">
+                <span className="joy-map-cx-row-ord">{String(row.ord).padStart(2, '0')}</span>
+                <span className="joy-map-cx-row-domain">{row.domain.replace(/_/g, ' ')}</span>
+                <span className={`joy-map-cx-row-verdict verdict-${row.verdict}`}>{row.verdict}</span>
+              </div>
+              {row.verdict === 'measured' && (
+                <div className="joy-map-cx-row-body">
+                  <div className="joy-map-cx-row-pair">
+                    <span className="joy-map-cx-row-focal" style={{color: focalColor}}>{row.focal_item}</span>
+                    <span className="joy-map-cx-row-direction">
+                      {row.direction === 'rises with' ? ' ↔ rises with ↔ ' : ' ⇄ runs against ⇄ '}
+                    </span>
+                    <span className="joy-map-cx-row-domain-item">{row.domain_item}</span>
+                  </div>
+                  <div className="joy-map-cx-row-metrics">
+                    {row.shared_answerers != null && (
+                      <span><strong>{row.shared_answerers.toLocaleString()}</strong> shared answerers</span>
+                    )}
+                    {row.pct_move_together != null && (
+                      <span> · <strong>{row.pct_move_together}%</strong> moving together</span>
+                    )}
+                    {row.pct_suppressed && (
+                      <span> · <em>pct suppressed (skewed distribution)</em></span>
+                    )}
+                    {row.lift_points != null && (
+                      <span> · lift <strong>{row.lift_points > 0 ? '+' : ''}{row.lift_points}</strong> pts</span>
+                    )}
+                  </div>
+                  {row.pct_suppressed && row.pct_suppress_reason && (
+                    <div className="joy-map-cx-row-caveat">{row.pct_suppress_reason}</div>
+                  )}
+                </div>
+              )}
+              {row.verdict === 'flat' && (
+                <div className="joy-map-cx-row-body">
+                  <div className="joy-map-cx-row-pair muted">
+                    <span style={{color: focalColor}}>{row.focal_item}</span>
+                    <span className="joy-map-cx-row-direction"> · flat with · </span>
+                    <span>{row.domain_item}</span>
+                  </div>
+                  <div className="joy-map-cx-row-flat-note">
+                    Lead pair for {row.domain.replace(/_/g, ' ')} shows no meaningful within-person co-movement. The focal neither rises with nor runs against this domain in the same people. Content, not empty.
+                  </div>
+                </div>
+              )}
+              {row.verdict === 'unmeasured' && (
+                <div className="joy-map-cx-row-body">
+                  <div className="joy-map-cx-row-flat-note">
+                    No ledger pair covers {row.domain.replace(/_/g, ' ')} for this focal set. Unmeasured — candidate for co-fielding on the {row.domain.replace(/_/g, ' ')} anchor item.
+                  </div>
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 };
