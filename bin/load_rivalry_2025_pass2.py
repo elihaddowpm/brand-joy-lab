@@ -20,11 +20,11 @@ Notes on this pass (review pass folded in):
      future rivalry batch can be relabeled in one place. Every rivalry
      item is entertainment-anchored today; if that stops being true,
      lift topic-per-item out of the JSON.
-  3. Question upsert key is (question_text, wave_id ANY(wave_ids)) — an
-     identically-worded question already tagged with a different wave
-     will spawn a duplicate row rather than append this wave to the
-     existing row's wave_ids. That is intentional: waves own their own
-     question rows so downstream ledger math isn't cross-contaminated.
+  3. Question upsert: bjl_questions_v2.question_text has a global
+     UNIQUE constraint, so question rows are shared across waves and
+     `wave_ids` is the multi-value tag. Loader matches on
+     question_text alone; when the row exists, this wave gets
+     appended to wave_ids (idempotent — no-op if already present).
   4. bjl_item_construct upsert is keyed on item_name globally (no
      fielding scope) — matches existing convention. Cross-fielding
      item-name collisions would inherit the earliest-inserted construct.
@@ -68,14 +68,24 @@ def main(path):
     qbase, ibase = cur.fetchone()
     qid_map, item_map = {}, {}
     for qi, q in enumerate(data['questions']):
+        # question_text is globally UNIQUE on bjl_questions_v2. Match
+        # on that alone; if the row exists (question was fielded in a
+        # prior wave), append this wave to wave_ids and reuse the id.
+        # If not, insert a fresh row.
         cur.execute(
-            "SELECT question_id FROM bjl_questions_v2 "
-            "WHERE question_text=%s AND %s = ANY(wave_ids)",
-            (q['question'], WAVE),
+            "SELECT question_id, wave_ids FROM bjl_questions_v2 WHERE question_text=%s",
+            (q['question'],),
         )
         row = cur.fetchone()
         if row:
             qid = row[0]
+            existing_waves = row[1] or []
+            if WAVE not in existing_waves:
+                cur.execute(
+                    "UPDATE bjl_questions_v2 SET wave_ids = array_append(wave_ids, %s) "
+                    "WHERE question_id=%s",
+                    (WAVE, qid),
+                )
         else:
             qbase += 1
             qid = qbase
@@ -84,11 +94,15 @@ def main(path):
                 'raw': 'open_categorical',
                 'select_all': 'select_all',
             }[q['kind']]
+            # primary_topic is NOT NULL on bjl_questions_v2; the pasted
+            # loader omitted it and blew up on first insert. Reuse the
+            # item-level NEW_ITEM_TOPIC for the question row too — every
+            # rivalry-study question is entertainment-anchored.
             cur.execute(
                 "INSERT INTO bjl_questions_v2 "
-                "(question_id, question_text, question_type, scale_type, n_items, wave_ids, notes) "
-                "VALUES (%s,%s,%s,%s,%s,ARRAY[%s],'Rivalry & Brand Hate study, Jan 2025')",
-                (qid, q['question'], qtype, q.get('construct', ''), len(q['items']), WAVE),
+                "(question_id, question_text, question_type, scale_type, primary_topic, n_items, wave_ids, notes) "
+                "VALUES (%s,%s,%s,%s,%s,%s,ARRAY[%s],'Rivalry & Brand Hate study, Jan 2025')",
+                (qid, q['question'], qtype, q.get('construct', ''), NEW_ITEM_TOPIC, len(q['items']), WAVE),
             )
         qid_map[qi] = qid
         for nm in q['items']:
@@ -115,6 +129,27 @@ def main(path):
                     "WHERE NOT EXISTS (SELECT 1 FROM bjl_item_construct WHERE item_name=%s)",
                     (nm, NEW_ITEM_TOPIC, q['construct'], nm),
                 )
+
+    # --- respondents FIRST (bjl_responses has FK on respondent_id;
+    # pass 1 loaded only 500 of the 1,000 rivalry respondents, so the
+    # response inserts below would violate the FK for the pass-2
+    # additions if we did this after) ---
+    rdir = os.path.dirname(os.path.abspath(path))
+    rfile = os.path.join(rdir, 'rivalry_respondents_all.txt')
+    if os.path.exists(rfile):
+        rr = []
+        for l in open(rfile):
+            p = (l.rstrip('\n') + '||||||').split('|')
+            rr.append((p[0], FIELDING, YM, p[1] or None, p[2] or None, p[3] or None, p[4] or None, p[5] or None, p[6] or None))
+        psycopg2.extras.execute_values(
+            cur,
+            "INSERT INTO bjl_respondents "
+            "(respondent_id, fielding_id, year_month, generation, age_band, gender, income_bracket, state, region) "
+            "VALUES %s ON CONFLICT (respondent_id) DO NOTHING",
+            rr,
+            page_size=1000,
+        )
+        print('respondents upserted:', len(rr))
 
     # --- idempotency: clear prior pass-2 data rows (guarded against empty qid_map) ---
     if qid_map:
@@ -163,24 +198,6 @@ def main(path):
         page_size=1000,
     )
     print('verbatims inserted:', len(vrows), '(is_quotable provisional at length>=40; enrichment pass refines)')
-
-    # --- respondents (rows not yet loaded via MCP pass 1) ---
-    rdir = os.path.dirname(os.path.abspath(path))
-    rfile = os.path.join(rdir, 'rivalry_respondents_all.txt')
-    if os.path.exists(rfile):
-        rr = []
-        for l in open(rfile):
-            p = (l.rstrip('\n') + '||||||').split('|')
-            rr.append((p[0], FIELDING, YM, p[1] or None, p[2] or None, p[3] or None, p[4] or None, p[5] or None, p[6] or None))
-        psycopg2.extras.execute_values(
-            cur,
-            "INSERT INTO bjl_respondents "
-            "(respondent_id, fielding_id, year_month, generation, age_band, gender, income_bracket, state, region) "
-            "VALUES %s ON CONFLICT (respondent_id) DO NOTHING",
-            rr,
-            page_size=1000,
-        )
-        print('respondents upserted:', len(rr))
 
     # --- joy battery (24 items on the standing joy question) ---
     jfile = os.path.join(rdir, 'rivalry_joy.txt')
