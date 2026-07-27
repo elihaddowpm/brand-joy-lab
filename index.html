@@ -5147,6 +5147,48 @@ const JoyMapMode = () => {
 // -------------------------------------------------------------------------
 const JoyMapConnectionsSweep = ({ result, showConflicting }) => {
   if (!result || !Array.isArray(result.territories)) return null;
+
+  // Front-door escalation surface. When the brief comes back as
+  // needs_clarification or out_of_scope, the endpoint short-circuits
+  // with an empty territories list — without this card, the column
+  // would look inert. Same pattern as the connections-beta pane's
+  // clarification card.
+  const brief = result.brief || null;
+  if (brief && brief.shape === 'needs_clarification') {
+    return (
+      <div className="conn-clarify" style={{marginTop: 12}}>
+        <div className="conn-clarify-eyebrow">Clarification needed</div>
+        <div className="conn-clarify-question">
+          {brief.clarifying_question || 'Could you rephrase — I need a specific experience, brand, or category to run this against.'}
+        </div>
+        {brief.shape_reasoning && (
+          <div className="conn-clarify-reason">Front door: {brief.shape_reasoning}</div>
+        )}
+      </div>
+    );
+  }
+  if (brief && brief.shape === 'out_of_scope') {
+    return (
+      <div className="conn-clarify" style={{marginTop: 12}}>
+        <div className="conn-clarify-eyebrow">Out of scope for the Joy Map</div>
+        <div className="conn-clarify-question">
+          The Joy Map connections sweep reads how experiences and brands travel together across the 16 life territories — try a question of that shape.
+        </div>
+        {brief.shape_reasoning && (
+          <div className="conn-clarify-reason">Front door: {brief.shape_reasoning}</div>
+        )}
+      </div>
+    );
+  }
+  if (result.note && Array.isArray(result.focals) && result.focals.length === 0) {
+    return (
+      <div className="conn-clarify" style={{marginTop: 12}}>
+        <div className="conn-clarify-eyebrow">No focals</div>
+        <div className="conn-clarify-question">{result.note}</div>
+      </div>
+    );
+  }
+
   const focals = Array.isArray(result.focals) ? result.focals : [];
   const territories = result.territories;
   const modelVersion = result.model_version || null;
