@@ -4824,6 +4824,68 @@ const JoyMapMode = () => {
   const [cxShowConflicting, setCxShowConflicting] = useState(false);
   const setCxColumn = (id, patch) => setCxColumns(prev => prev.map(c => c.id === id ? { ...c, ...patch } : c));
 
+  // Row-expand: per-territory profile cache. Key format
+  // "focalIdsSorted::territoryKey" — matches the spec's "cache per
+  // (focal, territory) per session" note. Each entry is
+  // { loading?: true, error?: string, items?: [...] }.
+  const [cxProfileCache, setCxProfileCache] = useState({});
+  const cacheKey = (focalIds, territoryKey) =>
+    `${(focalIds || []).slice().map(Number).sort((a,b) => a-b).join(',')}::${territoryKey}`;
+
+  const fetchProfile = async (focalIds, territoryKey) => {
+    const k = cacheKey(focalIds, territoryKey);
+    if (cxProfileCache[k] && (cxProfileCache[k].items || cxProfileCache[k].error)) return;
+    setCxProfileCache(prev => ({ ...prev, [k]: { loading: true } }));
+    try {
+      if (window.__bjlAuth && window.__bjlAuth.getSession) await window.__bjlAuth.getSession();
+      const r = await fetch('/.netlify/functions/bjl-territory-profile', authedFetchInit({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ focal_item_ids: focalIds, territory_key: territoryKey }),
+      }));
+      const j = await r.json();
+      if (!r.ok) throw new Error((j && j.error) || `request failed (${r.status})`);
+      setCxProfileCache(prev => ({ ...prev, [k]: { items: Array.isArray(j.items) ? j.items : [] } }));
+    } catch (e) {
+      setCxProfileCache(prev => ({ ...prev, [k]: { error: String(e.message || e) } }));
+    }
+  };
+
+  // Roster tap — cache per territory_key.
+  const [cxRosterCache, setCxRosterCache] = useState({});
+  const fetchRoster = async (territoryKey) => {
+    if (cxRosterCache[territoryKey] && (cxRosterCache[territoryKey].items || cxRosterCache[territoryKey].error)) return;
+    setCxRosterCache(prev => ({ ...prev, [territoryKey]: { loading: true } }));
+    try {
+      if (window.__bjlAuth && window.__bjlAuth.getSession) await window.__bjlAuth.getSession();
+      const r = await fetch('/.netlify/functions/bjl-territory-roster', authedFetchInit({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ territory_key: territoryKey }),
+      }));
+      const j = await r.json();
+      if (!r.ok) throw new Error((j && j.error) || `request failed (${r.status})`);
+      setCxRosterCache(prev => ({ ...prev, [territoryKey]: { items: Array.isArray(j.items) ? j.items : [] } }));
+    } catch (e) {
+      setCxRosterCache(prev => ({ ...prev, [territoryKey]: { error: String(e.message || e) } }));
+    }
+  };
+
+  // Prediction ledger — staff page, fetch on demand.
+  const [cxPredictions, setCxPredictions] = useState({ loading: false, error: null, rows: null });
+  const fetchPredictions = async () => {
+    setCxPredictions({ loading: true, error: null, rows: null });
+    try {
+      if (window.__bjlAuth && window.__bjlAuth.getSession) await window.__bjlAuth.getSession();
+      const r = await fetch('/.netlify/functions/bjl-model-predictions', authedFetchInit({ method: 'POST' }));
+      const j = await r.json();
+      if (!r.ok) throw new Error((j && j.error) || `request failed (${r.status})`);
+      setCxPredictions({ loading: false, error: null, rows: Array.isArray(j.predictions) ? j.predictions : [] });
+    } catch (e) {
+      setCxPredictions({ loading: false, error: String(e.message || e), rows: null });
+    }
+  };
+
   const runConnectionsColumn = async (columnId) => {
     const col = cxColumns.find(c => c.id === columnId);
     if (!col) return;
@@ -4972,6 +5034,7 @@ const JoyMapMode = () => {
         <button className={`btn ${subView === 'audience_map' ? 'primary' : 'ghost'}`} onClick={() => setSubView('audience_map')}>Audience Map</button>
         <button className={`btn ${subView === 'dance_map' ? 'primary' : 'ghost'}`} onClick={() => setSubView('dance_map')}>Dance Map</button>
         <button className={`btn ${subView === 'connections' ? 'primary' : 'ghost'}`} onClick={() => setSubView('connections')}>Connections</button>
+        <button className={`btn ${subView === 'predictions' ? 'primary' : 'ghost'}`} onClick={() => { setSubView('predictions'); fetchPredictions(); }}>Predictions</button>
       </div>
 
       {subView === 'audience_map' && (
@@ -5118,10 +5181,31 @@ const JoyMapMode = () => {
                   </button>
                 </div>
                 {col.error && <div className="joy-map-error" style={{marginTop: 10}}>Error: {col.error}</div>}
-                {col.result && <JoyMapConnectionsSweep result={col.result} showConflicting={cxShowConflicting} />}
+                {col.result && (
+                  <JoyMapConnectionsSweep
+                    result={col.result}
+                    showConflicting={cxShowConflicting}
+                    profileCache={cxProfileCache}
+                    onOpenProfile={(tKey) => fetchProfile(col.result.focals.map(f => f.item_id), tKey)}
+                    rosterCache={cxRosterCache}
+                    onOpenRoster={(tKey) => fetchRoster(tKey)}
+                  />
+                )}
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {subView === 'predictions' && (
+        <div className="joy-map-inputs">
+          <div className="joy-map-input-group">
+            <div className="joy-map-input-label">Prediction ledger (staff, read-only)</div>
+            <div style={{fontSize: 13, color: 'var(--iron-darker, #5a5a55)', maxWidth: '72ch', marginBottom: 12}}>
+              Every modeled lift registered against a not-yet-fielded item. Verification writes happen through the analysis session, not here. Unverified rows show "awaiting fielding."
+            </div>
+          </div>
+          <JoyMapPredictionsTable state={cxPredictions} onRefresh={fetchPredictions} />
         </div>
       )}
     </div>
@@ -5148,7 +5232,7 @@ const JoyMapMode = () => {
 //      pairs_behind >= 3. Staff-only toggle brings it back.
 // r never renders. holdout_r renders on model_abstains rows only.
 // -------------------------------------------------------------------------
-const JoyMapConnectionsSweep = ({ result, showConflicting }) => {
+const JoyMapConnectionsSweep = ({ result, showConflicting, profileCache, onOpenProfile, rosterCache, onOpenRoster }) => {
   if (!result || !Array.isArray(result.territories)) return null;
 
   // Front-door escalation surface. When the brief comes back as
@@ -5228,29 +5312,27 @@ const JoyMapConnectionsSweep = ({ result, showConflicting }) => {
   };
 
   // Modeled diamond, plotted against the territory mean lift (not the
-  // lead bar). Show whenever the modeled block exists and is not
-  // suppressed by the sign-conflict rule.
+  // lead bar). modeled_verdict is display text, not an enum —
+  // anything matching /^model_abstains/ styles muted and the string
+  // renders verbatim (per section 0.1 of the functional-wiring spec:
+  // "model_abstains_coherence", "model_abstains_items", etc. may
+  // appear).
   const renderModeledDiamond = (t) => {
     const m = t.modeled;
     if (!m) return null;
-    // Abstains render regardless of the conflict toggle (they carry
-    // their own reason to withhold the diamond).
-    if (m.verdict === 'model_abstains') {
+    const verdictStr = m.verdict || '';
+    const isAbstain = /^model_abstains/.test(verdictStr);
+    if (isAbstain) {
       return (
         <div className="joy-map-cx-modeled abstains">
-          <span className="joy-map-cx-modeled-label">Modeled</span>
+          <span className="joy-map-cx-modeled-label">Model estimate</span>
           <span className="joy-map-cx-modeled-abstain">
-            model_abstains — holdout r = {m.holdout_r != null ? m.holdout_r : '—'}, below the accuracy floor. No diamond rendered.
-          </span>
-        </div>
-      );
-    }
-    if (m.verdict === 'model_abstains_cohort') {
-      return (
-        <div className="joy-map-cx-modeled abstains">
-          <span className="joy-map-cx-modeled-label">Modeled</span>
-          <span className="joy-map-cx-modeled-abstain">
-            model_abstains_cohort — cohort too small (hot {m.cohort_hot ?? '—'} / cool {m.cohort_cool ?? '—'}) to trust the modeled read for this territory.
+            {verdictStr} — accuracy r = {m.holdout_r != null ? m.holdout_r : '—'}
+            {m.coherence != null ? `, coherence ${m.coherence}` : ''}
+            {verdictStr === 'model_abstains_cohort' && (m.cohort_hot != null || m.cohort_cool != null)
+              ? ` (cohort hot ${m.cohort_hot ?? '—'} / cool ${m.cohort_cool ?? '—'})`
+              : ''
+            }. No estimate rendered for this territory.
           </span>
         </div>
       );
@@ -5262,7 +5344,7 @@ const JoyMapConnectionsSweep = ({ result, showConflicting }) => {
     if (m.suppress_on_conflict && !showConflicting) {
       return (
         <div className="joy-map-cx-modeled suppressed">
-          <span className="joy-map-cx-modeled-label">Modeled</span>
+          <span className="joy-map-cx-modeled-label">Model estimate</span>
           <span className="joy-map-cx-modeled-suppress">
             hidden — modeled diamond disagrees in sign with the measured territory mean lift, and the territory has 3+ pairs behind it. Toggle "Show sign-conflicting modeled rows" above to reveal.
           </span>
@@ -5271,16 +5353,17 @@ const JoyMapConnectionsSweep = ({ result, showConflicting }) => {
     }
     // On unmeasured territories, there is no measured territory mean
     // to plot against — show the modeled read as an absolute value
-    // (which is exactly the "fill the gap" case the model is meant
-    // to serve, gated by holdout_r).
+    // (the "fill the gap" case, gated by holdout_r).
     const hasMeasuredMean = m.measured_territory_mean_lift != null;
     return (
       <div className="joy-map-cx-modeled modeled">
-        <span className="joy-map-cx-modeled-label">Modeled</span>
+        <span className="joy-map-cx-modeled-label">
+          Model estimate {m.holdout_r != null ? `(accuracy r=${m.holdout_r})` : ''}
+        </span>
         <span className="joy-map-cx-modeled-diamond">
           {hasMeasuredMean
             ? <>◆ <strong>{signedNum(m.lift_points)}</strong> vs territory mean <strong>{signedNum(m.measured_territory_mean_lift)}</strong></>
-            : <>◆ <strong>{signedNum(m.lift_points)}</strong> pts (no measured territory mean — modeled read fills the gap)</>
+            : <>◆ <strong>{signedNum(m.lift_points)}</strong> pts (no measured territory mean — model fills the gap)</>
           }
         </span>
         {m.sign_conflict && (
@@ -5288,8 +5371,8 @@ const JoyMapConnectionsSweep = ({ result, showConflicting }) => {
             · sign conflict{m.suppress_on_conflict ? ' (staff override)' : ' (below suppression threshold)'}
           </span>
         )}
-        {m.holdout_r != null && (
-          <span className="joy-map-cx-modeled-r"> · r={m.holdout_r}</span>
+        {m.coherence != null && (
+          <span className="joy-map-cx-modeled-r"> · coherence {m.coherence}</span>
         )}
         {m.centroid_items != null && (
           <span className="joy-map-cx-modeled-r"> · {m.centroid_items} centroid items</span>
@@ -5298,36 +5381,54 @@ const JoyMapConnectionsSweep = ({ result, showConflicting }) => {
     );
   };
 
-  const modelAbstains = territories.filter(t => t.modeled && t.modeled.verdict && t.modeled.verdict.startsWith('model_abstains')).length;
+  const modelAbstains = territories.filter(t =>
+    t.modeled && t.modeled.verdict && /^model_abstains/.test(t.modeled.verdict)
+  ).length;
+  const focalIdsForCache = focals.map(f => f.item_id);
 
   return (
     <div className="joy-map-cx-sweep">
-      <div className="joy-map-cx-sweep-focals">
-        <div className="joy-map-cx-sweep-focals-label">Focals:</div>
-        {focals.map(f => (
-          <div key={f.item_id} className="joy-map-cx-sweep-focal-chip"
-               style={{borderLeftColor: focalColorByName.get(f.item_name) || '#5a5a55'}}>
-            <span className="joy-map-cx-sweep-focal-name">{f.item_name || `#${f.item_id}`}</span>
-            <span className="joy-map-cx-sweep-focal-id"> · id {f.item_id}</span>
-          </div>
-        ))}
+      {/* Focal card (mandatory per spec). Every map has a focal
+          card, showing item wording(s), the door label, and the
+          cohort_hot/cohort_cool split with the "split against each
+          person's own baseline" sentence. */}
+      <div className="joy-map-cx-focal-card">
+        <div className="joy-map-cx-focal-card-eyebrow">Focal card</div>
+        <ul className="joy-map-cx-focal-card-items">
+          {focals.map(f => (
+            <li key={f.item_id} style={{borderLeftColor: focalColorByName.get(f.item_name) || '#5a5a55'}}>
+              <span className="joy-map-cx-focal-card-name">{f.item_name || `#${f.item_id}`}</span>
+              <span className="joy-map-cx-focal-card-id"> · id {f.item_id}</span>
+            </li>
+          ))}
+        </ul>
+        <div className="joy-map-cx-focal-card-cohort">
+          Cohort: <strong>{result.cohort_hot != null ? result.cohort_hot.toLocaleString() : '—'}</strong> hot / <strong>{result.cohort_cool != null ? result.cohort_cool.toLocaleString() : '—'}</strong> cool.
+          <span style={{fontStyle: 'italic'}}> Split against each person's own baseline.</span>
+        </div>
         {modelVersion && (
-          <div className="joy-map-cx-sweep-focal-chip" title="Factorization model version">
-            <span className="joy-map-cx-sweep-focal-name">model: {modelVersion}</span>
-            {modelAbstains > 0 && <span className="joy-map-cx-sweep-focal-id"> · {modelAbstains} abstain</span>}
+          <div className="joy-map-cx-focal-card-model">
+            model: {modelVersion}{modelAbstains > 0 ? ` · ${modelAbstains} territor${modelAbstains === 1 ? 'y' : 'ies'} abstain` : ''}
           </div>
         )}
       </div>
       <ul className="joy-map-cx-sweep-rows">
         {territories.map(t => {
-          const verdictClass = `verdict-${t.verdict}`;
+          const verdictClass = `verdict-${t.verdict || 'unknown'}`;
           const lead = t.lead;
+          const territoryKey = t.territory_key || null;
+          const cacheK = territoryKey ? `${focalIdsForCache.slice().sort((a,b)=>a-b).join(',')}::${territoryKey}` : null;
+          const profile = cacheK ? (profileCache || {})[cacheK] : null;
+          const rosterEntry = territoryKey ? (rosterCache || {})[territoryKey] : null;
           return (
             <li key={`${t.ord}-${t.territory}`} className={`joy-map-cx-row ${verdictClass}`}>
               <div className="joy-map-cx-row-head">
                 <span className="joy-map-cx-row-ord">{String(t.ord).padStart(2, '0')}</span>
-                <span className="joy-map-cx-row-domain">{t.territory}</span>
-                <span className={`joy-map-cx-row-verdict ${verdictClass}`}>{t.verdict}</span>
+                <span className="joy-map-cx-row-domain">
+                  {t.territory}
+                  {t.emotional_job && <span className="joy-map-cx-row-emojob"> · {t.emotional_job}</span>}
+                </span>
+                <span className={`joy-map-cx-row-verdict ${verdictClass}`}>{t.verdict || 'unknown'}</span>
                 {t.territory_magnitude != null && (
                   <span className="joy-map-cx-chip magnitude" title="territory_magnitude">
                     magnitude {t.territory_magnitude}
@@ -5371,11 +5472,198 @@ const JoyMapConnectionsSweep = ({ result, showConflicting }) => {
                   </div>
                 </div>
               )}
+              {t.verdict && t.verdict !== 'measured' && t.verdict !== 'flat' && t.verdict !== 'unmeasured' && (
+                <div className="joy-map-cx-row-body">
+                  <div className="joy-map-cx-row-flat-note">
+                    Verdict '{t.verdict}' for {t.territory}: no measured lead surfaced. Content, not empty.
+                  </div>
+                  {lead && renderPairLine(lead, true)}
+                </div>
+              )}
               {renderModeledDiamond(t)}
+              {/* Row expand — territory profile. Fires only when
+                  territory_key is present (LEFT JOIN could leave it
+                  null if bjl_territories lags the sweep function).
+                  Cache is per (focal, territory) per session. */}
+              {territoryKey && onOpenProfile && (
+                <details
+                  className="joy-map-cx-profile-details"
+                  onToggle={(e) => { if (e.target.open) onOpenProfile(territoryKey); }}
+                >
+                  <summary>Territory profile — what's in {t.territory}</summary>
+                  <JoyMapTerritoryProfile
+                    profile={profile}
+                    territoryKey={territoryKey}
+                    territoryName={t.territory}
+                    rosterEntry={rosterEntry}
+                    onOpenRoster={onOpenRoster}
+                  />
+                </details>
+              )}
             </li>
           );
         })}
       </ul>
+    </div>
+  );
+};
+
+// -------------------------------------------------------------------------
+// JoyMapTerritoryProfile — three-group renderer for one territory's
+// items, fetched via bjl-territory-profile. Groups by item_verdict:
+//   measured  → sorted by measured_lift desc
+//   inferred  → sorted by |modeled_lift_raw| desc
+//   unmeasured (or other) → collapsed count with expandable list
+// Roster tap sits at the bottom.
+// -------------------------------------------------------------------------
+const JoyMapTerritoryProfile = ({ profile, territoryKey, territoryName, rosterEntry, onOpenRoster }) => {
+  if (!profile) return <div className="joy-map-cx-profile-body">Loading…</div>;
+  if (profile.loading) return <div className="joy-map-cx-profile-body">Fetching territory profile…</div>;
+  if (profile.error) return <div className="joy-map-cx-profile-body joy-map-error">Error: {profile.error}</div>;
+  const items = Array.isArray(profile.items) ? profile.items : [];
+  if (items.length === 0) {
+    return (
+      <div className="joy-map-cx-profile-body">
+        <div className="joy-map-cx-row-flat-note">No items mapped for {territoryName}.</div>
+        <RosterTap territoryKey={territoryKey} rosterEntry={rosterEntry} onOpenRoster={onOpenRoster} />
+      </div>
+    );
+  }
+  const measured  = items.filter(i => i.item_verdict === 'measured')
+    .sort((a, b) => (b.measured_lift || 0) - (a.measured_lift || 0));
+  const inferred  = items.filter(i => i.item_verdict === 'inferred')
+    .sort((a, b) => Math.abs(b.modeled_lift_raw || 0) - Math.abs(a.modeled_lift_raw || 0));
+  const otherRows = items.filter(i => i.item_verdict !== 'measured' && i.item_verdict !== 'inferred');
+  const signedNum = (n) => n == null ? '—' : `${n > 0 ? '+' : ''}${n}`;
+  return (
+    <div className="joy-map-cx-profile-body">
+      {measured.length > 0 && (
+        <div className="joy-map-cx-profile-group">
+          <div className="joy-map-cx-profile-group-title">Measured ({measured.length})</div>
+          <table className="joy-map-cx-profile-table">
+            <tbody>
+              {measured.map(i => (
+                <tr key={i.item_id}>
+                  <td>{i.item_wording}</td>
+                  <td className="num">n {i.n_hot ?? '—'}/{i.n_cool ?? '—'}</td>
+                  <td className="num"><strong>{signedNum(i.measured_lift)}</strong></td>
+                  <td className="num muted">model {signedNum(i.modeled_lift_raw)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {inferred.length > 0 && (
+        <div className="joy-map-cx-profile-group">
+          <div className="joy-map-cx-profile-group-title">Inferred ({inferred.length}) — model estimate, not yet measured for this cohort</div>
+          <table className="joy-map-cx-profile-table">
+            <tbody>
+              {inferred.map(i => (
+                <tr key={i.item_id}>
+                  <td>{i.item_wording}</td>
+                  <td className="num"><strong>{signedNum(i.modeled_lift_raw)}</strong></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {otherRows.length > 0 && (
+        <details className="joy-map-cx-profile-group">
+          <summary>Unmeasured ({otherRows.length}) — no estimate</summary>
+          <table className="joy-map-cx-profile-table">
+            <tbody>
+              {otherRows.map(i => (
+                <tr key={i.item_id}>
+                  <td>{i.item_wording}</td>
+                  <td className="num muted">{i.item_verdict || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </details>
+      )}
+      <RosterTap territoryKey={territoryKey} rosterEntry={rosterEntry} onOpenRoster={onOpenRoster} />
+    </div>
+  );
+};
+
+// -------------------------------------------------------------------------
+// RosterTap — provenance tap. Plain table via bjl_territory_roster.
+// No filtering, no interpretation.
+// -------------------------------------------------------------------------
+const RosterTap = ({ territoryKey, rosterEntry, onOpenRoster }) => {
+  return (
+    <details className="joy-map-cx-roster-details" onToggle={(e) => {
+      if (e.target.open && onOpenRoster) onOpenRoster(territoryKey);
+    }}>
+      <summary>What's in this territory (roster)</summary>
+      {!rosterEntry && <div className="joy-map-cx-profile-body">Loading…</div>}
+      {rosterEntry && rosterEntry.loading && <div className="joy-map-cx-profile-body">Fetching roster…</div>}
+      {rosterEntry && rosterEntry.error && <div className="joy-map-cx-profile-body joy-map-error">Error: {rosterEntry.error}</div>}
+      {rosterEntry && Array.isArray(rosterEntry.items) && rosterEntry.items.length === 0 && (
+        <div className="joy-map-cx-profile-body">No items mapped for this territory.</div>
+      )}
+      {rosterEntry && Array.isArray(rosterEntry.items) && rosterEntry.items.length > 0 && (
+        <table className="joy-map-cx-profile-table">
+          <thead>
+            <tr><th>wording</th><th>family</th><th>n</th><th>spread</th><th>in ledger</th><th>basis</th></tr>
+          </thead>
+          <tbody>
+            {rosterEntry.items.map(r => (
+              <tr key={r.item_id}>
+                <td>{r.item_wording}</td>
+                <td className="muted">{r.scale_family}</td>
+                <td className="num">{r.n ?? '—'}</td>
+                <td className="num">{r.spread ?? '—'}</td>
+                <td className="muted">{r.in_ledger ? 'yes' : 'no'}</td>
+                <td className="muted">{r.basis}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </details>
+  );
+};
+
+// -------------------------------------------------------------------------
+// JoyMapPredictionsTable — staff-only read-only view of the prediction
+// ledger. Verification writes happen through analysis sessions, not
+// here. Unverified rows show "awaiting fielding."
+// -------------------------------------------------------------------------
+const JoyMapPredictionsTable = ({ state, onRefresh }) => {
+  if (state.loading) return <div className="joy-map-loading">Fetching prediction ledger…</div>;
+  if (state.error) return <div className="joy-map-error">Error: {state.error}<br/><button className="btn ghost" onClick={onRefresh}>Retry</button></div>;
+  if (!state.rows) return <div><button className="btn primary" onClick={onRefresh}>Load ledger</button></div>;
+  if (state.rows.length === 0) return <div className="joy-map-cx-profile-body">No predictions registered yet.</div>;
+  return (
+    <div className="joy-map-cx-profile-body">
+      <table className="joy-map-cx-profile-table">
+        <thead>
+          <tr>
+            <th>id</th><th>predicted_at</th><th>cohort</th><th>item</th><th>territory</th>
+            <th>predicted lift</th><th>fielding</th><th>measured lift</th><th>verified</th><th>verdict</th>
+          </tr>
+        </thead>
+        <tbody>
+          {state.rows.map(p => (
+            <tr key={p.prediction_id}>
+              <td className="num">{p.prediction_id}</td>
+              <td className="muted">{p.predicted_at || '—'}</td>
+              <td>{p.cohort_definition || '—'}</td>
+              <td>{p.item_wording || `#${p.item_id ?? '—'}`}</td>
+              <td className="muted">{p.territory_key || '—'}</td>
+              <td className="num"><strong>{p.predicted_lift != null ? (p.predicted_lift > 0 ? '+' : '') + p.predicted_lift : '—'}</strong></td>
+              <td className="muted">{p.fielding_id || 'awaiting fielding'}</td>
+              <td className="num">{p.measured_lift != null ? (p.measured_lift > 0 ? '+' : '') + p.measured_lift : '—'}</td>
+              <td className="muted">{p.verified_at || '—'}</td>
+              <td>{p.verdict || (p.verified_at ? 'verified' : 'pending')}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 };
