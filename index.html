@@ -5070,8 +5070,11 @@ const JoyMapMode = () => {
         <div className="joy-map-inputs">
           <div className="joy-map-input-group">
             <div className="joy-map-input-label">Connections across the 16 life territories — three tiers</div>
-            <div style={{fontSize: 13, color: 'var(--iron-darker, #5a5a55)', maxWidth: '72ch', marginBottom: 12}}>
-              Runs bjl_joy_map_sweep_v2 JOIN bjl_joy_map_modeled across all 16 territories. Each row shows a measured lead bar (lift + direction color), an optional modeled diamond plotted against the measured territory mean (never against the lead bar), a magnitude chip, and a THIN badge when fewer than 3 pairs sit behind the lead. Verdicts: measured / flat / unmeasured-dashed / model_abstains (holdout r shown) / model_abstains_cohort. r_internal never renders. Enter a query (front-door resolver) or focal ids directly. Two columns for the Herschend two-door format.
+            <div style={{fontSize: 13, color: 'var(--iron-darker, #5a5a55)', maxWidth: '72ch', marginBottom: 8}}>
+              Runs bjl_joy_map_sweep_v2 JOIN bjl_joy_map_modeled across all 16 territories. Each row shows a measured lead bar (lift + direction color), an optional modeled diamond plotted against the measured territory mean (never against the lead bar), a magnitude chip, and a THIN badge when fewer than 3 pairs sit behind the lead. Verdicts: measured / flat / unmeasured-dashed / model_abstains (holdout r shown) / model_abstains_cohort. r_internal never renders.
+            </div>
+            <div style={{fontSize: 13, color: 'var(--ink, #1a1a17)', maxWidth: '72ch', marginBottom: 12, padding: '8px 10px', background: 'var(--paper-2, #f4f3ed)', borderLeft: '3px solid var(--ink, #1a1a17)', borderRadius: 2}}>
+              <strong>How to use it.</strong> Each column is one independent sweep. Fill one column for a single map, or fill both for a side-by-side comparison (Herschend two-door format — a client with two competing brands or doors). In each column: type a query for the front-door resolver <em>or</em> paste focal item ids directly (comma-separated, 1–4). Click <em>Run sweep</em> per column.
             </div>
             <label style={{display:'inline-flex', alignItems:'center', gap:6, fontSize:12, color:'var(--iron-darker,#5a5a55)'}}>
               <input type="checkbox" checked={cxShowConflicting} onChange={(e) => setCxShowConflicting(e.target.checked)} />
