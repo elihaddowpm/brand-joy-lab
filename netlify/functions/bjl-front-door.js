@@ -85,9 +85,19 @@ async function classifyShape(query, context) {
   // a fan of something", "Going to a fast food restaurant") to
   // needs_clarification, forcing a three-retry burst on a surface
   // that could have just run the ledger.
-  const surfaceHint = surface === 'connections'
-    ? `\nCalling surface: connections
-CONNECTIONS-SURFACE DEFAULT: this pane runs the within-person connectivity ledger on a specific item or brand. A bare noun phrase typed here means "what connects to it" — classify bare items/experiences as item_connection and bare brand names as brand_lookup. Do NOT escalate to needs_clarification for a bare item, bare brand, or a query missing only a verb; the surface default supplies the verb. Reserve needs_clarification for pronouns without antecedents, meta questions about the tool, or genuinely empty asks.`
+  // Connections-shaped surfaces (the connections beta pane and the
+  // Joy Map connections sweep) both run a ledger read on whatever
+  // the strategist types. A bare noun typed into either surface is
+  // a connection query by convention — the surface default supplies
+  // the verb, and escalating to needs_clarification for a bare item
+  // or bare brand produces the three-retry burst the connections
+  // pane's log 4-7 captured. Same rule applies here.
+  const isConnectionsShapedSurface = (
+    surface === 'connections' || surface === 'joy_map_connections'
+  );
+  const surfaceHint = isConnectionsShapedSurface
+    ? `\nCalling surface: ${surface}
+CONNECTIONS-SURFACE DEFAULT: this pane runs a within-person connectivity read on a specific item, brand, category, or audience. A bare noun phrase typed here means "what connects to it" — classify bare items/experiences as item_connection and bare brand names as brand_lookup. When the query names a group of people (e.g. "parents who love X", "sports fans", "Gen Z"), classify as audience_comparison (anchor items resolve for the audience side). Do NOT escalate to needs_clarification for a bare item, bare brand, or a query missing only a verb; the surface default supplies the verb. Reserve needs_clarification for pronouns without antecedents, meta questions about the tool, or genuinely empty asks.`
     : surface
     ? `\nCalling surface: ${surface}`
     : '';

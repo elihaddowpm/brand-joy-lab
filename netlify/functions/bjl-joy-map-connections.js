@@ -169,11 +169,27 @@ exports.handler = async (event) => {
           }),
         };
       }
-      const items = (brief.entities && Array.isArray(brief.entities.items)) ? brief.entities.items : [];
-      focalIds = items
-        .map(i => Number(i.item_id))
-        .filter(Number.isFinite)
-        .slice(0, MAX_FOCALS);
+      // Focal extraction from the brief. audience_comparison keeps
+      // its focals on entities.audiences[].anchor_item_ids; every
+      // other shape uses entities.items. Same convention as the
+      // connections-beta pane's focalItemsFromBrief.
+      if (brief.shape === 'audience_comparison') {
+        const audiences = (brief.entities && Array.isArray(brief.entities.audiences)) ? brief.entities.audiences : [];
+        const audIds = new Set();
+        for (const aud of audiences) {
+          for (const id of (Array.isArray(aud.anchor_item_ids) ? aud.anchor_item_ids : [])) {
+            const n = Number(id);
+            if (Number.isFinite(n)) audIds.add(n);
+          }
+        }
+        focalIds = Array.from(audIds).slice(0, MAX_FOCALS);
+      } else {
+        const items = (brief.entities && Array.isArray(brief.entities.items)) ? brief.entities.items : [];
+        focalIds = items
+          .map(i => Number(i.item_id))
+          .filter(Number.isFinite)
+          .slice(0, MAX_FOCALS);
+      }
     } catch (e) {
       console.error('[joy-map-connections] front door failed:', e.message);
       return { statusCode: 500, body: JSON.stringify({ error: `front door failed: ${e.message}` }) };
