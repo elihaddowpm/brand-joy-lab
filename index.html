@@ -4812,11 +4812,16 @@ const JoyMapMode = () => {
   const [dmFinding, setDmFinding] = useState(null);
   // Connections state — one map per column, up to two columns for
   // side-by-side (Herschend two-door format). Each column carries its
-  // own label + focal-id csv + running/error/result state.
+  // own label + input (query OR focal-id csv) + running/error/result
+  // state. Query goes through the front-door resolver; ids go direct.
   const [cxColumns, setCxColumns] = useState([
-    { id: 'A', label: 'Door A', focalIdsCsv: '', running: false, error: null, result: null },
-    { id: 'B', label: 'Door B', focalIdsCsv: '', running: false, error: null, result: null },
+    { id: 'A', label: 'Door A', queryInput: '', focalIdsCsv: '', running: false, error: null, result: null },
+    { id: 'B', label: 'Door B', queryInput: '', focalIdsCsv: '', running: false, error: null, result: null },
   ]);
+  // Staff-only toggle. When true, modeled rows whose sign conflicts
+  // with the measured territory mean lift (on 3+ pairs) are shown;
+  // when false (default), those rows are hidden client-side.
+  const [cxShowConflicting, setCxShowConflicting] = useState(false);
   const setCxColumn = (id, patch) => setCxColumns(prev => prev.map(c => c.id === id ? { ...c, ...patch } : c));
 
   const runConnectionsColumn = async (columnId) => {
@@ -4826,15 +4831,16 @@ const JoyMapMode = () => {
       .split(/[,\s]+/)
       .map(s => parseInt(s, 10))
       .filter(n => Number.isFinite(n) && n > 0);
-    if (ids.length === 0) {
-      setCxColumn(columnId, { error: 'Enter one or more focal item ids (comma-separated).', result: null });
+    const query = (col.queryInput || '').trim();
+    if (ids.length === 0 && !query) {
+      setCxColumn(columnId, { error: 'Enter a query (front-door resolver) or focal item ids (comma-separated).', result: null });
       return;
     }
     setCxColumn(columnId, { running: true, error: null, result: null });
     const invoke = async () => fetch('/.netlify/functions/bjl-joy-map-connections', authedFetchInit({
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ focal_item_ids: ids }),
+      body: JSON.stringify(ids.length > 0 ? { focal_item_ids: ids } : { query }),
     }));
     try {
       if (window.__bjlAuth && window.__bjlAuth.getSession) await window.__bjlAuth.getSession();
@@ -5063,10 +5069,14 @@ const JoyMapMode = () => {
       {subView === 'connections' && (
         <div className="joy-map-inputs">
           <div className="joy-map-input-group">
-            <div className="joy-map-input-label">Connections across the 13 life domains</div>
-            <div style={{fontSize: 13, color: 'var(--iron-darker, #5a5a55)', maxWidth: '68ch', marginBottom: 12}}>
-              Runs the joy-map sweep across all 13 fixed domains for a small set of focal items. Every domain returns one row — the lead pair for that domain across the focals — with a verdict of measured, flat, or unmeasured. Flat and unmeasured are content, not empty states; they carry information about where the focal does <em>not</em> travel. Two columns for the Herschend two-door format; fill one column for a single map. r never renders.
+            <div className="joy-map-input-label">Connections across the 16 life territories — three tiers</div>
+            <div style={{fontSize: 13, color: 'var(--iron-darker, #5a5a55)', maxWidth: '72ch', marginBottom: 12}}>
+              Runs bjl_joy_map_sweep_v2 JOIN bjl_joy_map_modeled across all 16 territories. Each row shows a measured lead bar (lift + direction color), an optional modeled diamond plotted against the measured territory mean (never against the lead bar), a magnitude chip, and a THIN badge when fewer than 3 pairs sit behind the lead. Verdicts: measured / flat / unmeasured-dashed / model_abstains (holdout r shown) / model_abstains_cohort. r_internal never renders. Enter a query (front-door resolver) or focal ids directly. Two columns for the Herschend two-door format.
             </div>
+            <label style={{display:'inline-flex', alignItems:'center', gap:6, fontSize:12, color:'var(--iron-darker,#5a5a55)'}}>
+              <input type="checkbox" checked={cxShowConflicting} onChange={(e) => setCxShowConflicting(e.target.checked)} />
+              Staff-only: show sign-conflicting modeled rows (modeled diamond disagrees with measured territory mean on 3+ pairs)
+            </label>
           </div>
           <div className="joy-map-cx-grid">
             {cxColumns.map(col => (
@@ -5079,24 +5089,33 @@ const JoyMapMode = () => {
                     placeholder="Column label (e.g. Door A)"
                   />
                 </div>
-                <label className="joy-map-cx-input-label">Focal item ids (comma-separated, 1–4)
+                <label className="joy-map-cx-input-label">Query (front-door resolver)
+                  <input
+                    type="text"
+                    value={col.queryInput}
+                    onChange={(e) => setCxColumn(col.id, { queryInput: e.target.value })}
+                    placeholder="e.g. Silver Dollar City, or theme parks"
+                    disabled={col.running}
+                  />
+                </label>
+                <label className="joy-map-cx-input-label" style={{marginTop:8}}>Or focal item ids (comma-separated, 1–4)
                   <input
                     type="text"
                     value={col.focalIdsCsv}
                     onChange={(e) => setCxColumn(col.id, { focalIdsCsv: e.target.value })}
-                    placeholder="e.g. 1408, 4607"
+                    placeholder="e.g. 4646, 4607"
                     disabled={col.running}
                   />
                 </label>
                 <div style={{marginTop: 8}}>
                   <button className="btn primary"
                     onClick={() => runConnectionsColumn(col.id)}
-                    disabled={col.running || !col.focalIdsCsv.trim()}>
+                    disabled={col.running || (!col.focalIdsCsv.trim() && !col.queryInput.trim())}>
                     {col.running ? 'Running…' : 'Run sweep'}
                   </button>
                 </div>
                 {col.error && <div className="joy-map-error" style={{marginTop: 10}}>Error: {col.error}</div>}
-                {col.result && <JoyMapConnectionsSweep result={col.result} />}
+                {col.result && <JoyMapConnectionsSweep result={col.result} showConflicting={cxShowConflicting} />}
               </div>
             ))}
           </div>
@@ -5107,25 +5126,135 @@ const JoyMapMode = () => {
 };
 
 // -------------------------------------------------------------------------
-// JoyMapConnectionsSweep — renders the 13-row output of
-// bjl-joy-map-connections. Fixed domain order (comes back sorted by
-// ord). Three verdict styles: measured / flat / unmeasured. Flat and
-// unmeasured render as content, not empty states, per spec.
-// Each measured row shows BOTH item wordings visible (focal + domain
-// item) so provenance is load-bearing — the two-bath divergence is
-// the cautionary case where the same physical experience under
-// different framings goes opposite directions.
-// r never renders.
+// JoyMapConnectionsSweep — three-tier renderer.
+//
+// SQL contract (from server):
+//   bjl_joy_map_sweep_v2(focal) s JOIN bjl_joy_map_modeled(focal, model)
+//   USING (ord, territory)
+//
+// Row anatomy (per territory):
+//   1. Measured lead bar: lift_points, direction-color, focal↔other.
+//   2. Diamond (modeled): modeled_lift_points plotted AGAINST
+//      measured_territory_mean_lift (never against the lead bar).
+//   3. Magnitude chip: territory_magnitude.
+//   4. THIN badge when pairs_behind < 3.
+//   5. Verdict styles: measured / flat / unmeasured-dashed /
+//      model_abstains (holdout r shown) / model_abstains_cohort.
+//   6. Sign-conflict suppression: modeled row hidden client-side
+//      when sign(modeled) !== sign(measured_territory_mean_lift) AND
+//      pairs_behind >= 3. Staff-only toggle brings it back.
+// r never renders. holdout_r renders on model_abstains rows only.
 // -------------------------------------------------------------------------
-const JoyMapConnectionsSweep = ({ result }) => {
-  if (!result || !Array.isArray(result.rows)) return null;
+const JoyMapConnectionsSweep = ({ result, showConflicting }) => {
+  if (!result || !Array.isArray(result.territories)) return null;
   const focals = Array.isArray(result.focals) ? result.focals : [];
-  const rows = result.rows;
-  const focalColorByName = new Map();
+  const territories = result.territories;
+  const modelVersion = result.model_version || null;
   const colorPalette = ['#7a2e10', '#1d6a58', '#40527a', '#7a5b1d'];
+  const focalColorByName = new Map();
   focals.forEach((f, i) => {
     if (f.item_name) focalColorByName.set(f.item_name, colorPalette[i % colorPalette.length]);
   });
+
+  const directionArrow = (dir) => dir === 'rises with' ? '↔' : dir === 'runs against' ? '⇄' : '·';
+  const directionColor = (dir) => dir === 'rises with' ? '#1d6a58' : dir === 'runs against' ? '#7a2e10' : '#5a5a55';
+  const signedNum = (n) => n == null ? '—' : `${n > 0 ? '+' : ''}${n}`;
+
+  const renderPairLine = (row, isLead) => {
+    if (!row) return null;
+    const color = row.focal_item ? (focalColorByName.get(row.focal_item) || '#5a5a55') : '#5a5a55';
+    return (
+      <div className={`joy-map-cx-pair-line ${isLead ? 'is-lead' : 'is-runner'}`}>
+        <span className="joy-map-cx-pair-focal" style={{color}}>{row.focal_item || '—'}</span>
+        <span className="joy-map-cx-pair-arrow" style={{color: directionColor(row.direction)}}>
+          {' '}{directionArrow(row.direction)}{' '}
+        </span>
+        <span className="joy-map-cx-pair-other">{row.other_item || '—'}</span>
+        {row.other_family && row.other_family !== 'joy' && (
+          <span className="joy-map-cx-pair-family"> · {row.other_family}</span>
+        )}
+        <span className="joy-map-cx-pair-metrics">
+          {row.shared_answerers != null && <span>{row.shared_answerers.toLocaleString()} shared</span>}
+          {row.pct_move_together != null && <span> · {row.pct_move_together}%</span>}
+          {row.lift_points != null && <span> · lift <strong style={{color: directionColor(row.direction)}}>{signedNum(row.lift_points)}</strong></span>}
+        </span>
+      </div>
+    );
+  };
+
+  // Modeled diamond, plotted against the territory mean lift (not the
+  // lead bar). Show whenever the modeled block exists and is not
+  // suppressed by the sign-conflict rule.
+  const renderModeledDiamond = (t) => {
+    const m = t.modeled;
+    if (!m) return null;
+    // Abstains render regardless of the conflict toggle (they carry
+    // their own reason to withhold the diamond).
+    if (m.verdict === 'model_abstains') {
+      return (
+        <div className="joy-map-cx-modeled abstains">
+          <span className="joy-map-cx-modeled-label">Modeled</span>
+          <span className="joy-map-cx-modeled-abstain">
+            model_abstains — holdout r = {m.holdout_r != null ? m.holdout_r : '—'}, below the accuracy floor. No diamond rendered.
+          </span>
+        </div>
+      );
+    }
+    if (m.verdict === 'model_abstains_cohort') {
+      return (
+        <div className="joy-map-cx-modeled abstains">
+          <span className="joy-map-cx-modeled-label">Modeled</span>
+          <span className="joy-map-cx-modeled-abstain">
+            model_abstains_cohort — cohort too small (hot {m.cohort_hot ?? '—'} / cool {m.cohort_cool ?? '—'}) to trust the modeled read for this territory.
+          </span>
+        </div>
+      );
+    }
+    // Suppression only fires when sign_conflict AND the territory has
+    // >= 3 pairs behind the lead (server sets suppress_on_conflict).
+    // Below-threshold conflicts still surface as a badge on the
+    // diamond so the reader sees the disagreement.
+    if (m.suppress_on_conflict && !showConflicting) {
+      return (
+        <div className="joy-map-cx-modeled suppressed">
+          <span className="joy-map-cx-modeled-label">Modeled</span>
+          <span className="joy-map-cx-modeled-suppress">
+            hidden — modeled diamond disagrees in sign with the measured territory mean lift, and the territory has 3+ pairs behind it. Toggle "Show sign-conflicting modeled rows" above to reveal.
+          </span>
+        </div>
+      );
+    }
+    // On unmeasured territories, there is no measured territory mean
+    // to plot against — show the modeled read as an absolute value
+    // (which is exactly the "fill the gap" case the model is meant
+    // to serve, gated by holdout_r).
+    const hasMeasuredMean = m.measured_territory_mean_lift != null;
+    return (
+      <div className="joy-map-cx-modeled modeled">
+        <span className="joy-map-cx-modeled-label">Modeled</span>
+        <span className="joy-map-cx-modeled-diamond">
+          {hasMeasuredMean
+            ? <>◆ <strong>{signedNum(m.lift_points)}</strong> vs territory mean <strong>{signedNum(m.measured_territory_mean_lift)}</strong></>
+            : <>◆ <strong>{signedNum(m.lift_points)}</strong> pts (no measured territory mean — modeled read fills the gap)</>
+          }
+        </span>
+        {m.sign_conflict && (
+          <span className="joy-map-cx-modeled-conflict">
+            · sign conflict{m.suppress_on_conflict ? ' (staff override)' : ' (below suppression threshold)'}
+          </span>
+        )}
+        {m.holdout_r != null && (
+          <span className="joy-map-cx-modeled-r"> · r={m.holdout_r}</span>
+        )}
+        {m.centroid_items != null && (
+          <span className="joy-map-cx-modeled-r"> · {m.centroid_items} centroid items</span>
+        )}
+      </div>
+    );
+  };
+
+  const modelAbstains = territories.filter(t => t.modeled && t.modeled.verdict && t.modeled.verdict.startsWith('model_abstains')).length;
+
   return (
     <div className="joy-map-cx-sweep">
       <div className="joy-map-cx-sweep-focals">
@@ -5137,64 +5266,67 @@ const JoyMapConnectionsSweep = ({ result }) => {
             <span className="joy-map-cx-sweep-focal-id"> · id {f.item_id}</span>
           </div>
         ))}
+        {modelVersion && (
+          <div className="joy-map-cx-sweep-focal-chip" title="Factorization model version">
+            <span className="joy-map-cx-sweep-focal-name">model: {modelVersion}</span>
+            {modelAbstains > 0 && <span className="joy-map-cx-sweep-focal-id"> · {modelAbstains} abstain</span>}
+          </div>
+        )}
       </div>
       <ul className="joy-map-cx-sweep-rows">
-        {rows.map(row => {
-          const focalColor = row.focal_item ? (focalColorByName.get(row.focal_item) || '#5a5a55') : '#5a5a55';
+        {territories.map(t => {
+          const verdictClass = `verdict-${t.verdict}`;
+          const lead = t.lead;
           return (
-            <li key={row.ord} className={`joy-map-cx-row verdict-${row.verdict}`}>
+            <li key={`${t.ord}-${t.territory}`} className={`joy-map-cx-row ${verdictClass}`}>
               <div className="joy-map-cx-row-head">
-                <span className="joy-map-cx-row-ord">{String(row.ord).padStart(2, '0')}</span>
-                <span className="joy-map-cx-row-domain">{row.domain.replace(/_/g, ' ')}</span>
-                <span className={`joy-map-cx-row-verdict verdict-${row.verdict}`}>{row.verdict}</span>
+                <span className="joy-map-cx-row-ord">{String(t.ord).padStart(2, '0')}</span>
+                <span className="joy-map-cx-row-domain">{t.territory}</span>
+                <span className={`joy-map-cx-row-verdict ${verdictClass}`}>{t.verdict}</span>
+                {t.territory_magnitude != null && (
+                  <span className="joy-map-cx-chip magnitude" title="territory_magnitude">
+                    magnitude {t.territory_magnitude}
+                  </span>
+                )}
+                {t.thin && (
+                  <span className="joy-map-cx-chip thin" title={`pairs_behind = ${t.pairs_behind} (< 3)`}>
+                    THIN
+                  </span>
+                )}
               </div>
-              {row.verdict === 'measured' && (
+              {t.verdict === 'measured' && lead && (
                 <div className="joy-map-cx-row-body">
-                  <div className="joy-map-cx-row-pair">
-                    <span className="joy-map-cx-row-focal" style={{color: focalColor}}>{row.focal_item}</span>
-                    <span className="joy-map-cx-row-direction">
-                      {row.direction === 'rises with' ? ' ↔ rises with ↔ ' : ' ⇄ runs against ⇄ '}
-                    </span>
-                    <span className="joy-map-cx-row-domain-item">{row.domain_item}</span>
-                  </div>
-                  <div className="joy-map-cx-row-metrics">
-                    {row.shared_answerers != null && (
-                      <span><strong>{row.shared_answerers.toLocaleString()}</strong> shared answerers</span>
-                    )}
-                    {row.pct_move_together != null && (
-                      <span> · <strong>{row.pct_move_together}%</strong> moving together</span>
-                    )}
-                    {row.pct_suppressed && (
-                      <span> · <em>pct suppressed (skewed distribution)</em></span>
-                    )}
-                    {row.lift_points != null && (
-                      <span> · lift <strong>{row.lift_points > 0 ? '+' : ''}{row.lift_points}</strong> pts</span>
-                    )}
-                  </div>
-                  {row.pct_suppressed && row.pct_suppress_reason && (
-                    <div className="joy-map-cx-row-caveat">{row.pct_suppress_reason}</div>
+                  {renderPairLine(lead, true)}
+                  {t.runner_ups.length > 0 && (
+                    <details className="joy-map-cx-runners">
+                      <summary>{t.runner_ups.length} runner-up{t.runner_ups.length === 1 ? '' : 's'} behind the lead</summary>
+                      {t.runner_ups.map((ru, i) => <div key={`ru-${i}`}>{renderPairLine(ru, false)}</div>)}
+                    </details>
+                  )}
+                  {t.attitude_intent.length > 0 && (
+                    <details className="joy-map-cx-runners">
+                      <summary>{t.attitude_intent.length} attitude/intent split row{t.attitude_intent.length === 1 ? '' : 's'}</summary>
+                      {t.attitude_intent.map((ai, i) => <div key={`ai-${i}`}>{renderPairLine(ai, false)}</div>)}
+                    </details>
                   )}
                 </div>
               )}
-              {row.verdict === 'flat' && (
+              {t.verdict === 'flat' && lead && (
                 <div className="joy-map-cx-row-body">
-                  <div className="joy-map-cx-row-pair muted">
-                    <span style={{color: focalColor}}>{row.focal_item}</span>
-                    <span className="joy-map-cx-row-direction"> · flat with · </span>
-                    <span>{row.domain_item}</span>
-                  </div>
                   <div className="joy-map-cx-row-flat-note">
-                    Lead pair for {row.domain.replace(/_/g, ' ')} shows no meaningful within-person co-movement. The focal neither rises with nor runs against this domain in the same people. Content, not empty.
+                    Lead pair on {t.territory} shows no meaningful within-person co-movement. Content, not empty.
+                  </div>
+                  {renderPairLine(lead, true)}
+                </div>
+              )}
+              {t.verdict === 'unmeasured' && (
+                <div className="joy-map-cx-row-body">
+                  <div className="joy-map-cx-row-flat-note">
+                    No ledger pair covers {t.territory} for this focal set. Unmeasured — candidate for co-fielding on the {t.territory} anchor items.
                   </div>
                 </div>
               )}
-              {row.verdict === 'unmeasured' && (
-                <div className="joy-map-cx-row-body">
-                  <div className="joy-map-cx-row-flat-note">
-                    No ledger pair covers {row.domain.replace(/_/g, ' ')} for this focal set. Unmeasured — candidate for co-fielding on the {row.domain.replace(/_/g, ' ')} anchor item.
-                  </div>
-                </div>
-              )}
+              {renderModeledDiamond(t)}
             </li>
           );
         })}

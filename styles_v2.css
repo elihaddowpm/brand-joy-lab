@@ -4572,4 +4572,116 @@ textarea { font-family: var(--font-text); }
   font-size: 12.5px;
   color: var(--iron-darker, #5a5a55);
   font-style: italic;
+  margin-bottom: 6px;
+}
+
+/* Three-tier renderer additions (2026-07-27) */
+.joy-map-cx-row-verdict.verdict-model_abstains,
+.joy-map-cx-row-verdict.verdict-model_abstains_cohort {
+  background: transparent;
+  color: var(--iron-darker, #5a5a55);
+  border: 1px dashed var(--iron-darker, #5a5a55);
+}
+.joy-map-cx-chip {
+  font-family: var(--font-mono, monospace);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 2px 6px;
+  border-radius: 2px;
+  margin-left: 6px;
+}
+.joy-map-cx-chip.magnitude {
+  background: var(--paper-2, #f4f3ed);
+  color: var(--iron-darker, #5a5a55);
+  border: 1px solid var(--iron, #e2e2dc);
+}
+.joy-map-cx-chip.thin {
+  background: #fdf1eb;
+  color: #7a2e10;
+  border: 1px solid #f0c9b2;
+}
+.joy-map-cx-pair-line {
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 4px 0;
+}
+.joy-map-cx-pair-line.is-runner {
+  color: var(--iron-darker, #5a5a55);
+  font-size: 12.5px;
+}
+.joy-map-cx-pair-arrow {
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+}
+.joy-map-cx-pair-family {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--iron-dark, #8a8a82);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.joy-map-cx-pair-metrics {
+  color: var(--iron-darker, #5a5a55);
+  font-size: 12px;
+  margin-left: 8px;
+}
+.joy-map-cx-runners {
+  margin-top: 8px;
+  padding-left: 12px;
+  border-left: 2px solid var(--iron, #e2e2dc);
+}
+.joy-map-cx-runners > summary {
+  cursor: pointer;
+  font-family: var(--font-mono, monospace);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--iron-darker, #5a5a55);
+  padding: 4px 0;
+}
+
+/* Modeled block (diamond, abstains, suppressed). */
+.joy-map-cx-modeled {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-top: 1px dashed var(--iron, #e2e2dc);
+  font-size: 12.5px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+}
+.joy-map-cx-modeled-label {
+  font-family: var(--font-mono, monospace);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--iron-dark, #8a8a82);
+}
+.joy-map-cx-modeled.modeled .joy-map-cx-modeled-diamond {
+  color: var(--ink, #1a1a17);
+}
+.joy-map-cx-modeled.abstains {
+  background: repeating-linear-gradient(45deg, transparent, transparent 6px, rgba(122,46,16,0.04) 6px, rgba(122,46,16,0.04) 12px);
+}
+.joy-map-cx-modeled-abstain {
+  color: #7a2e10;
+  font-style: italic;
+}
+.joy-map-cx-modeled.suppressed {
+  background: var(--paper-2, #f4f3ed);
+}
+.joy-map-cx-modeled-suppress {
+  color: var(--iron-darker, #5a5a55);
+  font-style: italic;
+}
+.joy-map-cx-modeled-conflict {
+  color: #7a2e10;
+  font-weight: 600;
+}
+.joy-map-cx-modeled-r {
+  color: var(--iron-dark, #8a8a82);
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
 }

@@ -1,29 +1,43 @@
 /**
- * bjl-joy-map-connections.js — Joy Map connections section endpoint.
+ * bjl-joy-map-connections.js — Joy Map three-tier renderer endpoint.
  *
- * Runs bjl_joy_map_sweep(int[]) against a small set of focal item ids
- * and returns 13 rows (one per fixed life domain) with the lead pair
- * per domain across all focals. Applies pair-skew suppression on
- * pct_move_together and strips r_internal before returning. r never
- * leaves the server.
+ * Runs the SQL contract from the spec:
+ *   SELECT ... FROM bjl_joy_map_sweep_v2(focal) s
+ *   JOIN bjl_joy_map_modeled(focal, model) m USING (ord, territory)
  *
- * Contract:
- *   POST { focal_item_ids: int[] }  — 1 to 4 ids
- * Response:
- *   { ok: true,
- *     focals: [{ item_id, item_name }, ...],
- *     rows: [{
- *       ord, domain, verdict, direction,
- *       focal_item, focal_item_id,
- *       domain_item, domain_item_id,
- *       shared_answerers, pct_move_together, pct_suppressed,
- *       pct_suppress_reason, lift_points,
- *     }, ...] }
+ * Returns one entry per (ord, territory) with three tiers exposed:
+ *   1. Measured lead — the strongest joy-lead pair for the territory,
+ *      lift_points + direction anchor the row's coloured bar.
+ *   2. Runners-up + attitude/intent split rows behind the lead
+ *      (row_kind = 'joy_runner_up' | 'attitude_intent').
+ *   3. Modeled — the modeled_lift_points diamond plotted against
+ *      measured_territory_mean_lift (never against the lead bar),
+ *      with modeled_verdict, model_holdout_r, cohort_hot/cool.
  *
- * Verdicts (from the DB function):
- *   'measured'   — |r| >= 0.08 (rendered as a real connection row)
- *   'flat'       — |r| < 0.08 (rendered; content, not empty state)
- *   'unmeasured' — no ledger pair (rendered; content, not empty state)
+ * Sign-conflict flag: sign(modeled) !== sign(measured_territory_mean_lift)
+ * AND pairs_behind >= 3. Suppression is client-side (staff-only
+ * toggle); the flag is emitted here so the UI can honour it.
+ *
+ * THIN badge: pairs_behind < 3. Emitted as `thin` boolean.
+ *
+ * Focal resolution:
+ *   Body { focal_item_ids: int[] }   — direct path (staff enters ids).
+ *   Body { query: string }           — front-door resolver path;
+ *                                       brief.entities.items become
+ *                                       the focals.
+ *
+ * Verdicts on the measured side (from sweep_v2):
+ *   measured   — lead pair meets the |r| threshold
+ *   flat       — lead exists but the correlation is under the flat
+ *                floor; content, not empty state
+ *   unmeasured — no ledger pair for the territory (dashed row)
+ * Verdicts on the modeled side (from bjl_joy_map_modeled):
+ *   modeled                — factor prediction meets accuracy gate
+ *   model_abstains         — holdout_r below the model registry floor
+ *   model_abstains_cohort  — cohort too small to trust the modeled read
+ *
+ * r_internal never leaves the server. holdout_r renders on
+ * model_abstains rows only.
  *
  * Auth: workbench-authenticated only. Auth failures write a
  * bjl_front_door_log row with auth_failed=true so the health view
@@ -32,18 +46,16 @@
 
 const { createClient } = require('@supabase/supabase-js');
 const { verifyAndAuthorize } = require('./bjl-auth-helper');
+const { bjlFrontDoor } = require('./bjl-front-door.js');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const MAX_FOCALS = 4;
-
-// Skew thresholds (same as connections-beta). When either side of a
-// pair has a heavily one-sided distribution (<25% or >75% on one side
-// of zero), pct_move_together is unreliable and gets suppressed.
-const SKEW_LOW  = 25;
-const SKEW_HIGH = 75;
+const DEFAULT_MODEL_VERSION = 'mf_v1_k24';
+// THIN badge and sign-conflict rule both key off this.
+const PAIRS_BEHIND_MIN = 3;
 
 async function fetchItemsByIds(ids) {
   if (!ids.length) return new Map();
@@ -52,32 +64,42 @@ async function fetchItemsByIds(ids) {
   const sql = `SELECT item_id, item_name FROM bjl_items WHERE item_id IN (${inList})`;
   const { data, error } = await supabase.rpc('execute_read_sql', { query_text: sql });
   if (error) throw new Error(`item name lookup failed: ${error.message}`);
-  const map = new Map();
+  const nameById = new Map();
+  const idByName = new Map();
   for (const r of (Array.isArray(data) ? data : [])) {
-    map.set(String(r.item_name), Number(r.item_id));
+    nameById.set(Number(r.item_id), String(r.item_name));
+    idByName.set(String(r.item_name), Number(r.item_id));
   }
-  return map;
+  return { nameById, idByName };
 }
 
-async function fetchSkewByItem(ids) {
-  if (!ids.length) return new Map();
-  const inList = Array.from(new Set(ids)).filter(Number.isFinite).join(',');
-  if (!inList) return new Map();
-  const sql = `
-    SELECT item_id,
-           ROUND(100.0 * SUM(CASE WHEN c > 0 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 1)::numeric AS pct_positive
-    FROM bjl_conn_centered
-    WHERE item_id IN (${inList})
-    GROUP BY item_id
-  `;
-  const { data, error } = await supabase.rpc('execute_read_sql', { query_text: sql });
-  if (error) throw new Error(`item skew lookup failed: ${error.message}`);
-  const map = new Map();
-  for (const r of (Array.isArray(data) ? data : [])) {
-    const pct = r.pct_positive == null ? null : Number(r.pct_positive);
-    map.set(Number(r.item_id), pct != null && (pct < SKEW_LOW || pct > SKEW_HIGH));
-  }
-  return map;
+function sign(x) {
+  if (x == null || Number.isNaN(Number(x))) return 0;
+  const n = Number(x);
+  if (n > 0) return 1;
+  if (n < 0) return -1;
+  return 0;
+}
+
+function round1(x) {
+  return x == null ? null : Math.round(Number(x) * 10) / 10;
+}
+
+function roundInt(x) {
+  return x == null ? null : Math.round(Number(x));
+}
+
+function shapePairRow(r) {
+  return {
+    row_kind:          r.row_kind || 'joy_lead',
+    focal_item:        r.focal_item || null,
+    other_item:        r.other_item || null,
+    other_family:      r.other_family || null,
+    direction:         r.direction || null,
+    shared_answerers:  r.shared_answerers == null ? null : Number(r.shared_answerers),
+    pct_move_together: r.pct_move_together == null ? null : roundInt(r.pct_move_together),
+    lift_points:       round1(r.lift_points),
+  };
 }
 
 exports.handler = async (event) => {
@@ -88,11 +110,15 @@ exports.handler = async (event) => {
   const auth = await verifyAndAuthorize(event.headers.authorization || event.headers.Authorization);
   if (!auth.ok) {
     try {
-      let attemptedIds = [];
-      try { const parsed = JSON.parse(event.body || '{}'); attemptedIds = Array.isArray(parsed.focal_item_ids) ? parsed.focal_item_ids : []; }
-      catch (_) { /* body may be absent */ }
+      let attempted = '';
+      try {
+        const parsed = JSON.parse(event.body || '{}');
+        attempted = parsed.query
+          ? `joy_map query="${String(parsed.query).slice(0, 200)}"`
+          : `joy_map focals=[${(parsed.focal_item_ids || []).join(',')}]`;
+      } catch (_) { /* body absent */ }
       await supabase.from('bjl_front_door_log').insert({
-        query: `joy_map_connections focals=[${attemptedIds.join(',')}]`,
+        query: attempted,
         brief: {},
         surface: 'joy_map_connections',
         user_email: null,
@@ -107,87 +133,191 @@ exports.handler = async (event) => {
     };
   }
 
+  const userEmail = (auth.user && auth.user.email) || auth.email || null;
+
   let body;
   try { body = JSON.parse(event.body || '{}'); }
   catch (e) { return { statusCode: 400, body: JSON.stringify({ error: 'invalid JSON body' }) }; }
 
+  const modelVersion = typeof body.model_version === 'string' && body.model_version.trim()
+    ? body.model_version.trim()
+    : DEFAULT_MODEL_VERSION;
+
+  // Focal resolution: direct ids OR front-door query.
+  let focalIds = [];
+  let frontDoorBrief = null;
   const rawIds = Array.isArray(body.focal_item_ids) ? body.focal_item_ids : [];
-  const focalIds = rawIds.map(n => Number(n)).filter(Number.isFinite).slice(0, MAX_FOCALS);
+  const idsFromBody = rawIds.map(n => Number(n)).filter(Number.isFinite).slice(0, MAX_FOCALS);
+  const query = typeof body.query === 'string' ? body.query.trim() : '';
+
+  if (idsFromBody.length > 0) {
+    focalIds = idsFromBody;
+  } else if (query) {
+    try {
+      const brief = await bjlFrontDoor(query, { surface: 'joy_map_connections', user_email: userEmail });
+      frontDoorBrief = brief;
+      if (brief.shape === 'needs_clarification' || brief.shape === 'out_of_scope') {
+        return {
+          statusCode: 200,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ok: true,
+            focals: [],
+            brief,
+            territories: [],
+            model_version: modelVersion,
+          }),
+        };
+      }
+      const items = (brief.entities && Array.isArray(brief.entities.items)) ? brief.entities.items : [];
+      focalIds = items
+        .map(i => Number(i.item_id))
+        .filter(Number.isFinite)
+        .slice(0, MAX_FOCALS);
+    } catch (e) {
+      console.error('[joy-map-connections] front door failed:', e.message);
+      return { statusCode: 500, body: JSON.stringify({ error: `front door failed: ${e.message}` }) };
+    }
+  } else {
+    return {
+      statusCode: 400,
+      body: JSON.stringify({ error: 'either focal_item_ids (1-4 ints) or query (string) is required' }),
+    };
+  }
+
   if (focalIds.length === 0) {
-    return { statusCode: 400, body: JSON.stringify({ error: 'focal_item_ids required (1-4 integers)' }) };
+    return {
+      statusCode: 200,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ok: true,
+        focals: [],
+        brief: frontDoorBrief,
+        territories: [],
+        model_version: modelVersion,
+        note: 'Front-door resolved zero items; no focals to sweep.',
+      }),
+    };
   }
 
   try {
-    // Pre-fetch focal names so the response can carry focal_item_id
-    // alongside the function's text-only focal_item column.
-    const focalNameToId = await fetchItemsByIds(focalIds);
-    // Reverse map: name → id (already what fetchItemsByIds returns).
+    const { nameById } = await fetchItemsByIds(focalIds);
 
-    // Run the sweep.
-    const { data: sweepRows, error: sweepErr } = await supabase.rpc('bjl_joy_map_sweep', { p_focal: focalIds });
-    if (sweepErr) throw new Error(`bjl_joy_map_sweep failed: ${sweepErr.message}`);
-    const rowsIn = Array.isArray(sweepRows) ? sweepRows : [];
+    // Sweep_v2: measured tier (lead + runner-ups + attitude_intent
+    // split rows, all keyed by ord + territory).
+    const { data: sweepRows, error: sweepErr } = await supabase.rpc(
+      'bjl_joy_map_sweep_v2', { p_focal: focalIds },
+    );
+    if (sweepErr) throw new Error(`bjl_joy_map_sweep_v2 failed: ${sweepErr.message}`);
 
-    // Collect all item ids touched (focal + domain) via name lookup for
-    // the domain items, so we can batch-fetch skew in one shot.
-    const domainItemNames = new Set();
-    for (const r of rowsIn) if (r.domain_item) domainItemNames.add(String(r.domain_item));
-    const domainNameToId = domainItemNames.size > 0
-      ? await (async () => {
-          const inList = Array.from(domainItemNames).map(n => `'${String(n).replace(/'/g, "''")}'`).join(',');
-          const sql = `SELECT item_id, item_name FROM bjl_items WHERE item_name IN (${inList})`;
-          const { data, error } = await supabase.rpc('execute_read_sql', { query_text: sql });
-          if (error) throw new Error(`domain item lookup failed: ${error.message}`);
-          const m = new Map();
-          for (const row of (Array.isArray(data) ? data : [])) m.set(String(row.item_name), Number(row.item_id));
-          return m;
-        })()
-      : new Map();
+    // Modeled: one row per (ord, territory).
+    const { data: modelRows, error: modelErr } = await supabase.rpc(
+      'bjl_joy_map_modeled', { p_focal: focalIds, p_model: modelVersion },
+    );
+    if (modelErr) throw new Error(`bjl_joy_map_modeled failed: ${modelErr.message}`);
 
-    const allIds = new Set(focalIds);
-    for (const id of domainNameToId.values()) allIds.add(id);
-    const skewByItem = await fetchSkewByItem(Array.from(allIds));
+    // Index modeled rows by (ord, territory) for the JOIN.
+    const modeledByKey = new Map();
+    for (const m of (Array.isArray(modelRows) ? modelRows : [])) {
+      modeledByKey.set(`${m.ord}::${m.territory}`, m);
+    }
 
-    // Build response rows. Skew suppression on pct_move_together;
-    // r_internal stripped.
-    const rowsOut = rowsIn.map(r => {
-      const focalItemId = r.focal_item ? (focalNameToId.get(String(r.focal_item)) || null) : null;
-      const domainItemId = r.domain_item ? (domainNameToId.get(String(r.domain_item)) || null) : null;
-      const focalSkewed  = focalItemId != null ? !!skewByItem.get(focalItemId) : false;
-      const domainSkewed = domainItemId != null ? !!skewByItem.get(domainItemId) : false;
-      const pctSuppressed = r.verdict === 'measured' && (focalSkewed || domainSkewed);
-      return {
-        ord:               Number(r.ord),
-        domain:            r.domain,
-        verdict:           r.verdict,
-        direction:         r.direction || null,
-        focal_item:        r.focal_item || null,
-        focal_item_id:     focalItemId,
-        domain_item:       r.domain_item || null,
-        domain_item_id:    domainItemId,
-        shared_answerers:  r.shared_answerers == null ? null : Number(r.shared_answerers),
-        pct_move_together: pctSuppressed
-          ? null
-          : (r.pct_move_together == null ? null : Math.round(Number(r.pct_move_together))),
-        pct_suppressed:    pctSuppressed,
-        pct_suppress_reason: pctSuppressed
-          ? 'One side of this pair has a heavily one-sided distribution (>75% or <25% on one side of zero). Percent moving together loses meaning under skew.'
-          : null,
-        lift_points:       r.lift_points == null ? null : Math.round(Number(r.lift_points) * 10) / 10,
-      };
-    });
+    // Bucket sweep rows into territories by (ord, territory). Preserve
+    // the row_kind hierarchy: lead first, then runner-ups, then
+    // attitude/intent split rows.
+    const bucketByKey = new Map();
+    for (const s of (Array.isArray(sweepRows) ? sweepRows : [])) {
+      const key = `${s.ord}::${s.territory}`;
+      if (!bucketByKey.has(key)) {
+        bucketByKey.set(key, {
+          ord: Number(s.ord),
+          territory: s.territory,
+          verdict: s.verdict,
+          territory_magnitude: round1(s.territory_magnitude),
+          pairs_behind: s.pairs_behind == null ? 0 : Number(s.pairs_behind),
+          lead: null,
+          runner_ups: [],
+          attitude_intent: [],
+        });
+      }
+      const bucket = bucketByKey.get(key);
+      // The lead row carries the territory's verdict; runner-ups mirror
+      // it. Prefer the sweep-provided verdict from the lead row.
+      if (s.row_kind === 'joy_lead') {
+        bucket.verdict = s.verdict;
+        bucket.lead = shapePairRow(s);
+      } else if (s.row_kind === 'attitude_intent') {
+        bucket.attitude_intent.push(shapePairRow(s));
+      } else {
+        bucket.runner_ups.push(shapePairRow(s));
+      }
+    }
 
-    const focals = focalIds.map(id => {
-      // Reverse-lookup focal name from the pre-fetched map (which is name→id).
-      let name = null;
-      for (const [n, i] of focalNameToId) { if (i === id) { name = n; break; } }
-      return { item_id: id, item_name: name };
-    });
+    // Assemble territories in ord order and merge modeled + flags.
+    const territories = Array.from(bucketByKey.values())
+      .sort((a, b) => a.ord - b.ord)
+      .map(t => {
+        const m = modeledByKey.get(`${t.ord}::${t.territory}`);
+        const modeledLift  = m ? round1(m.modeled_lift_points) : null;
+        const measuredMean = m ? round1(m.measured_territory_mean_lift) : null;
+        const holdoutR     = m && m.model_holdout_r != null
+          ? Math.round(Number(m.model_holdout_r) * 1000) / 1000
+          : null;
+        // Sign-conflict rule (two-part):
+        //   sign_conflict fires whenever modeled and measured
+        //     territory mean point opposite ways with both non-zero;
+        //     surfaces as a visible flag in every case.
+        //   suppress_on_conflict fires when sign_conflict AND the
+        //     measured signal is stable (pairs_behind >= 3). Client
+        //     hides the diamond by default; staff can toggle back on.
+        // Treats & Indulgence for focal 4646 is the pairs_behind=2
+        // case: flag surfaces, suppression does not.
+        const signConflict = (
+          m &&
+          modeledLift != null && measuredMean != null &&
+          sign(modeledLift) !== 0 && sign(measuredMean) !== 0 &&
+          sign(modeledLift) !== sign(measuredMean)
+        );
+        const suppressOnConflict = !!(signConflict && t.pairs_behind >= PAIRS_BEHIND_MIN);
+        return {
+          ord: t.ord,
+          territory: t.territory,
+          verdict: t.verdict,
+          territory_magnitude: t.territory_magnitude,
+          pairs_behind: t.pairs_behind,
+          thin: t.pairs_behind < PAIRS_BEHIND_MIN,
+          lead: t.lead,
+          runner_ups: t.runner_ups,
+          attitude_intent: t.attitude_intent,
+          modeled: m ? {
+            verdict:               m.modeled_verdict,
+            lift_points:           modeledLift,
+            holdout_r:             holdoutR,
+            centroid_items:        m.centroid_items == null ? null : Number(m.centroid_items),
+            cohort_hot:            m.cohort_hot == null ? null : Number(m.cohort_hot),
+            cohort_cool:           m.cohort_cool == null ? null : Number(m.cohort_cool),
+            measured_territory_mean_lift: measuredMean,
+            sign_conflict:         !!signConflict,
+            suppress_on_conflict:  suppressOnConflict,
+          } : null,
+        };
+      });
+
+    const focals = focalIds.map(id => ({
+      item_id: id,
+      item_name: nameById.get(id) || null,
+    }));
 
     return {
       statusCode: 200,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ok: true, focals, rows: rowsOut }),
+      body: JSON.stringify({
+        ok: true,
+        focals,
+        brief: frontDoorBrief,
+        model_version: modelVersion,
+        territories,
+      }),
     };
   } catch (e) {
     console.error('[joy-map-connections] handler error:', e.message);
