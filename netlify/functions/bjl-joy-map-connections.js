@@ -219,16 +219,25 @@ exports.handler = async (event) => {
   try {
     const { nameById } = await fetchItemsByIds(focalIds);
 
-    // Sweep_v2: measured tier (lead + runner-ups + attitude_intent
-    // split rows, all keyed by ord + territory).
+    // Sweep_v2 + modeled via execute_read_sql instead of supabase.rpc.
+    // The .rpc() path was hitting the 8-second statement_timeout on
+    // the authenticator role (even though the underlying function
+    // runs in ~13ms per EXPLAIN — PostgREST array-parameter cast +
+    // plan-cache path was somehow tipping it over). execute_read_sql
+    // takes a raw SQL string, so the array literal is inlined and
+    // Postgres picks the same plan it uses from the SQL editor.
+    const focalIdsSql = `ARRAY[${focalIds.join(',')}]::int[]`;
+    const modelSql = `'${String(modelVersion).replace(/'/g, "''")}'`;
+
+    const sweepQuery = `SELECT * FROM bjl_joy_map_sweep_v2(${focalIdsSql})`;
     const { data: sweepRows, error: sweepErr } = await supabase.rpc(
-      'bjl_joy_map_sweep_v2', { p_focal: focalIds },
+      'execute_read_sql', { query_text: sweepQuery },
     );
     if (sweepErr) throw new Error(`bjl_joy_map_sweep_v2 failed: ${sweepErr.message}`);
 
-    // Modeled: one row per (ord, territory).
+    const modelQuery = `SELECT * FROM bjl_joy_map_modeled(${focalIdsSql}, ${modelSql})`;
     const { data: modelRows, error: modelErr } = await supabase.rpc(
-      'bjl_joy_map_modeled', { p_focal: focalIds, p_model: modelVersion },
+      'execute_read_sql', { query_text: modelQuery },
     );
     if (modelErr) throw new Error(`bjl_joy_map_modeled failed: ${modelErr.message}`);
 
