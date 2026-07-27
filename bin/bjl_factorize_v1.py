@@ -138,26 +138,32 @@ def main():
     terr_of = dict(cur.fetchall())
     Rh, Ch, Vh = R[hold], C[hold], V[hold]
     pred = np.einsum('ij,ij->i', P[Rh], Q[Ch])
-    def corr(a, b):
-        if len(a) < 3 or a.std() == 0 or b.std() == 0: return None
-        return float(np.corrcoef(a, b)[0, 1])
+    def scope_stats(a, p):
+        """holdout correlation, rmse, and calibration slope (actual regressed on
+        predicted: slope > 1 means predictions are shrunk; consumers multiply
+        raw model estimates by the slope to de-shrink)."""
+        if len(a) < 3 or a.std() == 0 or p.std() == 0:
+            return None, float(np.sqrt(np.mean((p - a) ** 2))) if len(a) else None, None
+        c = float(np.corrcoef(a, p)[0, 1])
+        slope = float(np.cov(a, p)[0, 1] / np.var(p))
+        return c, float(np.sqrt(np.mean((p - a) ** 2))), slope
     results = []
-    results.append(('overall', 'all', corr(pred, Vh), float(np.sqrt(np.mean((pred-Vh)**2))), int(len(Vh))))
+    c, e, s = scope_stats(Vh, pred); results.append(('overall', 'all', c, e, int(len(Vh)), s))
     Fh = F[hold]
     for fam in np.unique(Fh):
         m = Fh == fam
-        results.append(('family', fam, corr(pred[m], Vh[m]), float(np.sqrt(np.mean((pred[m]-Vh[m])**2))), int(m.sum())))
+        c, e, s = scope_stats(Vh[m], pred[m]); results.append(('family', fam, c, e, int(m.sum()), s))
     item_arr = np.array(item_ids)
-    terr_h = np.array([terr_of.get(item_arr[c], 'unassigned') for c in Ch])
+    terr_h = np.array([terr_of.get(item_arr[c2], 'unassigned') for c2 in Ch])
     for tk in np.unique(terr_h):
         m = terr_h == tk
-        results.append(('territory', tk, corr(pred[m], Vh[m]), float(np.sqrt(np.mean((pred[m]-Vh[m])**2))), int(m.sum())))
-    csm = cs_mask[hold] if hold.sum() == len(cs_mask[hold]) else np.isin(Rh, list(cs_resp))
-    results.append(('coldstart_16in', 'all', corr(pred[csm], Vh[csm]), float(np.sqrt(np.mean((pred[csm]-Vh[csm])**2))), int(csm.sum())))
-    print('\nHOLDOUT RESULTS (correlation / rmse / n):')
-    for scope, key, c, e, n in results:
+        c, e, s = scope_stats(Vh[m], pred[m]); results.append(('territory', tk, c, e, int(m.sum()), s))
+    csm = np.isin(Rh, list(cs_resp))
+    c, e, s = scope_stats(Vh[csm], pred[csm]); results.append(('coldstart_16in', 'all', c, e, int(csm.sum()), s))
+    print('\nHOLDOUT RESULTS (correlation / rmse / n / calibration slope):')
+    for scope, key, c, e, n, s in results:
         flag = '' if (c or 0) >= ABSTAIN_R and n >= ABSTAIN_N else '  [ABSTAIN]'
-        print(f'  {scope:>14} {key:<22} r={c if c is None else round(c,3)}  rmse={e:.3f}  n={n}{flag}')
+        print(f'  {scope:>14} {key:<22} r={c if c is None else round(c,3)}  rmse={e:.3f}  n={n}  slope={s if s is None else round(s,3)}{flag}')
 
     # write back
     cur.execute("""CREATE TABLE IF NOT EXISTS bjl_model_registry (
@@ -171,6 +177,7 @@ def main():
       model_version text, scope_type text, scope_key text,
       holdout_r numeric, rmse numeric, n_holdout int, eligible boolean,
       PRIMARY KEY (model_version, scope_type, scope_key))""")
+    cur.execute("ALTER TABLE bjl_model_accuracy ADD COLUMN IF NOT EXISTS calibration_slope numeric")
     for t in ('bjl_model_registry','bjl_item_latent','bjl_respondent_latent','bjl_model_accuracy'):
         cur.execute(f"ALTER TABLE {t} ENABLE ROW LEVEL SECURITY")
     cur.execute("DELETE FROM bjl_item_latent WHERE model_version=%s", (MODEL_VERSION,))
@@ -185,9 +192,10 @@ def main():
       [(MODEL_VERSION, resp_ids[u], json.dumps([round(float(x),5) for x in P[u]])) for u in range(n_r)],
       page_size=2000)
     psycopg2.extras.execute_values(cur,
-      "INSERT INTO bjl_model_accuracy VALUES %s",
-      [(MODEL_VERSION, s, k, None if c is None else round(c,4), round(e,4), n,
-        (c or 0) >= ABSTAIN_R and n >= ABSTAIN_N) for s, k, c, e, n in results],
+      "INSERT INTO bjl_model_accuracy (model_version, scope_type, scope_key, holdout_r, rmse, n_holdout, eligible, calibration_slope) VALUES %s",
+      [(MODEL_VERSION, sc, k, None if c is None else round(c,4), round(e,4), n,
+        (c or 0) >= ABSTAIN_R and n >= ABSTAIN_N,
+        None if sl is None else round(sl,4)) for sc, k, c, e, n, sl in results],
       page_size=500)
     ov = next(x for x in results if x[0]=='overall'); cs = next(x for x in results if x[0]=='coldstart_16in')
     cur.execute("""INSERT INTO bjl_model_registry (model_version, params, overall_holdout_r, coldstart_r, notes)
