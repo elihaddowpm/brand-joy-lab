@@ -4685,3 +4685,113 @@ textarea { font-family: var(--font-text); }
   font-family: var(--font-mono, monospace);
   font-size: 11px;
 }
+
+/* Functional wiring pass (2026-07-27) — plain-table defaults, no
+   design work. Focal card + row expand + roster tap + predictions. */
+.joy-map-cx-focal-card {
+  padding: 12px 14px;
+  background: var(--paper, #fbfaf6);
+  border: 1px solid var(--iron, #e2e2dc);
+  border-radius: 3px;
+  margin-bottom: 14px;
+}
+.joy-map-cx-focal-card-eyebrow {
+  font-family: var(--font-mono, monospace);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--iron-darker, #5a5a55);
+  margin-bottom: 6px;
+}
+.joy-map-cx-focal-card-items {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.joy-map-cx-focal-card-items li {
+  padding: 4px 8px;
+  background: var(--paper-2, #f4f3ed);
+  border-left: 3px solid var(--iron-darker, #5a5a55);
+  font-size: 13px;
+}
+.joy-map-cx-focal-card-name { color: var(--ink, #1a1a17); }
+.joy-map-cx-focal-card-id {
+  color: var(--iron-dark, #8a8a82);
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+}
+.joy-map-cx-focal-card-cohort {
+  font-size: 12.5px;
+  color: var(--ink, #1a1a17);
+  margin-bottom: 4px;
+}
+.joy-map-cx-focal-card-model {
+  font-family: var(--font-mono, monospace);
+  font-size: 10.5px;
+  color: var(--iron-dark, #8a8a82);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.joy-map-cx-row-emojob {
+  font-size: 11.5px;
+  color: var(--iron-darker, #5a5a55);
+  font-style: italic;
+  font-weight: normal;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* Row-expand — territory profile + roster tap. */
+.joy-map-cx-profile-details,
+.joy-map-cx-roster-details {
+  margin-top: 10px;
+  border-top: 1px dashed var(--iron, #e2e2dc);
+}
+.joy-map-cx-profile-details > summary,
+.joy-map-cx-roster-details > summary {
+  cursor: pointer;
+  font-family: var(--font-mono, monospace);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--iron-darker, #5a5a55);
+  padding: 6px 0;
+}
+.joy-map-cx-profile-body { font-size: 12.5px; padding: 6px 0; }
+.joy-map-cx-profile-group { margin: 8px 0; }
+.joy-map-cx-profile-group-title {
+  font-family: var(--font-mono, monospace);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink, #1a1a17);
+  margin-bottom: 4px;
+}
+.joy-map-cx-profile-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.joy-map-cx-profile-table th {
+  text-align: left;
+  padding: 3px 6px;
+  border-bottom: 1px solid var(--iron, #e2e2dc);
+  font-family: var(--font-mono, monospace);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--iron-darker, #5a5a55);
+  font-weight: 600;
+}
+.joy-map-cx-profile-table td {
+  padding: 3px 6px;
+  border-bottom: 1px solid var(--paper-2, #f4f3ed);
+}
+.joy-map-cx-profile-table td.num {
+  font-family: var(--font-mono, monospace);
+  white-space: nowrap;
+}
+.joy-map-cx-profile-table td.muted { color: var(--iron-dark, #8a8a82); }

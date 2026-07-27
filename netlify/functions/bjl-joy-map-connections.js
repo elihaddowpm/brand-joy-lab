@@ -219,44 +219,47 @@ exports.handler = async (event) => {
   try {
     const { nameById } = await fetchItemsByIds(focalIds);
 
-    // Sweep_v2 + modeled via execute_read_sql instead of supabase.rpc.
-    // The .rpc() path was hitting the 8-second statement_timeout on
-    // the authenticator role (even though the underlying function
-    // runs in ~13ms per EXPLAIN — PostgREST array-parameter cast +
-    // plan-cache path was somehow tipping it over). execute_read_sql
-    // takes a raw SQL string, so the array literal is inlined and
-    // Postgres picks the same plan it uses from the SQL editor.
+    // Single JOIN query per the functional-wiring spec — one SQL
+    // round-trip. bjl_territories carries the (ord, key, name)
+    // lookup so we can hand the row-expand endpoint the territory_key
+    // without a client-side map. LEFT JOIN so the sweep still renders
+    // even if the territories table lags a new territory added to
+    // the sweep function.
     const focalIdsSql = `ARRAY[${focalIds.join(',')}]::int[]`;
     const modelSql = `'${String(modelVersion).replace(/'/g, "''")}'`;
 
-    const sweepQuery = `SELECT * FROM bjl_joy_map_sweep_v2(${focalIdsSql})`;
-    const { data: sweepRows, error: sweepErr } = await supabase.rpc(
-      'execute_read_sql', { query_text: sweepQuery },
+    const joinedQuery = `
+      SELECT s.*,
+             m.modeled_verdict, m.modeled_lift_points, m.measured_territory_mean_lift,
+             m.model_holdout_r, m.coherence, m.centroid_items,
+             m.cohort_hot, m.cohort_cool,
+             t.territory_key, t.emotional_job
+      FROM bjl_joy_map_sweep_v2(${focalIdsSql}) s
+      JOIN bjl_joy_map_modeled(${focalIdsSql}, ${modelSql}) m USING (ord, territory)
+      LEFT JOIN bjl_territories t ON t.ord = s.ord
+    `;
+    const { data: joinedRows, error: joinedErr } = await supabase.rpc(
+      'execute_read_sql', { query_text: joinedQuery },
     );
-    if (sweepErr) throw new Error(`bjl_joy_map_sweep_v2 failed: ${sweepErr.message}`);
+    if (joinedErr) throw new Error(`joy-map join failed: ${joinedErr.message}`);
+    const rowsIn = Array.isArray(joinedRows) ? joinedRows : [];
 
-    const modelQuery = `SELECT * FROM bjl_joy_map_modeled(${focalIdsSql}, ${modelSql})`;
-    const { data: modelRows, error: modelErr } = await supabase.rpc(
-      'execute_read_sql', { query_text: modelQuery },
-    );
-    if (modelErr) throw new Error(`bjl_joy_map_modeled failed: ${modelErr.message}`);
-
-    // Index modeled rows by (ord, territory) for the JOIN.
-    const modeledByKey = new Map();
-    for (const m of (Array.isArray(modelRows) ? modelRows : [])) {
-      modeledByKey.set(`${m.ord}::${m.territory}`, m);
-    }
-
-    // Bucket sweep rows into territories by (ord, territory). Preserve
+    // Bucket rows into territories by (ord, territory). Preserve
     // the row_kind hierarchy: lead first, then runner-ups, then
-    // attitude/intent split rows.
+    // attitude/intent split rows. Modeled columns are constant
+    // across a territory's rows (they come from the JOIN); grab
+    // them off any row.
     const bucketByKey = new Map();
-    for (const s of (Array.isArray(sweepRows) ? sweepRows : [])) {
+    const modeledByKey = new Map();
+    for (const s of rowsIn) {
       const key = `${s.ord}::${s.territory}`;
+      if (!modeledByKey.has(key)) modeledByKey.set(key, s);
       if (!bucketByKey.has(key)) {
         bucketByKey.set(key, {
           ord: Number(s.ord),
           territory: s.territory,
+          territory_key: s.territory_key || null,
+          emotional_job: s.emotional_job || null,
           verdict: s.verdict,
           territory_magnitude: round1(s.territory_magnitude),
           pairs_behind: s.pairs_behind == null ? 0 : Number(s.pairs_behind),
@@ -279,6 +282,13 @@ exports.handler = async (event) => {
     }
 
     // Assemble territories in ord order and merge modeled + flags.
+    // Cohort_hot / cool are constant across the whole sweep (per
+    // focal set); pull them out of the first modeled row for the
+    // response-level focal card.
+    const firstModeled = modeledByKey.size > 0 ? modeledByKey.values().next().value : null;
+    const cohortHot  = firstModeled && firstModeled.cohort_hot  != null ? Number(firstModeled.cohort_hot)  : null;
+    const cohortCool = firstModeled && firstModeled.cohort_cool != null ? Number(firstModeled.cohort_cool) : null;
+
     const territories = Array.from(bucketByKey.values())
       .sort((a, b) => a.ord - b.ord)
       .map(t => {
@@ -288,6 +298,9 @@ exports.handler = async (event) => {
         const holdoutR     = m && m.model_holdout_r != null
           ? Math.round(Number(m.model_holdout_r) * 1000) / 1000
           : null;
+        const coherence    = m && m.coherence != null
+          ? Math.round(Number(m.coherence) * 1000) / 1000
+          : null;
         // Sign-conflict rule (two-part):
         //   sign_conflict fires whenever modeled and measured
         //     territory mean point opposite ways with both non-zero;
@@ -295,8 +308,6 @@ exports.handler = async (event) => {
         //   suppress_on_conflict fires when sign_conflict AND the
         //     measured signal is stable (pairs_behind >= 3). Client
         //     hides the diamond by default; staff can toggle back on.
-        // Treats & Indulgence for focal 4646 is the pairs_behind=2
-        // case: flag surfaces, suppression does not.
         const signConflict = (
           m &&
           modeledLift != null && measuredMean != null &&
@@ -307,6 +318,8 @@ exports.handler = async (event) => {
         return {
           ord: t.ord,
           territory: t.territory,
+          territory_key: t.territory_key,
+          emotional_job: t.emotional_job,
           verdict: t.verdict,
           territory_magnitude: t.territory_magnitude,
           pairs_behind: t.pairs_behind,
@@ -315,9 +328,13 @@ exports.handler = async (event) => {
           runner_ups: t.runner_ups,
           attitude_intent: t.attitude_intent,
           modeled: m ? {
-            verdict:               m.modeled_verdict,
+            // modeled_verdict is display text, not an enum. Consumers
+            // render whatever string arrives; anything matching
+            // /^model_abstains/ styles muted.
+            verdict:               m.modeled_verdict || null,
             lift_points:           modeledLift,
             holdout_r:             holdoutR,
+            coherence:             coherence,
             centroid_items:        m.centroid_items == null ? null : Number(m.centroid_items),
             cohort_hot:            m.cohort_hot == null ? null : Number(m.cohort_hot),
             cohort_cool:           m.cohort_cool == null ? null : Number(m.cohort_cool),
@@ -341,6 +358,8 @@ exports.handler = async (event) => {
         focals,
         brief: frontDoorBrief,
         model_version: modelVersion,
+        cohort_hot: cohortHot,
+        cohort_cool: cohortCool,
         territories,
       }),
     };
