@@ -185,7 +185,9 @@ async function loadDemographicVocab() {
       ARRAY(SELECT DISTINCT income_bracket FROM bjl_respondents WHERE income_bracket IS NOT NULL ORDER BY income_bracket) AS income_bracket,
       ARRAY(SELECT DISTINCT region FROM bjl_respondents WHERE region IS NOT NULL ORDER BY region) AS region,
       ARRAY(SELECT DISTINCT marital_status FROM bjl_respondents WHERE marital_status IS NOT NULL ORDER BY marital_status) AS marital_status,
-      ARRAY(SELECT DISTINCT parental_status FROM bjl_respondents WHERE parental_status IS NOT NULL ORDER BY parental_status) AS parental_status
+      ARRAY(SELECT DISTINCT parental_status FROM bjl_respondents WHERE parental_status IS NOT NULL ORDER BY parental_status) AS parental_status,
+      ARRAY(SELECT DISTINCT occupation FROM bjl_respondents WHERE occupation IS NOT NULL ORDER BY occupation) AS occupation,
+      ${DECISIONMAKER_FIELDS.map(f => `ARRAY(SELECT DISTINCT ${f} FROM bjl_respondents WHERE ${f} IS NOT NULL ORDER BY ${f}) AS ${f}`).join(',\n      ')}
   `;
   const rows = await execSQL(sql, 'demographic vocab load');
   return rows[0] || {};
@@ -234,7 +236,7 @@ function demographicClauseSQL(filter, alias) {
   const a = alias || 'resp';
   const f = filter || {};
   const out = [];
-  for (const key of ['age_band','generation','gender','income_bracket','region','parental_status','marital_status']) {
+  for (const key of ['age_band','generation','gender','income_bracket','region','parental_status','marital_status', ...BEHAVIORAL_FIELDS]) {
     const v = f[key];
     if (Array.isArray(v) && v.length > 0) {
       out.push(`${a}.${key} IN (${quoteList(v)})`);
@@ -529,9 +531,28 @@ async function profileLayer3(cohortSQL) {
   return await execSQL(sql, 'profile L3');
 }
 
+// Behavioural cohort cuts added alongside the standard demographics.
+// occupation is a 36-value panel field at ~62% coverage; the
+// decisionmaker_* columns are a 5-level household-role scale asked per
+// category. Coverage varies a lot by column (groceries and vacation are
+// near-full, home_furnishing is a single small fielding), so every row
+// these produce carries a coverage note.
+const DECISIONMAKER_FIELDS = [
+  'decisionmaker_groceries',
+  'decisionmaker_vacation',
+  'decisionmaker_vacation_activities',
+  'decisionmaker_car',
+  'decisionmaker_car_insurance',
+  'decisionmaker_internet',
+  'decisionmaker_bank',
+  'decisionmaker_home_furnishing',
+];
+const BEHAVIORAL_FIELDS = ['occupation', ...DECISIONMAKER_FIELDS];
+
 async function profileDemographics(cohortSQL) {
-  // Six standard fields plus race and hispanic_origin.
-  const fields = ['age_band','generation','gender','income_bracket','region','marital_status','parental_status','hispanic_origin'];
+  // Six standard fields plus race and hispanic_origin, plus the
+  // behavioural cuts (occupation + decisionmaker_*).
+  const fields = ['age_band','generation','gender','income_bracket','region','marital_status','parental_status','hispanic_origin', ...BEHAVIORAL_FIELDS];
   const sqlParts = fields.map(f => `
     SELECT '${f}'::text AS field, ${f} AS value, COUNT(*) AS cohort_n
     FROM bjl_respondents resp
@@ -586,7 +607,13 @@ async function profileDemographics(cohortSQL) {
   const cohortRace = await execSQL(cohortRaceSql, 'profile race cohort');
   const corpusRace = await execSQL(corpusRaceSql, 'profile race corpus');
 
-  return { cohortDist, corpusDist, cohortRace, corpusRace };
+  // Denominators for the coverage note on the behavioural cuts.
+  const totalsRows = await execSQL(`
+    SELECT (SELECT COUNT(*) FROM bjl_respondents) AS corpus_total,
+           (SELECT COUNT(*) FROM bjl_respondents WHERE respondent_id IN ${cohortSQL}) AS cohort_total
+  `, 'profile demo totals');
+
+  return { cohortDist, corpusDist, cohortRace, corpusRace, totals: totalsRows[0] || {} };
 }
 
 async function profileLayer2Battery(cohortSQL, questionIds) {
@@ -732,7 +759,8 @@ function buildDemographicShape(demoProfile) {
     corpusByField.get(r.field).push(r);
   }
 
-  const fieldOrder = ['generation','gender','income_bracket','region','marital_status','parental_status'];
+  const fieldOrder = ['generation','gender','income_bracket','region','marital_status','parental_status', ...BEHAVIORAL_FIELDS];
+  const corpusRespondents = Number((demoProfile.totals || {}).corpus_total) || 0;
   const rows = [];
 
   for (const field of fieldOrder) {
@@ -761,6 +789,16 @@ function buildDemographicShape(demoProfile) {
     if (field === 'parental_status') {
       forcedTopValue = 'Parent';
       denominatorNote = 'raw rate (parental_status not collected in all fieldings; absolute magnitudes are directional)';
+    }
+
+    // Behavioural cuts are asked in a subset of fieldings. Both sides are
+    // computed on answerers only, so the note states what fraction of the
+    // corpus was asked — the strategist reads the skew against that base,
+    // not against everyone.
+    if (BEHAVIORAL_FIELDS.includes(field)) {
+      if (corpusRespondents === 0) continue;
+      const coveragePct = Math.round((corpusTotal / corpusRespondents) * 1000) / 10;
+      denominatorNote = `answerers only — ${coveragePct}% of corpus asked (n=${corpusTotal.toLocaleString()})`;
     }
 
     if (total === 0 || corpusTotal === 0) continue;

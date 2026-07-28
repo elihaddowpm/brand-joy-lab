@@ -4795,3 +4795,198 @@ textarea { font-family: var(--font-text); }
   white-space: nowrap;
 }
 .joy-map-cx-profile-table td.muted { color: var(--iron-dark, #8a8a82); }
+
+/* =========================================================================
+ * Joy Map consolidation (2026-07-28) — alignment states, cohort presets,
+ * prediction chips, Opportunity Bulletin. Plain styling; CD restyles later.
+ * ========================================================================= */
+
+/* Alignment state — the client-language headline on every row. */
+.joy-map-cx-state {
+  font-family: var(--font-mono, monospace);
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 2px;
+  margin-right: 6px;
+}
+.joy-map-cx-state.state-ALIGNED    { background: #eef5f1; color: #1d6a58; border: 1px solid #bcd9cd; }
+.joy-map-cx-state.state-MISALIGNED { background: #fdf1eb; color: #7a2e10; border: 1px solid #f0c9b2; }
+.joy-map-cx-state.state-GROWTH     { background: #1a1a17; color: #f6f5ef; border: 1px solid #1a1a17; }
+.joy-map-cx-state.state-UNCLAIMED  { background: transparent; color: var(--iron-dark, #8a8a82); border: 1px dashed var(--iron-dark, #8a8a82); }
+.joy-map-cx-state.state-FLAT       { background: var(--iron, #e2e2dc); color: var(--iron-darker, #5a5a55); border: 1px solid var(--iron, #e2e2dc); }
+
+.joy-map-cx-state-line {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--iron-darker, #5a5a55);
+  margin: 4px 0 6px;
+}
+.joy-map-cx-state-line.state-GROWTH {
+  color: var(--ink, #1a1a17);
+  font-weight: 600;
+  border-left: 3px solid var(--ink, #1a1a17);
+  padding-left: 8px;
+}
+.joy-map-cx-row.state-GROWTH { background: var(--paper-2, #f4f3ed); }
+
+.joy-map-cx-chip.prediction {
+  background: #f3f1fa;
+  color: #40527a;
+  border: 1px solid #cdd2e6;
+  text-transform: none;
+  letter-spacing: 0.02em;
+}
+
+/* Cohort preset selector. */
+.joy-map-cx-preset {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.joy-map-cx-preset-label {
+  font-family: var(--font-mono, monospace);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--iron-darker, #5a5a55);
+  margin-right: 4px;
+}
+.joy-map-cx-preset .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* Opportunity Bulletin. */
+.bulletin-filters {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.bulletin-filters label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-family: var(--font-mono, monospace);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--iron-darker, #5a5a55);
+}
+.bulletin-filters select { font-size: 13px; padding: 3px 5px; }
+
+.bulletin-group { margin-bottom: 24px; }
+.bulletin-group-title {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ink, #1a1a17);
+  border-bottom: 1px solid var(--iron, #e2e2dc);
+  padding-bottom: 4px;
+  margin-bottom: 10px;
+}
+
+.bulletin-card {
+  border: 1px solid var(--iron, #e2e2dc);
+  border-left: 3px solid var(--iron-dark, #8a8a82);
+  border-radius: 2px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  background: #fff;
+}
+.bulletin-card.status-selected { border-left-color: #1d6a58; }
+.bulletin-card.status-shipped  { border-left-color: #40527a; }
+.bulletin-card.status-retired  { opacity: 0.6; }
+
+.bulletin-card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.bulletin-register {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--iron-dark, #8a8a82);
+}
+.bulletin-title { font-weight: 600; font-size: 14px; flex: 1; }
+.bulletin-status-badge {
+  font-family: var(--font-mono, monospace);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 2px 6px;
+  border-radius: 2px;
+  background: var(--iron, #e2e2dc);
+  color: var(--iron-darker, #5a5a55);
+}
+.bulletin-status-badge.status-selected { background: #eef5f1; color: #1d6a58; }
+.bulletin-status-badge.status-shipped  { background: #f3f1fa; color: #40527a; }
+
+/* A claim is measured evidence. It reads as body copy with a tier. */
+.bulletin-claim {
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--ink, #1a1a17);
+  margin-bottom: 8px;
+}
+.bulletin-tier {
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 1px 5px;
+  border: 1px solid var(--ink, #1a1a17);
+  border-radius: 2px;
+  margin-right: 6px;
+}
+.bulletin-claim-population {
+  font-size: 12px;
+  color: var(--iron-darker, #5a5a55);
+  font-style: italic;
+  margin-top: 3px;
+}
+
+/* A signal is a marketplace observation. Deliberately not body copy. */
+.bulletin-signals { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 8px; }
+.bulletin-signal-chip {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  line-height: 1.3;
+  padding: 3px 7px;
+  border-radius: 10px;
+  background: var(--paper-2, #f4f3ed);
+  border: 1px dotted var(--iron-dark, #8a8a82);
+  color: var(--iron-darker, #5a5a55);
+}
+.bulletin-signal-date { color: var(--iron-dark, #8a8a82); }
+.bulletin-signals-empty {
+  font-size: 12px;
+  color: var(--iron-dark, #8a8a82);
+  font-style: italic;
+  margin-bottom: 8px;
+}
+.bulletin-stale {
+  font-size: 12px;
+  color: #7a2e10;
+  background: #fdf1eb;
+  border: 1px solid #f0c9b2;
+  border-radius: 2px;
+  padding: 4px 7px;
+  margin-bottom: 8px;
+}
+
+.bulletin-action { font-size: 13.5px; line-height: 1.5; margin-bottom: 6px; }
+.bulletin-meta { font-size: 12px; color: var(--iron-darker, #5a5a55); margin-bottom: 6px; }
+.bulletin-notes {
+  font-size: 12px;
+  color: var(--iron-darker, #5a5a55);
+  border-left: 2px solid var(--iron, #e2e2dc);
+  padding-left: 8px;
+  margin-bottom: 6px;
+}
+.bulletin-status-control { display: flex; gap: 4px; flex-wrap: wrap; }
+.bulletin-status-control .btn { font-size: 11px; padding: 3px 8px; }

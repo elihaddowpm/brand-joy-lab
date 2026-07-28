@@ -4724,6 +4724,15 @@ const DEMO_FIELD_LABEL = {
   marital_status: "Marital status",
   parental_status: "Parental status",
   race_ethnicity: "Race / ethnicity",
+  occupation: "Occupation",
+  decisionmaker_groceries: "Decision-maker — groceries",
+  decisionmaker_vacation: "Decision-maker — vacation",
+  decisionmaker_vacation_activities: "Decision-maker — vacation activities",
+  decisionmaker_car: "Decision-maker — car",
+  decisionmaker_car_insurance: "Decision-maker — car insurance",
+  decisionmaker_internet: "Decision-maker — internet",
+  decisionmaker_bank: "Decision-maker — bank",
+  decisionmaker_home_furnishing: "Decision-maker — home furnishing",
 };
 
 const AudienceMapDemographicShape = ({ shape }) => {
@@ -4822,6 +4831,9 @@ const JoyMapMode = () => {
   // with the measured territory mean lift (on 3+ pairs) are shown;
   // when false (default), those rows are hidden client-side.
   const [cxShowConflicting, setCxShowConflicting] = useState(false);
+  // Cohort preset. Only 'leaners' is live until p_mode lands on the
+  // three DB functions; the selector shows the others as disabled.
+  const [cxCohortPreset, setCxCohortPreset] = useState('leaners');
   const setCxColumn = (id, patch) => setCxColumns(prev => prev.map(c => c.id === id ? { ...c, ...patch } : c));
 
   // Row-expand: per-territory profile cache. Key format
@@ -4871,7 +4883,9 @@ const JoyMapMode = () => {
     }
   };
 
-  // Prediction ledger — staff page, fetch on demand.
+  // Prediction ledger. No longer a destination — the rows render as
+  // pending-prediction chips on the territories they target and as a
+  // section in the Bulletin, so this loads once and is read by both.
   const [cxPredictions, setCxPredictions] = useState({ loading: false, error: null, rows: null });
   const fetchPredictions = async () => {
     setCxPredictions({ loading: true, error: null, rows: null });
@@ -5033,8 +5047,8 @@ const JoyMapMode = () => {
       <div className="joy-map-toolbar">
         <button className={`btn ${subView === 'audience_map' ? 'primary' : 'ghost'}`} onClick={() => setSubView('audience_map')}>Audience Map</button>
         <button className={`btn ${subView === 'dance_map' ? 'primary' : 'ghost'}`} onClick={() => setSubView('dance_map')}>Dance Map</button>
-        <button className={`btn ${subView === 'connections' ? 'primary' : 'ghost'}`} onClick={() => setSubView('connections')}>Connections</button>
-        <button className={`btn ${subView === 'predictions' ? 'primary' : 'ghost'}`} onClick={() => { setSubView('predictions'); fetchPredictions(); }}>Predictions</button>
+        <button className={`btn ${subView === 'connections' ? 'primary' : 'ghost'}`} onClick={() => { setSubView('connections'); fetchPredictions(); }}>Connections</button>
+        <button className={`btn ${subView === 'bulletin' ? 'primary' : 'ghost'}`} onClick={() => setSubView('bulletin')}>Opportunity Bulletin</button>
       </div>
 
       {subView === 'audience_map' && (
@@ -5134,10 +5148,28 @@ const JoyMapMode = () => {
           <div className="joy-map-input-group">
             <div className="joy-map-input-label">Connections across the 16 life territories — three tiers</div>
             <div style={{fontSize: 13, color: 'var(--iron-darker, #5a5a55)', maxWidth: '72ch', marginBottom: 8}}>
-              Runs bjl_joy_map_sweep_v2 JOIN bjl_joy_map_modeled across all 16 territories. Each row shows a measured lead bar (lift + direction color), an optional modeled diamond plotted against the measured territory mean (never against the lead bar), a magnitude chip, and a THIN badge when fewer than 3 pairs sit behind the lead. Verdicts: measured / flat / unmeasured-dashed / model_abstains (holdout r shown) / model_abstains_cohort. r_internal never renders.
+              Sixteen territories, one row each. Every row carries an alignment state — ALIGNED, MISALIGNED, GROWTH, UNCLAIMED, FLAT — plus the lead pair, a magnitude chip, a THIN badge when fewer than 3 pairs sit behind the lead, and the modeled diamond against the measured territory mean (staff). Tap a row for the territory profile; tap again inside it for the roster. r_internal never renders.
             </div>
             <div style={{fontSize: 13, color: 'var(--ink, #1a1a17)', maxWidth: '72ch', marginBottom: 12, padding: '8px 10px', background: 'var(--paper-2, #f4f3ed)', borderLeft: '3px solid var(--ink, #1a1a17)', borderRadius: 2}}>
               <strong>How to use it.</strong> Each column is one independent sweep. Fill one column for a single map, or fill both for a side-by-side comparison (Herschend two-door format — a client with two competing brands or doors). In each column: type a query for the front-door resolver <em>or</em> paste focal item ids directly (comma-separated, 1–4). Click <em>Run sweep</em> per column.
+            </div>
+            {/* Cohort preset. Changes only the cohort CTE; the focal ids
+                are identical downstream. Devotees and the gate need
+                p_mode on the three DB functions, which is not in the
+                database yet — those options stay disabled and say so. */}
+            <div className="joy-map-cx-preset">
+              <span className="joy-map-cx-preset-label">Cohort preset</span>
+              {COHORT_PRESETS.map(p => (
+                <button
+                  key={p.key}
+                  className={`btn ${cxCohortPreset === p.key ? 'primary' : 'ghost'}`}
+                  disabled={!p.live}
+                  title={p.live ? p.sentence : `${p.sentence} Not available until the p_mode parameter lands on the sweep functions.`}
+                  onClick={() => setCxCohortPreset(p.key)}
+                >
+                  {p.label}{p.live ? '' : ' (pending p_mode)'}
+                </button>
+              ))}
             </div>
             <label style={{display:'inline-flex', alignItems:'center', gap:6, fontSize:12, color:'var(--iron-darker,#5a5a55)'}}>
               <input type="checkbox" checked={cxShowConflicting} onChange={(e) => setCxShowConflicting(e.target.checked)} />
@@ -5189,6 +5221,8 @@ const JoyMapMode = () => {
                     onOpenProfile={(tKey) => fetchProfile(col.result.focals.map(f => f.item_id), tKey)}
                     rosterCache={cxRosterCache}
                     onOpenRoster={(tKey) => fetchRoster(tKey)}
+                    predictions={cxPredictions.rows}
+                    cohortPreset={cxCohortPreset}
                   />
                 )}
               </div>
@@ -5197,16 +5231,8 @@ const JoyMapMode = () => {
         </div>
       )}
 
-      {subView === 'predictions' && (
-        <div className="joy-map-inputs">
-          <div className="joy-map-input-group">
-            <div className="joy-map-input-label">Prediction ledger (staff, read-only)</div>
-            <div style={{fontSize: 13, color: 'var(--iron-darker, #5a5a55)', maxWidth: '72ch', marginBottom: 12}}>
-              Every modeled lift registered against a not-yet-fielded item. Verification writes happen through the analysis session, not here. Unverified rows show "awaiting fielding."
-            </div>
-          </div>
-          <JoyMapPredictionsTable state={cxPredictions} onRefresh={fetchPredictions} />
-        </div>
+      {subView === 'bulletin' && (
+        <OpportunityBulletin predictionState={cxPredictions} onLoadPredictions={fetchPredictions} />
       )}
     </div>
   );
@@ -5232,7 +5258,51 @@ const JoyMapMode = () => {
 //      pairs_behind >= 3. Staff-only toggle brings it back.
 // r never renders. holdout_r renders on model_abstains rows only.
 // -------------------------------------------------------------------------
-const JoyMapConnectionsSweep = ({ result, showConflicting, profileCache, onOpenProfile, rosterCache, onOpenRoster }) => {
+// Alignment state — the client-language recoding of the staff verdict.
+// Deterministic from columns we already have (verdict + direction +
+// territory_magnitude); no backend change. GROWTH is evaluated first
+// because a big-magnitude territory with a non-positive lead is the
+// money cell, not merely a misalignment.
+const GROWTH_MAGNITUDE_FLOOR = 55;
+
+const ALIGNMENT_COPY = {
+  ALIGNED:    'The brand already rises with this territory. Own what you have.',
+  MISALIGNED: 'People who love this territory move away from the brand. That is a strategy question — the territory belongs to someone else — not a failure.',
+  GROWTH:     'Big feeling, unowned. The territory carries real magnitude and the brand has no positive claim on it.',
+  UNCLAIMED:  'No ledger pair covers this territory for this focal set, and the magnitude is modest. Honest gap — co-fielding candidate.',
+  FLAT:       'Checked. Nothing there.',
+};
+
+const alignmentState = (t) => {
+  const verdict = t.verdict || '';
+  const magnitude = t.territory_magnitude == null ? null : Number(t.territory_magnitude);
+  const direction = t.direction || (t.lead && t.lead.direction) || null;
+  const positiveLead = verdict === 'measured' && direction === 'rises with';
+
+  if (magnitude != null && magnitude >= GROWTH_MAGNITUDE_FLOOR && !positiveLead) return 'GROWTH';
+  if (verdict === 'measured') return positiveLead ? 'ALIGNED' : 'MISALIGNED';
+  if (verdict === 'flat') return 'FLAT';
+  if (verdict === 'unmeasured') return 'UNCLAIMED';
+  // Tolerance: an unknown verdict string surfaces verbatim rather than
+  // blanking the row (fixture 4).
+  return verdict || 'UNKNOWN';
+};
+
+// Cohort presets. The preset changes only the cohort CTE inside the
+// three DB functions; the focal ids are identical downstream. Devotees
+// and the behavioural/demographic gate need the p_mode parameter on
+// bjl_joy_map_sweep_v2 / _modeled / bjl_territory_profile, which is not
+// in the database yet — those options stay disabled and say so.
+const COHORT_PRESETS = [
+  { key: 'leaners',  label: 'Leaners',  live: true,
+    sentence: 'Warm half versus cool half of the focal item, split against each person\u2019s own baseline.' },
+  { key: 'devotees', label: 'Devotees', live: false,
+    sentence: 'Top third versus bottom third on the focal item, split against each person\u2019s own baseline.' },
+  { key: 'gate',     label: 'Behavioural / demographic gate', live: false,
+    sentence: 'A focal split taken inside a gate (occupation, decision-maker role, generation, region).' },
+];
+
+const JoyMapConnectionsSweep = ({ result, showConflicting, profileCache, onOpenProfile, rosterCache, onOpenRoster, predictions, cohortPreset }) => {
   if (!result || !Array.isArray(result.territories)) return null;
 
   // Front-door escalation surface. When the brief comes back as
@@ -5385,6 +5455,21 @@ const JoyMapConnectionsSweep = ({ result, showConflicting, profileCache, onOpenP
     t.modeled && t.modeled.verdict && /^model_abstains/.test(t.modeled.verdict)
   ).length;
   const focalIdsForCache = focals.map(f => f.item_id);
+  const preset = COHORT_PRESETS.find(p => p.key === cohortPreset) || COHORT_PRESETS[0];
+
+  // Pending predictions that target a territory on this map. A ledger
+  // row counts when it is unverified and either carries no focal set or
+  // carries exactly this one.
+  const focalKey = focalIdsForCache.slice().map(Number).sort((a, b) => a - b).join(',');
+  const pendingByTerritory = new Map();
+  for (const p of (Array.isArray(predictions) ? predictions : [])) {
+    if (p.verified_at) continue;
+    if (!p.territory_key) continue;
+    const pf = Array.isArray(p.focal_items) ? p.focal_items.map(Number).sort((a, b) => a - b).join(',') : '';
+    if (pf && pf !== focalKey) continue;
+    if (!pendingByTerritory.has(p.territory_key)) pendingByTerritory.set(p.territory_key, []);
+    pendingByTerritory.get(p.territory_key).push(p);
+  }
 
   return (
     <div className="joy-map-cx-sweep">
@@ -5403,8 +5488,8 @@ const JoyMapConnectionsSweep = ({ result, showConflicting, profileCache, onOpenP
           ))}
         </ul>
         <div className="joy-map-cx-focal-card-cohort">
-          Cohort: <strong>{result.cohort_hot != null ? result.cohort_hot.toLocaleString() : '—'}</strong> hot / <strong>{result.cohort_cool != null ? result.cohort_cool.toLocaleString() : '—'}</strong> cool.
-          <span style={{fontStyle: 'italic'}}> Split against each person's own baseline.</span>
+          Cohort (<strong>{preset.label}</strong>): <strong>{result.cohort_hot != null ? result.cohort_hot.toLocaleString() : '—'}</strong> hot / <strong>{result.cohort_cool != null ? result.cohort_cool.toLocaleString() : '—'}</strong> cool.
+          <span style={{fontStyle: 'italic'}}> {preset.sentence}</span>
         </div>
         {modelVersion && (
           <div className="joy-map-cx-focal-card-model">
@@ -5420,15 +5505,23 @@ const JoyMapConnectionsSweep = ({ result, showConflicting, profileCache, onOpenP
           const cacheK = territoryKey ? `${focalIdsForCache.slice().sort((a,b)=>a-b).join(',')}::${territoryKey}` : null;
           const profile = cacheK ? (profileCache || {})[cacheK] : null;
           const rosterEntry = territoryKey ? (rosterCache || {})[territoryKey] : null;
+          const state = alignmentState(t);
+          const pending = territoryKey ? (pendingByTerritory.get(territoryKey) || []) : [];
           return (
-            <li key={`${t.ord}-${t.territory}`} className={`joy-map-cx-row ${verdictClass}`}>
+            <li key={`${t.ord}-${t.territory}`} className={`joy-map-cx-row ${verdictClass} state-${state}`}>
               <div className="joy-map-cx-row-head">
                 <span className="joy-map-cx-row-ord">{String(t.ord).padStart(2, '0')}</span>
                 <span className="joy-map-cx-row-domain">
                   {t.territory}
                   {t.emotional_job && <span className="joy-map-cx-row-emojob"> · {t.emotional_job}</span>}
                 </span>
+                <span className={`joy-map-cx-state state-${state}`} title={ALIGNMENT_COPY[state] || `Alignment state: ${state}`}>{state}</span>
                 <span className={`joy-map-cx-row-verdict ${verdictClass}`}>{t.verdict || 'unknown'}</span>
+                {pending.length > 0 && (
+                  <span className="joy-map-cx-chip prediction" title={pending.map(p => `#${p.prediction_id} predicted ${p.predicted_lift} pts`).join(' · ')}>
+                    prediction registered — receipt due {pending[0].fielding_id || 'next fielding'}
+                  </span>
+                )}
                 {t.territory_magnitude != null && (
                   <span className="joy-map-cx-chip magnitude" title="territory_magnitude">
                     magnitude {t.territory_magnitude}
@@ -5439,6 +5532,9 @@ const JoyMapConnectionsSweep = ({ result, showConflicting, profileCache, onOpenP
                     THIN
                   </span>
                 )}
+              </div>
+              <div className={`joy-map-cx-state-line state-${state}`}>
+                {ALIGNMENT_COPY[state] || `Alignment state '${state}' — no plain-language reading registered for this state yet.`}
               </div>
               {t.verdict === 'measured' && lead && (
                 <div className="joy-map-cx-row-body">
@@ -5664,6 +5760,231 @@ const JoyMapPredictionsTable = ({ state, onRefresh }) => {
           ))}
         </tbody>
       </table>
+    </div>
+  );
+};
+
+// -------------------------------------------------------------------------
+// OpportunityBulletin — layer 2. Findings become recommendations.
+//
+// Cards come from bjl_opportunities; the signal chips they cite come
+// from bjl_marketplace_signals. Claims and signals are rendered in
+// visibly different classes: a claim is measured evidence with a
+// population and a tier, a signal is a marketplace observation with a
+// capture date. The one write this surface gets is the status
+// transition (plus a note). Everything else is authored in an analysis
+// session.
+// -------------------------------------------------------------------------
+const BULLETIN_STATUSES = ['candidate', 'reviewed', 'selected', 'shipped', 'retired'];
+const SIGNAL_STALE_DAYS = 45;
+
+const OpportunityBulletin = ({ predictionState, onLoadPredictions }) => {
+  const [state, setState] = useState({ loading: false, error: null, opportunities: null, engagements: [] });
+  const [engagement, setEngagement] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [tierFilter, setTierFilter] = useState('');
+  const [windowFilter, setWindowFilter] = useState('');
+  const [saving, setSaving] = useState({});
+
+  const load = async () => {
+    setState(s => ({ ...s, loading: true, error: null }));
+    try {
+      if (window.__bjlAuth && window.__bjlAuth.getSession) await window.__bjlAuth.getSession();
+      const r = await fetch('/.netlify/functions/bjl-opportunities', authedFetchInit({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'list' }),
+      }));
+      const j = await r.json();
+      if (!r.ok) throw new Error((j && j.error) || `request failed (${r.status})`);
+      setState({
+        loading: false,
+        error: null,
+        opportunities: Array.isArray(j.opportunities) ? j.opportunities : [],
+        engagements: Array.isArray(j.engagements) ? j.engagements : [],
+      });
+    } catch (e) {
+      setState(s => ({ ...s, loading: false, error: String(e.message || e) }));
+    }
+  };
+
+  useEffect(() => { load(); if (onLoadPredictions) onLoadPredictions(); }, []);
+
+  const setStatus = async (opportunityId, status) => {
+    setSaving(prev => ({ ...prev, [opportunityId]: true }));
+    try {
+      if (window.__bjlAuth && window.__bjlAuth.getSession) await window.__bjlAuth.getSession();
+      const r = await fetch('/.netlify/functions/bjl-opportunities', authedFetchInit({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set_status', opportunity_id: opportunityId, status }),
+      }));
+      const j = await r.json();
+      if (!r.ok) throw new Error((j && j.error) || `request failed (${r.status})`);
+      setState(s => ({
+        ...s,
+        opportunities: (s.opportunities || []).map(o =>
+          o.opportunity_id === opportunityId ? { ...o, status, updated_at: (j.opportunity && j.opportunity.updated_at) || o.updated_at } : o
+        ),
+      }));
+    } catch (e) {
+      setState(s => ({ ...s, error: String(e.message || e) }));
+    } finally {
+      setSaving(prev => ({ ...prev, [opportunityId]: false }));
+    }
+  };
+
+  const all = state.opportunities || [];
+  const tiers = Array.from(new Set(all.map(o => o.evidence_tier).filter(Boolean))).sort();
+  const windows = Array.from(new Set(all.map(o => o.window_label).filter(Boolean))).sort();
+
+  const daysSince = (dateStr) => {
+    if (!dateStr) return null;
+    const then = new Date(dateStr);
+    if (Number.isNaN(then.getTime())) return null;
+    return Math.floor((Date.now() - then.getTime()) / 86400000);
+  };
+
+  const visible = all
+    .filter(o => !engagement || o.engagement === engagement)
+    .filter(o => !statusFilter || o.status === statusFilter)
+    .filter(o => !tierFilter || o.evidence_tier === tierFilter)
+    .filter(o => !windowFilter || o.window_label === windowFilter)
+    .slice()
+    .sort((a, b) => {
+      const sa = BULLETIN_STATUSES.indexOf(a.status);
+      const sb = BULLETIN_STATUSES.indexOf(b.status);
+      if (sa !== sb) return (sa < 0 ? 99 : sa) - (sb < 0 ? 99 : sb);
+      const wa = a.window_start || '9999-12-31';
+      const wb = b.window_start || '9999-12-31';
+      return wa < wb ? -1 : wa > wb ? 1 : 0;
+    });
+
+  // Grouped by engagement so a bulletin reads as one client's brief.
+  const groups = [];
+  for (const o of visible) {
+    const key = o.engagement || '(unassigned)';
+    let g = groups.find(x => x.key === key);
+    if (!g) { g = { key, items: [] }; groups.push(g); }
+    g.items.push(o);
+  }
+
+  return (
+    <div className="joy-map-inputs">
+      <div className="joy-map-input-group">
+        <div className="joy-map-input-label">Opportunity Bulletin</div>
+        <div style={{fontSize: 13, color: 'var(--iron-darker, #5a5a55)', maxWidth: '72ch', marginBottom: 12}}>
+          The map says what is true. The bulletin says what to do about it. Each card carries a claim (with its evidence tier and the population it holds for), the marketplace signals that make it timely, the action, the window, and the owner. Claims are measured; signal chips are observations — they are deliberately styled apart. Status is the only thing you can change here.
+        </div>
+        <div className="bulletin-filters">
+          <label>Engagement
+            <select value={engagement} onChange={(e) => setEngagement(e.target.value)}>
+              <option value="">All</option>
+              {state.engagements.map(en => <option key={en} value={en}>{en}</option>)}
+            </select>
+          </label>
+          <label>Status
+            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+              <option value="">All</option>
+              {BULLETIN_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </label>
+          <label>Evidence tier
+            <select value={tierFilter} onChange={(e) => setTierFilter(e.target.value)}>
+              <option value="">All</option>
+              {tiers.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </label>
+          <label>Window
+            <select value={windowFilter} onChange={(e) => setWindowFilter(e.target.value)}>
+              <option value="">All</option>
+              {windows.map(w => <option key={w} value={w}>{w}</option>)}
+            </select>
+          </label>
+          <button className="btn ghost" onClick={load} disabled={state.loading}>Refresh</button>
+        </div>
+      </div>
+
+      {state.loading && <div className="joy-map-loading">Loading the register…</div>}
+      {state.error && <div className="joy-map-error">Error: {state.error}</div>}
+      {!state.loading && state.opportunities && visible.length === 0 && (
+        <div className="joy-map-cx-profile-body">
+          No opportunities match these filters. The register is loaded in analysis sessions, not here.
+        </div>
+      )}
+
+      {groups.map(g => (
+        <div key={g.key} className="bulletin-group">
+          <div className="bulletin-group-title">{g.key} · {g.items.length} card{g.items.length === 1 ? '' : 's'}</div>
+          {g.items.map(o => {
+            const age = daysSince(o.newest_signal_at);
+            const stale = age != null && age > SIGNAL_STALE_DAYS;
+            return (
+              <div key={o.opportunity_id} className={`bulletin-card status-${o.status || 'unknown'}`}>
+                <div className="bulletin-card-head">
+                  {o.register_number != null && <span className="bulletin-register">#{o.register_number}</span>}
+                  <span className="bulletin-title">{o.title}</span>
+                  <span className={`bulletin-status-badge status-${o.status || 'unknown'}`}>{o.status || 'unknown'}</span>
+                </div>
+
+                <div className="bulletin-claim">
+                  <span className={`bulletin-tier tier-${(o.evidence_tier || 'unknown').replace(/\W+/g, '_')}`}>{o.evidence_tier || 'no tier'}</span>
+                  <span className="bulletin-claim-summary">{o.claim_summary}</span>
+                  <div className="bulletin-claim-population">Holds for: {o.claim_population}</div>
+                </div>
+
+                {o.signals.length > 0 ? (
+                  <div className="bulletin-signals">
+                    {o.signals.map(s => (
+                      <span key={s.signal_id} className="bulletin-signal-chip" title={s.exact_quote || s.detail || ''}>
+                        {s.headline}
+                        <span className="bulletin-signal-date"> · {s.captured_at || 'undated'}</span>
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="bulletin-signals-empty">No marketplace signal cited — evergreen claim, standing on the measured evidence alone.</div>
+                )}
+
+                {stale && (
+                  <div className="bulletin-stale">
+                    Newest signal is {age} days old (over {SIGNAL_STALE_DAYS}). Re-pull before acting on the timing.
+                  </div>
+                )}
+
+                <div className="bulletin-action">{o.action}</div>
+                <div className="bulletin-meta">
+                  {o.window_label && <span>Window: <strong>{o.window_label}</strong></span>}
+                  {o.owner && <span> · Owner: <strong>{o.owner}</strong></span>}
+                  {o.prediction_id != null && <span> · prediction #{o.prediction_id}</span>}
+                </div>
+                {o.notes && <div className="bulletin-notes">{o.notes}</div>}
+
+                <div className="bulletin-status-control">
+                  {BULLETIN_STATUSES.map(s => (
+                    <button
+                      key={s}
+                      className={`btn ${o.status === s ? 'primary' : 'ghost'}`}
+                      disabled={!!saving[o.opportunity_id] || o.status === s}
+                      onClick={() => setStatus(o.opportunity_id, s)}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ))}
+
+      <div className="joy-map-input-group" style={{marginTop: 20}}>
+        <div className="joy-map-input-label">Registered predictions (staff, read-only)</div>
+        <div style={{fontSize: 13, color: 'var(--iron-darker, #5a5a55)', maxWidth: '72ch', marginBottom: 12}}>
+          Every modeled lift registered against a not-yet-fielded item. These also appear as chips on the territories they target. Verification writes happen through the analysis session, not here.
+        </div>
+        <JoyMapPredictionsTable state={predictionState} onRefresh={onLoadPredictions} />
+      </div>
     </div>
   );
 };
