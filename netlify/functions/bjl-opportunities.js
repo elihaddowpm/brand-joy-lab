@@ -12,6 +12,14 @@
  *   POST { action: 'set_status', opportunity_id: int,
  *          status: text, notes?: text }
  *     → { ok, opportunity }
+ *   POST { action: 'create', engagement, title, claim_summary,
+ *          claim_population, evidence_tier, action_text,
+ *          claim_items?, signal_ids?, window_label?, owner?, notes? }
+ *     → { ok, opportunity }
+ *
+ * Cards are authored from the map (the Send to Bulletin affordance on
+ * a territory row or a profile finding), never invented here. Every
+ * create lands at status='candidate'.
  *
  * Signals never join respondent tables — they are marketplace
  * observations, kept visibly distinct from measured claims.
@@ -63,6 +71,56 @@ exports.handler = async (event) => {
   const action = body.action || 'list';
 
   try {
+    if (action === 'create') {
+      // The only write path that makes a card. The claim triple is
+      // NOT NULL in the table; it is required here too so the failure
+      // is a legible 400 rather than a Postgres constraint error.
+      const text = (k) => (typeof body[k] === 'string' ? body[k].trim() : '');
+      const required = {
+        engagement:       text('engagement'),
+        title:            text('title'),
+        claim_summary:    text('claim_summary'),
+        claim_population: text('claim_population'),
+        evidence_tier:    text('evidence_tier'),
+        action:           text('action_text'),
+      };
+      const missing = Object.keys(required).filter(k => !required[k]);
+      if (missing.length > 0) {
+        return {
+          statusCode: 400,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ error: `missing required field(s): ${missing.map(k => k === 'action' ? 'action_text' : k).join(', ')}` }),
+        };
+      }
+
+      const intArray = (k) => (Array.isArray(body[k])
+        ? body[k].map(Number).filter(Number.isFinite).map(n => Math.trunc(n))
+        : []);
+
+      const row = {
+        ...required,
+        claim_items: intArray('claim_items'),
+        signal_ids:  intArray('signal_ids'),
+        status:      'candidate',
+      };
+      if (typeof body.window_label === 'string' && body.window_label.trim()) row.window_label = body.window_label.trim();
+      if (typeof body.owner === 'string' && body.owner.trim())               row.owner = body.owner.trim();
+      if (typeof body.notes === 'string' && body.notes.trim())               row.notes = body.notes.trim();
+
+      const { data, error } = await supabase
+        .from('bjl_opportunities')
+        .insert(row)
+        .select()
+        .single();
+      if (error) throw new Error(`opportunity insert failed: ${error.message}`);
+
+      return {
+        statusCode: 200,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ok: true, opportunity: data }),
+      };
+    }
+
     if (action === 'set_status') {
       const opportunityId = Number(body.opportunity_id);
       const status = typeof body.status === 'string' ? body.status.trim() : '';
@@ -91,7 +149,7 @@ exports.handler = async (event) => {
     }
 
     if (action !== 'list') {
-      return { statusCode: 400, body: JSON.stringify({ error: `unknown action '${action}'` }) };
+      return { statusCode: 400, body: JSON.stringify({ error: `unknown action '${action}' — expected list, create, or set_status` }) };
     }
 
     const engagement = typeof body.engagement === 'string' ? body.engagement.trim() : '';

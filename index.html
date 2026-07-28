@@ -4798,27 +4798,52 @@ const AudienceMapResults = ({ finding }) => {
 };
 
 // ======================================================================
-// JoyMapMode — Phase 2 orchestrator
-// Two subviews: Audience Map (single text input) + Dance Map (picker + brand)
-// Recent Audience Maps held in session state.
+// JoyMapMode — the Joy Map workflow.
+//
+// Not tabs. One linear run:
+//
+//   STEP 1  INTAKE   — brand + context, with the resolution ladder
+//   STEP 2  COHORT   — which split of the focal item we are reading
+//   STEP 3  RUN      — the sixteen alignment rows, with depth taps
+//   STEP 4  BULLETIN — send a row or a finding across as a candidate
+//
+// Steps 1-3 are one page (the Run view). The Bulletin is the second
+// and only other view. Everything else that used to live here — the
+// Audience Map tab, the Dance Map tab, the Predictions tab, roster as
+// a destination — is gone. The renderers for the first two survive as
+// module-level components (AudienceMapResults, JoyMapDanceMapResults);
+// they have no entry point in this pane any more.
+//
+// A run is a saved artifact: its intake, context and cohort persist to
+// local storage and can be reloaded into the form. Results are not
+// cached — a reloaded run is re-run against live data.
 // ======================================================================
 
+const RUNS_STORAGE_KEY = 'bjl_joy_map_runs';
+const MAX_SAVED_RUNS = 20;
+
+const loadSavedRuns = () => {
+  try {
+    const raw = window.localStorage.getItem(RUNS_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) { return []; }
+};
+
 const JoyMapMode = () => {
-  const [subView, setSubView] = useState('audience_map');
-  // Audience Map state
-  const [amDescription, setAmDescription] = useState('');
-  const [amRunning, setAmRunning] = useState(false);
-  const [amError, setAmError] = useState(null);
-  const [amFinding, setAmFinding] = useState(null);
-  const [recentMaps, setRecentMaps] = useState([]);
-  // Dance Map state
-  const [dmSelectedMapId, setDmSelectedMapId] = useState(null);
-  const [dmBrandMode, setDmBrandMode] = useState('text');
-  const [dmBrandText, setDmBrandText] = useState('');
-  const [dmBrandJson, setDmBrandJson] = useState('');
-  const [dmRunning, setDmRunning] = useState(false);
-  const [dmError, setDmError] = useState(null);
-  const [dmFinding, setDmFinding] = useState(null);
+  // Exactly two views.
+  const [view, setView] = useState('run');
+
+  // Step 1 context. Persists with the saved run.
+  const [runEngagement, setRunEngagement] = useState('');
+  const [runGeography, setRunGeography] = useState('');
+  const [runContext, setRunContext] = useState('');
+  const [savedRuns, setSavedRuns] = useState(loadSavedRuns);
+
+  // Step 4 — the compose drawer. Non-null means a draft is open.
+  const [compose, setCompose] = useState(null);
+  const [composeToast, setComposeToast] = useState(null);
+
   // Connections state — one map per column, up to two columns for
   // side-by-side (Herschend two-door format). Each column carries its
   // own label + input (query OR focal-id csv) + running/error/result
@@ -4941,224 +4966,176 @@ const JoyMapMode = () => {
     }
   };
 
-  const handleAudienceMapRun = async () => {
-    setAmError(null);
-    setAmFinding(null);
-    if (!amDescription.trim()) { setAmError('Audience description is required.'); return; }
-    setAmRunning(true);
-    try {
-      const res = await fetch('/.netlify/functions/bjl-audience-map', authedFetchInit({
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ description: amDescription.trim() }),
-      }));
-      if (!res.ok) {
-        const txt = await res.text();
-        throw new Error(`audience-map enqueue failed (${res.status}): ${txt.slice(0, 200)}`);
-      }
-      const { job_id } = await res.json();
-      const job = await _bjlPollJob(job_id, undefined, {
-        pollIntervalMs: 2500,
-        hardCapMs: 8 * 60 * 1000,
-      });
-      if (job.status === 'error') throw new Error(job.error || 'Audience Map job errored without detail.');
-      if (!job.finding) throw new Error('Audience Map job complete but no finding returned.');
-      const parsed = typeof job.finding === 'string' ? JSON.parse(job.finding) : job.finding;
-      if (parsed.unresolved) {
-        setAmError(parsed.unresolved_reason || 'Audience description could not be routed.');
-        setAmFinding(parsed);
-        return;
-      }
-      if (parsed.low_n_refused) {
-        setAmError(parsed.message || `Reverse-engineered audience too small (n=${parsed.reverse_engineered_cohort_n}).`);
-        setAmFinding(parsed);
-        return;
-      }
-      setAmFinding(parsed);
-      // Add to recent maps (most recent first, dedupe by job_id)
-      setRecentMaps(prev => [
-        {
-          job_id,
-          description: amDescription.trim(),
-          routing_notice: parsed.routing && parsed.routing.routing_notice,
-          reverse_engineered_cohort_n: parsed.reverse_engineered_cohort_n,
-          completed_at: new Date().toISOString(),
-        },
-        ...prev.filter(m => m.job_id !== job_id),
-      ].slice(0, 10));
-      setDmSelectedMapId(job_id);
-    } catch (err) {
-      setAmError(String(err.message || err));
-    } finally {
-      setAmRunning(false);
-    }
+  // Save the run artifact — intake + context + cohort. Results are
+  // deliberately not stored: reloading a run re-runs it against live
+  // data rather than showing a stale sweep.
+  const saveRun = (doors) => {
+    const artifact = {
+      run_id: `run_${Date.now()}`,
+      saved_at: new Date().toISOString(),
+      engagement: runEngagement.trim(),
+      geography: runGeography.trim(),
+      context: runContext.trim(),
+      cohort_preset: cxCohortPreset,
+      doors,
+    };
+    setSavedRuns(prev => {
+      const next = [artifact, ...prev].slice(0, MAX_SAVED_RUNS);
+      try { window.localStorage.setItem(RUNS_STORAGE_KEY, JSON.stringify(next)); }
+      catch (e) { console.warn('[joy-map] run artifact not saved:', e.message); }
+      return next;
+    });
   };
 
-  const handleDanceMapRun = async () => {
-    setDmError(null);
-    setDmFinding(null);
-    if (!dmSelectedMapId) {
-      setDmError('Select an Audience Map first (create one in the Audience Map tab).');
-      return;
+  const restoreRun = (artifact) => {
+    setRunEngagement(artifact.engagement || '');
+    setRunGeography(artifact.geography || '');
+    setRunContext(artifact.context || '');
+    if (artifact.cohort_preset) {
+      const p = COHORT_PRESETS.find(x => x.key === artifact.cohort_preset);
+      if (p && p.live) setCxCohortPreset(p.key);
     }
-    let parsedJson = null;
-    if (dmBrandMode === 'json' && dmBrandJson.trim()) {
-      try { parsedJson = JSON.parse(dmBrandJson); }
-      catch (e) { setDmError('Brand JSON did not parse: ' + e.message); return; }
-    }
-    if (dmBrandMode === 'text' && !dmBrandText.trim()) {
-      setDmError('Provide brand text or paste Waldo JSON.'); return;
-    }
-    setDmRunning(true);
-    try {
-      const requestBody = {
-        workflow: 'dance_map',
-        brand_text: dmBrandMode === 'text' ? dmBrandText.trim() : null,
-        brand_json: parsedJson,
-        audience_map_job_id: dmSelectedMapId,
-      };
-      const res = await fetch('/.netlify/functions/bjl-joy-map', authedFetchInit({
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody),
-      }));
-      if (!res.ok) {
-        const txt = await res.text();
-        throw new Error(`Dance Map enqueue failed (${res.status}): ${txt.slice(0,200)}`);
-      }
-      const { job_id } = await res.json();
-      const job = await _bjlPollJob(job_id, undefined, {
-        pollIntervalMs: 2500,
-        hardCapMs: 8 * 60 * 1000,
-      });
-      if (job.status === 'error') throw new Error(job.error || 'Dance Map job errored without detail.');
-      if (!job.finding) throw new Error('Dance Map job complete but no finding returned.');
-      const parsed = typeof job.finding === 'string' ? JSON.parse(job.finding) : job.finding;
-      setDmFinding(parsed);
-    } catch (err) {
-      setDmError(String(err.message || err));
-    } finally {
-      setDmRunning(false);
-    }
+    setCxColumns(prev => prev.map(c => {
+      const d = (artifact.doors || []).find(x => x.id === c.id);
+      return d
+        ? { ...c, label: d.label || c.label, queryInput: d.query || '', focalIdsCsv: d.focal_ids_csv || '', result: null, error: null }
+        : { ...c, result: null, error: null };
+    }));
   };
+
+  // Step 3. Runs every door that carries an input, then saves the run.
+  const runAllDoors = async () => {
+    const filled = cxColumns.filter(c => c.queryInput.trim() || c.focalIdsCsv.trim());
+    if (filled.length === 0) return;
+    fetchPredictions();
+    await Promise.all(filled.map(c => runConnectionsColumn(c.id)));
+    saveRun(filled.map(c => ({
+      id: c.id, label: c.label, query: c.queryInput.trim(), focal_ids_csv: c.focalIdsCsv.trim(),
+    })));
+  };
+
+  const activePreset = COHORT_PRESETS.find(p => p.key === cxCohortPreset) || COHORT_PRESETS[0];
+  const anyRunning = cxColumns.some(c => c.running);
+  const anyInput = cxColumns.some(c => c.queryInput.trim() || c.focalIdsCsv.trim());
 
   return (
     <div className="joy-map-mode">
+      {/* Two views. That is the whole pane. */}
       <div className="joy-map-toolbar">
-        <button className={`btn ${subView === 'audience_map' ? 'primary' : 'ghost'}`} onClick={() => setSubView('audience_map')}>Audience Map</button>
-        <button className={`btn ${subView === 'dance_map' ? 'primary' : 'ghost'}`} onClick={() => setSubView('dance_map')}>Dance Map</button>
-        <button className={`btn ${subView === 'connections' ? 'primary' : 'ghost'}`} onClick={() => { setSubView('connections'); fetchPredictions(); }}>Connections</button>
-        <button className={`btn ${subView === 'bulletin' ? 'primary' : 'ghost'}`} onClick={() => setSubView('bulletin')}>Opportunity Bulletin</button>
+        <button className={`btn ${view === 'run' ? 'primary' : 'ghost'}`} onClick={() => setView('run')}>Run</button>
+        <button className={`btn ${view === 'bulletin' ? 'primary' : 'ghost'}`} onClick={() => { setView('bulletin'); fetchPredictions(); }}>Opportunity Bulletin</button>
       </div>
 
-      {subView === 'audience_map' && (
-        <div className="joy-map-inputs">
-          <div className="joy-map-input-group">
-            <div className="joy-map-input-label">Audience description</div>
-            <textarea
-              className="joy-map-brand-textarea"
-              placeholder="Describe the audience you want to map. Examples: 'Rock and Roll Hall of Fame fans', 'people who love music and museums', 'millennial parents in the Southeast', 'QSR customers who care about value'."
-              value={amDescription}
-              onChange={(e) => setAmDescription(e.target.value)}
-              rows={4}
-            />
-          </div>
-          <div className="joy-map-actions">
-            <button className="btn primary" disabled={amRunning || !amDescription.trim()} onClick={handleAudienceMapRun}>
-              {amRunning ? 'Running…' : 'Run'}
-            </button>
-          </div>
-          {amError && <div className="joy-map-error">Error: {amError}</div>}
-          {amRunning && !amFinding && <div className="joy-map-loading">Building Audience Map (4 passes — routing, profile, synthesis, reverse-engineer)…</div>}
-          {amFinding && !amFinding.unresolved && !amFinding.low_n_refused && <AudienceMapResults finding={amFinding} />}
+      {composeToast && (
+        <div className="joy-map-toast">
+          <span>{composeToast}</span>
+          <button className="btn ghost" onClick={() => { setComposeToast(null); setView('bulletin'); }}>Open the Bulletin</button>
+          <button className="btn ghost" onClick={() => setComposeToast(null)}>Dismiss</button>
         </div>
       )}
 
-      {subView === 'dance_map' && (
-        <div className="joy-map-inputs">
-          <div className="joy-map-input-group">
-            <div className="joy-map-input-label">Audience Map</div>
-            {recentMaps.length === 0 ? (
-              <div className="joy-map-empty-state">
-                <div>No Audience Maps in this session yet.</div>
-                <button className="btn primary" onClick={() => setSubView('audience_map')}>Create an Audience Map first</button>
-              </div>
-            ) : (
-              <div className="joy-map-am-picker">
-                {recentMaps.map(m => (
-                  <label key={m.job_id} className={`joy-map-am-option ${dmSelectedMapId === m.job_id ? 'selected' : ''}`}>
+      {view === 'run' && (
+        <div className="joy-map-run">
+
+          {/* ---------------- STEP 1 — INTAKE ---------------- */}
+          <section className="run-step">
+            <div className="run-step-head"><span className="run-step-n">1</span> Intake — brand and context</div>
+            <div className="run-step-note">
+              One door for a single read; two for a side-by-side (the two-door format — a client with two competing brands or gates). Type a brand, attraction or category for the front-door resolver, <em>or</em> paste focal item ids directly. When the run lands, the focal card states which rung of the resolution ladder applied — a substitution is never silent.
+            </div>
+
+            <div className="run-doors">
+              {cxColumns.map(col => (
+                <div key={col.id} className="run-door">
+                  <input
+                    className="joy-map-cx-label-input"
+                    value={col.label}
+                    onChange={(e) => setCxColumn(col.id, { label: e.target.value })}
+                    placeholder="Door label (e.g. Door A)"
+                  />
+                  <label className="joy-map-cx-input-label">Brand, attraction or category
                     <input
-                      type="radio"
-                      name="dm-audience-map"
-                      value={m.job_id}
-                      checked={dmSelectedMapId === m.job_id}
-                      onChange={() => setDmSelectedMapId(m.job_id)}
+                      type="text"
+                      value={col.queryInput}
+                      onChange={(e) => setCxColumn(col.id, { queryInput: e.target.value })}
+                      placeholder="e.g. Silver Dollar City, or theme parks"
+                      disabled={col.running}
                     />
-                    <div className="joy-map-am-option-body">
-                      <div className="joy-map-am-option-desc">"{m.description}"</div>
-                      <div className="joy-map-am-option-meta">
-                        {m.routing_notice}{typeof m.reverse_engineered_cohort_n === 'number' ? ` · n=${m.reverse_engineered_cohort_n.toLocaleString()}` : ''}
-                      </div>
-                    </div>
                   </label>
-                ))}
-              </div>
+                  <label className="joy-map-cx-input-label" style={{marginTop: 8}}>Or focal item ids (1–4, comma-separated)
+                    <input
+                      type="text"
+                      value={col.focalIdsCsv}
+                      onChange={(e) => setCxColumn(col.id, { focalIdsCsv: e.target.value })}
+                      placeholder="e.g. 4646, 4607"
+                      disabled={col.running}
+                    />
+                  </label>
+                </div>
+              ))}
+            </div>
+
+            {/* Resolution ladder, rung (c). The panel read is what we
+                have; the client first-party cohort is a V3 slot and
+                renders disabled rather than silently absent. */}
+            <div className="run-ladder">
+              <div className="run-ladder-label">Source</div>
+              <label className="run-ladder-opt">
+                <input type="radio" name="run-source" checked readOnly />
+                BJL panel — fielded items, with the substitution labelled when the brand isn't fielded nationally
+              </label>
+              <label className="run-ladder-opt disabled">
+                <input type="radio" name="run-source" disabled />
+                Client first-party cohort <span className="run-pending">(V3 — not built)</span>
+              </label>
+            </div>
+
+            <div className="run-context-fields">
+              <label className="joy-map-cx-input-label">Engagement
+                <input type="text" value={runEngagement} onChange={(e) => setRunEngagement(e.target.value)}
+                  placeholder="e.g. Herschend 2026 — Silver Dollar City" />
+              </label>
+              <label className="joy-map-cx-input-label">Geography note
+                <input type="text" value={runGeography} onChange={(e) => setRunGeography(e.target.value)}
+                  placeholder="e.g. Branson DMA question, read on the national panel" />
+              </label>
+              <label className="joy-map-cx-input-label">Context
+                <textarea rows={3} value={runContext} onChange={(e) => setRunContext(e.target.value)}
+                  placeholder="What prompted this run, and what would count as an answer." />
+              </label>
+            </div>
+
+            {savedRuns.length > 0 && (
+              <details className="run-saved">
+                <summary>{savedRuns.length} saved run{savedRuns.length === 1 ? '' : 's'}</summary>
+                <ul className="run-saved-list">
+                  {savedRuns.map(r => (
+                    <li key={r.run_id}>
+                      <button className="btn ghost" onClick={() => restoreRun(r)}>Reload</button>
+                      <span className="run-saved-desc">
+                        {(r.doors || []).map(d => `${d.label}: ${d.query || d.focal_ids_csv || '—'}`).join(' · ') || '—'}
+                      </span>
+                      <span className="run-saved-meta">
+                        {r.engagement || 'no engagement'} · {r.cohort_preset || 'leaners'} · {r.saved_at ? new Date(r.saved_at).toLocaleString() : '—'}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                <div className="run-saved-note">
+                  Runs are saved in this browser, not on the server. Reloading restores the intake, the context and the cohort; the sweep itself is re-run against live data rather than replayed from cache.
+                </div>
+              </details>
             )}
-          </div>
+          </section>
 
-          <div className="joy-map-input-group">
-            <div className="joy-map-input-label">Brand input</div>
-            <div className="joy-map-brand-toggle">
-              <button className={`btn ${dmBrandMode === 'text' ? 'primary' : 'ghost'}`} onClick={() => setDmBrandMode('text')}>Free text</button>
-              <button className={`btn ${dmBrandMode === 'json' ? 'primary' : 'ghost'}`} onClick={() => setDmBrandMode('json')}>Waldo JSON</button>
-            </div>
-            {dmBrandMode === 'text' ? (
-              <textarea
-                className="joy-map-brand-textarea"
-                placeholder="Paste brand offering text — positioning statement, brand story, or messaging language."
-                value={dmBrandText}
-                onChange={(e) => setDmBrandText(e.target.value)}
-                rows={5}
-              />
-            ) : (
-              <textarea
-                className="joy-map-brand-textarea"
-                placeholder='Paste Waldo JSON. The source-aware parser will extract brand emphasis, tactical signals, and friction points.'
-                value={dmBrandJson}
-                onChange={(e) => setDmBrandJson(e.target.value)}
-                rows={6}
-              />
-            )}
-          </div>
-
-          <div className="joy-map-actions">
-            <button className="btn primary" disabled={dmRunning || !dmSelectedMapId} onClick={handleDanceMapRun}>
-              {dmRunning ? 'Running…' : 'Run'}
-            </button>
-          </div>
-
-          {dmError && <div className="joy-map-error">Error: {dmError}</div>}
-          {dmRunning && !dmFinding && <div className="joy-map-loading">Running Dance Map synthesis…</div>}
-          {dmFinding && <JoyMapDanceMapResults finding={dmFinding} />}
-        </div>
-      )}
-
-      {subView === 'connections' && (
-        <div className="joy-map-inputs">
-          <div className="joy-map-input-group">
-            <div className="joy-map-input-label">Connections across the 16 life territories — three tiers</div>
-            <div style={{fontSize: 13, color: 'var(--iron-darker, #5a5a55)', maxWidth: '72ch', marginBottom: 8}}>
-              Sixteen territories, one row each. Every row carries an alignment state — ALIGNED, MISALIGNED, GROWTH, UNCLAIMED, FLAT — plus the lead pair, a magnitude chip, a THIN badge when fewer than 3 pairs sit behind the lead, and the modeled diamond against the measured territory mean (staff). Tap a row for the territory profile; tap again inside it for the roster. r_internal never renders.
-            </div>
-            <div style={{fontSize: 13, color: 'var(--ink, #1a1a17)', maxWidth: '72ch', marginBottom: 12, padding: '8px 10px', background: 'var(--paper-2, #f4f3ed)', borderLeft: '3px solid var(--ink, #1a1a17)', borderRadius: 2}}>
-              <strong>How to use it.</strong> Each column is one independent sweep. Fill one column for a single map, or fill both for a side-by-side comparison (Herschend two-door format — a client with two competing brands or doors). In each column: type a query for the front-door resolver <em>or</em> paste focal item ids directly (comma-separated, 1–4). Click <em>Run sweep</em> per column.
-            </div>
-            {/* Cohort preset. Changes only the cohort CTE; the focal ids
+          {/* ---------------- STEP 2 — COHORT ---------------- */}
+          <section className="run-step">
+            <div className="run-step-head"><span className="run-step-n">2</span> Cohort isolation</div>
+            {/* The preset changes only the cohort CTE; the focal ids
                 are identical downstream. Devotees and the gate need
                 p_mode on the three DB functions, which is not in the
                 database yet — those options stay disabled and say so. */}
             <div className="joy-map-cx-preset">
-              <span className="joy-map-cx-preset-label">Cohort preset</span>
               {COHORT_PRESETS.map(p => (
                 <button
                   key={p.key}
@@ -5171,68 +5148,70 @@ const JoyMapMode = () => {
                 </button>
               ))}
             </div>
-            <label style={{display:'inline-flex', alignItems:'center', gap:6, fontSize:12, color:'var(--iron-darker,#5a5a55)'}}>
+            <div className="run-cohort-sentence">{activePreset.sentence}</div>
+            <label style={{display:'inline-flex', alignItems:'center', gap:6, fontSize:12, color:'var(--iron-darker,#5a5a55)', marginTop: 10}}>
               <input type="checkbox" checked={cxShowConflicting} onChange={(e) => setCxShowConflicting(e.target.checked)} />
-              Staff-only: show sign-conflicting modeled rows (modeled diamond disagrees with measured territory mean on 3+ pairs)
+              Staff-only: show sign-conflicting modeled rows (modeled diamond disagrees with the measured territory mean on 3+ pairs)
             </label>
-          </div>
-          <div className="joy-map-cx-grid">
-            {cxColumns.map(col => (
-              <div key={col.id} className="joy-map-cx-column">
-                <div className="joy-map-cx-column-head">
-                  <input
-                    className="joy-map-cx-label-input"
-                    value={col.label}
-                    onChange={(e) => setCxColumn(col.id, { label: e.target.value })}
-                    placeholder="Column label (e.g. Door A)"
-                  />
-                </div>
-                <label className="joy-map-cx-input-label">Query (front-door resolver)
-                  <input
-                    type="text"
-                    value={col.queryInput}
-                    onChange={(e) => setCxColumn(col.id, { queryInput: e.target.value })}
-                    placeholder="e.g. Silver Dollar City, or theme parks"
-                    disabled={col.running}
-                  />
-                </label>
-                <label className="joy-map-cx-input-label" style={{marginTop:8}}>Or focal item ids (comma-separated, 1–4)
-                  <input
-                    type="text"
-                    value={col.focalIdsCsv}
-                    onChange={(e) => setCxColumn(col.id, { focalIdsCsv: e.target.value })}
-                    placeholder="e.g. 4646, 4607"
-                    disabled={col.running}
-                  />
-                </label>
-                <div style={{marginTop: 8}}>
-                  <button className="btn primary"
-                    onClick={() => runConnectionsColumn(col.id)}
-                    disabled={col.running || (!col.focalIdsCsv.trim() && !col.queryInput.trim())}>
-                    {col.running ? 'Running…' : 'Run sweep'}
-                  </button>
-                </div>
-                {col.error && <div className="joy-map-error" style={{marginTop: 10}}>Error: {col.error}</div>}
-                {col.result && (
-                  <JoyMapConnectionsSweep
-                    result={col.result}
-                    showConflicting={cxShowConflicting}
-                    profileCache={cxProfileCache}
-                    onOpenProfile={(tKey) => fetchProfile(col.result.focals.map(f => f.item_id), tKey)}
-                    rosterCache={cxRosterCache}
-                    onOpenRoster={(tKey) => fetchRoster(tKey)}
-                    predictions={cxPredictions.rows}
-                    cohortPreset={cxCohortPreset}
-                  />
-                )}
-              </div>
-            ))}
-          </div>
+          </section>
+
+          {/* ---------------- STEP 3 — RUN ---------------- */}
+          <section className="run-step">
+            <div className="run-step-head"><span className="run-step-n">3</span> Run — the sixteen life territories</div>
+            <div className="run-step-note">
+              Sixteen territories, one row each. Every row carries an alignment state — ALIGNED, MISALIGNED, GROWTH, UNCLAIMED, FLAT — plus the lead pair, a magnitude chip, a THIN badge when fewer than three pairs sit behind the lead, and the modeled diamond against the measured territory mean (staff). Tap a row for the territory profile; tap again inside it for the roster. This is the analysis — there is nowhere else to go. r_internal never renders.
+            </div>
+            <div className="joy-map-actions">
+              <button className="btn primary" disabled={anyRunning || !anyInput} onClick={runAllDoors}>
+                {anyRunning ? 'Running…' : 'Run'}
+              </button>
+              {!anyInput && <span className="run-step-hint">Fill at least one door in step 1.</span>}
+            </div>
+            <div className="joy-map-cx-grid">
+              {cxColumns.map(col => (
+                (col.running || col.error || col.result) ? (
+                  <div key={col.id} className="joy-map-cx-column">
+                    <div className="joy-map-cx-column-head-label">{col.label}</div>
+                    {col.running && <div className="joy-map-loading">Sweeping the sixteen territories…</div>}
+                    {col.error && <div className="joy-map-error" style={{marginTop: 10}}>Error: {col.error}</div>}
+                    {col.result && (
+                      <JoyMapConnectionsSweep
+                        result={col.result}
+                        showConflicting={cxShowConflicting}
+                        profileCache={cxProfileCache}
+                        onOpenProfile={(tKey) => fetchProfile(col.result.focals.map(f => f.item_id), tKey)}
+                        rosterCache={cxRosterCache}
+                        onOpenRoster={(tKey) => fetchRoster(tKey)}
+                        predictions={cxPredictions.rows}
+                        cohortPreset={cxCohortPreset}
+                        queryText={col.queryInput}
+                        doorLabel={col.label}
+                        engagement={runEngagement}
+                        onSendToBulletin={setCompose}
+                      />
+                    )}
+                  </div>
+                ) : null
+              ))}
+            </div>
+          </section>
         </div>
       )}
 
-      {subView === 'bulletin' && (
+      {view === 'bulletin' && (
         <OpportunityBulletin predictionState={cxPredictions} onLoadPredictions={fetchPredictions} />
+      )}
+
+      {/* ---------------- STEP 4 — SEND TO BULLETIN ---------------- */}
+      {compose && (
+        <BulletinCompose
+          draft={compose}
+          onClose={() => setCompose(null)}
+          onCreated={(opp) => {
+            setCompose(null);
+            setComposeToast(`Candidate #${opp.opportunity_id} created — "${opp.title}".`);
+          }}
+        />
       )}
     </div>
   );
@@ -5302,7 +5281,80 @@ const COHORT_PRESETS = [
     sentence: 'A focal split taken inside a gate (occupation, decision-maker role, generation, region).' },
 ];
 
-const JoyMapConnectionsSweep = ({ result, showConflicting, profileCache, onOpenProfile, rosterCache, onOpenRoster, predictions, cohortPreset }) => {
+// -------------------------------------------------------------------------
+// Brand resolution ladder (step 1 of the run).
+//
+//   a. Brand items fielded          → read the brand item directly.
+//   b. Brand unfielded (the common  → resolve to category + audience
+//      case)                          anchors, substitution LABELLED.
+//   c. Client first-party cohort    → V3. Rendered disabled; not built.
+//
+// Derived client-side from what the front door already returns: the
+// query text and the item names it resolved to. A rung-(a) read is one
+// where a content word of the query survives into a resolved item
+// name; anything else is a substitution and says so on the focal card.
+// -------------------------------------------------------------------------
+const RESOLUTION_STOPWORDS = new Set([
+  'the','and','for','with','who','that','from','into','their','they','are','was',
+  'fans','lover','lovers','people','person','customers','shoppers','buyers',
+  'visitors','guests','goers','brand','brands','company','park','parks',
+]);
+
+const resolutionTokens = (s) => String(s || '')
+  .toLowerCase()
+  .replace(/[^a-z0-9\s]/g, ' ')
+  .split(/\s+/)
+  .filter(t => t.length >= 3 && !RESOLUTION_STOPWORDS.has(t));
+
+const brandResolution = (result, queryText, doorLabel, presetLabel) => {
+  const focals = Array.isArray(result.focals) ? result.focals : [];
+  const names = focals.map(f => f.item_name || `#${f.item_id}`);
+  const query = (queryText || '').trim();
+  if (!query) {
+    return {
+      rung: 'direct',
+      line: `Focal items entered by id — no resolution step. Reading: ${names.join(', ') || '—'}.`,
+    };
+  }
+  const qTokens = resolutionTokens(query);
+  const matched = focals.filter(f => {
+    const nameTokens = new Set(resolutionTokens(f.item_name));
+    return qTokens.some(t => nameTokens.has(t));
+  });
+  if (matched.length > 0) {
+    return {
+      rung: 'fielded',
+      line: `"${query}" is fielded. Reading it directly off ${matched.map(f => f.item_name || `#${f.item_id}`).join(', ')}.`,
+    };
+  }
+  return {
+    rung: 'substituted',
+    line: `${query} isn't fielded nationally; reading through: ${names.join(', ') || 'no items'}, ${doorLabel || 'this door'}, ${presetLabel || 'the cohort'}.`,
+  };
+};
+
+const RESOLUTION_RUNG_LABEL = {
+  direct:      'Rung — direct ids',
+  fielded:     'Rung a — brand items fielded',
+  substituted: 'Rung b — brand unfielded, read through substitutes',
+};
+
+// Evidence tiers offered on a bulletin card. A draft arrives with the
+// tier already derived from the row it came from; the analyst can
+// change it, but never to something the row cannot carry.
+const EVIDENCE_TIERS = ['measured', 'modeled', 'unmeasured', 'signal-only'];
+
+// Modeled only counts as a tier when the model actually spoke and
+// carries a holdout accuracy. Abstaining or accuracy-less rows fall
+// back to unmeasured rather than borrowing credibility.
+const deriveEvidenceTier = (t) => {
+  if (t.verdict === 'measured') return 'measured';
+  const m = t.modeled;
+  const spoke = m && m.verdict && !/^model_abstains/.test(m.verdict) && m.holdout_r != null && m.lift_points != null;
+  return spoke ? 'modeled' : 'unmeasured';
+};
+
+const JoyMapConnectionsSweep = ({ result, showConflicting, profileCache, onOpenProfile, rosterCache, onOpenRoster, predictions, cohortPreset, queryText, doorLabel, engagement, onSendToBulletin }) => {
   if (!result || !Array.isArray(result.territories)) return null;
 
   // Front-door escalation surface. When the brief comes back as
@@ -5456,10 +5508,53 @@ const JoyMapConnectionsSweep = ({ result, showConflicting, profileCache, onOpenP
   ).length;
   const focalIdsForCache = focals.map(f => f.item_id);
   const preset = COHORT_PRESETS.find(p => p.key === cohortPreset) || COHORT_PRESETS[0];
+  const resolution = brandResolution(result, queryText, doorLabel, preset.label);
+
+  // The population sentence every claim inherits. One string, written
+  // once, so a card in the Bulletin says exactly what the focal card
+  // said about who was counted.
+  const populationSentence =
+    `${preset.label} cohort on ${focals.map(f => f.item_name || `#${f.item_id}`).join(' + ') || 'the focal set'}` +
+    ` — ${result.cohort_hot != null ? result.cohort_hot.toLocaleString() : '—'} hot / ` +
+    `${result.cohort_cool != null ? result.cohort_cool.toLocaleString() : '—'} cool. ${preset.sentence}` +
+    (resolution.rung === 'substituted' ? ` Substitution: ${resolution.line}` : '');
+
+  const claimContext = {
+    engagement: engagement || '',
+    door_label: doorLabel || '',
+    focal_ids: focalIdsForCache,
+    population: populationSentence,
+    model_version: modelVersion,
+  };
 
   // Pending predictions that target a territory on this map. A ledger
   // row counts when it is unverified and either carries no focal set or
   // carries exactly this one.
+  // Step 4 — the only bridge to the Bulletin. Every draft is built
+  // from a row that was actually measured or modeled; the Bulletin
+  // never invents a claim, and the analyst supplies the action, the
+  // window and any marketplace signals on the compose form.
+  const territoryDraft = (t, state) => {
+    const lead = t.lead;
+    const leadSentence = lead
+      ? `Lead pair: ${lead.focal_item || '—'} ${lead.direction || '·'} ${lead.other_item || '—'}, lift ${signedNum(lead.lift_points)} points across ${lead.shared_answerers != null ? lead.shared_answerers.toLocaleString() : '—'} shared answerers.`
+      : 'No measured lead pair covers this territory for this focal set.';
+    return {
+      origin: `Territory row — ${t.territory} (${state})`,
+      engagement: claimContext.engagement,
+      title: `${t.territory} — ${state}`,
+      claim_summary: [
+        ALIGNMENT_COPY[state] || `Alignment state '${state}'.`,
+        leadSentence,
+        t.territory_magnitude != null ? `Territory magnitude ${t.territory_magnitude}.` : '',
+        t.thin ? 'THIN — fewer than three pairs sit behind the lead.' : '',
+      ].filter(Boolean).join(' '),
+      claim_population: claimContext.population,
+      evidence_tier: deriveEvidenceTier(t),
+      claim_items: claimContext.focal_ids,
+    };
+  };
+
   const focalKey = focalIdsForCache.slice().map(Number).sort((a, b) => a - b).join(',');
   const pendingByTerritory = new Map();
   for (const p of (Array.isArray(predictions) ? predictions : [])) {
@@ -5487,6 +5582,12 @@ const JoyMapConnectionsSweep = ({ result, showConflicting, profileCache, onOpenP
             </li>
           ))}
         </ul>
+        {/* Resolution ladder. Which rung applied is stated here, on
+            the card, so a substitution is never silent. */}
+        <div className={`joy-map-cx-resolution rung-${resolution.rung}`}>
+          <span className="joy-map-cx-resolution-rung">{RESOLUTION_RUNG_LABEL[resolution.rung] || resolution.rung}</span>
+          <span className="joy-map-cx-resolution-line">{resolution.line}</span>
+        </div>
         <div className="joy-map-cx-focal-card-cohort">
           Cohort (<strong>{preset.label}</strong>): <strong>{result.cohort_hot != null ? result.cohort_hot.toLocaleString() : '—'}</strong> hot / <strong>{result.cohort_cool != null ? result.cohort_cool.toLocaleString() : '—'}</strong> cool.
           <span style={{fontStyle: 'italic'}}> {preset.sentence}</span>
@@ -5577,6 +5678,17 @@ const JoyMapConnectionsSweep = ({ result, showConflicting, profileCache, onOpenP
                 </div>
               )}
               {renderModeledDiamond(t)}
+              {onSendToBulletin && (
+                <div className="joy-map-cx-row-send">
+                  <button
+                    className="btn ghost joy-map-send-btn"
+                    onClick={() => onSendToBulletin(territoryDraft(t, state))}
+                    title="Pre-fill a candidate opportunity card from this row. You add the action, the window and any signals."
+                  >
+                    Send to Bulletin →
+                  </button>
+                </div>
+              )}
               {/* Row expand — territory profile. Fires only when
                   territory_key is present (LEFT JOIN could leave it
                   null if bjl_territories lags the sweep function).
@@ -5593,6 +5705,8 @@ const JoyMapConnectionsSweep = ({ result, showConflicting, profileCache, onOpenP
                     territoryName={t.territory}
                     rosterEntry={rosterEntry}
                     onOpenRoster={onOpenRoster}
+                    claimContext={claimContext}
+                    onSendToBulletin={onSendToBulletin}
                   />
                 </details>
               )}
@@ -5612,7 +5726,7 @@ const JoyMapConnectionsSweep = ({ result, showConflicting, profileCache, onOpenP
 //   unmeasured (or other) → collapsed count with expandable list
 // Roster tap sits at the bottom.
 // -------------------------------------------------------------------------
-const JoyMapTerritoryProfile = ({ profile, territoryKey, territoryName, rosterEntry, onOpenRoster }) => {
+const JoyMapTerritoryProfile = ({ profile, territoryKey, territoryName, rosterEntry, onOpenRoster, claimContext, onSendToBulletin }) => {
   if (!profile) return <div className="joy-map-cx-profile-body">Loading…</div>;
   if (profile.loading) return <div className="joy-map-cx-profile-body">Fetching territory profile…</div>;
   if (profile.error) return <div className="joy-map-cx-profile-body joy-map-error">Error: {profile.error}</div>;
@@ -5631,6 +5745,32 @@ const JoyMapTerritoryProfile = ({ profile, territoryKey, territoryName, rosterEn
     .sort((a, b) => Math.abs(b.modeled_lift_raw || 0) - Math.abs(a.modeled_lift_raw || 0));
   const otherRows = items.filter(i => i.item_verdict !== 'measured' && i.item_verdict !== 'inferred');
   const signedNum = (n) => n == null ? '—' : `${n > 0 ? '+' : ''}${n}`;
+
+  // A profile finding is a claim about one item inside the territory.
+  // Same bridge as the row-level one, narrower claim_items.
+  const ctx = claimContext || {};
+  const findingDraft = (i, measuredRow) => ({
+    origin: `Profile finding — ${territoryName} / ${i.item_wording}`,
+    engagement: ctx.engagement || '',
+    title: `${territoryName} — ${i.item_wording}`,
+    claim_summary: measuredRow
+      ? `${i.item_wording}: measured lift ${signedNum(i.measured_lift)} points between the hot and cool halves of the focal cohort (n ${i.n_hot ?? '—'} hot / ${i.n_cool ?? '—'} cool).`
+      : `${i.item_wording}: model estimate ${signedNum(i.modeled_lift_raw)} points for this cohort. Not measured — inferred from ${ctx.model_version || 'the live model'}.`,
+    claim_population: ctx.population || '',
+    evidence_tier: measuredRow ? 'measured' : 'modeled',
+    claim_items: [...(ctx.focal_ids || []), i.item_id].filter(n => Number.isFinite(Number(n))),
+  });
+
+  const sendCell = (i, measuredRow) => onSendToBulletin ? (
+    <td className="num">
+      <button className="btn ghost joy-map-send-btn tiny"
+        onClick={() => onSendToBulletin(findingDraft(i, measuredRow))}
+        title="Pre-fill a candidate opportunity card from this finding.">
+        → bulletin
+      </button>
+    </td>
+  ) : null;
+
   return (
     <div className="joy-map-cx-profile-body">
       {measured.length > 0 && (
@@ -5644,6 +5784,7 @@ const JoyMapTerritoryProfile = ({ profile, territoryKey, territoryName, rosterEn
                   <td className="num">n {i.n_hot ?? '—'}/{i.n_cool ?? '—'}</td>
                   <td className="num"><strong>{signedNum(i.measured_lift)}</strong></td>
                   <td className="num muted">model {signedNum(i.modeled_lift_raw)}</td>
+                  {sendCell(i, true)}
                 </tr>
               ))}
             </tbody>
@@ -5659,6 +5800,7 @@ const JoyMapTerritoryProfile = ({ profile, territoryKey, territoryName, rosterEn
                 <tr key={i.item_id}>
                   <td>{i.item_wording}</td>
                   <td className="num"><strong>{signedNum(i.modeled_lift_raw)}</strong></td>
+                  {sendCell(i, false)}
                 </tr>
               ))}
             </tbody>
@@ -5721,6 +5863,135 @@ const RosterTap = ({ territoryKey, rosterEntry, onOpenRoster }) => {
         </table>
       )}
     </details>
+  );
+};
+
+// -------------------------------------------------------------------------
+// BulletinCompose — step 4. The only bridge from the map to the
+// Bulletin. Everything above the rule is carried from the row that
+// produced it and is read-only-by-convention (editable, but it arrives
+// filled). Everything below the rule is the analyst's: the action, the
+// window, the signals it cites. A card lands at status='candidate'.
+// -------------------------------------------------------------------------
+const BulletinCompose = ({ draft, onClose, onCreated }) => {
+  const [form, setForm] = useState(() => ({
+    engagement:       draft.engagement || '',
+    title:            draft.title || '',
+    claim_summary:    draft.claim_summary || '',
+    claim_population: draft.claim_population || '',
+    evidence_tier:    draft.evidence_tier || 'measured',
+    action_text:      '',
+    window_label:     '',
+    owner:            '',
+    signal_ids_csv:   '',
+    notes:            '',
+  }));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const set = (k, v) => setForm(prev => ({ ...prev, [k]: v }));
+
+  const missing = ['engagement', 'title', 'claim_summary', 'claim_population', 'evidence_tier', 'action_text']
+    .filter(k => !String(form[k] || '').trim());
+
+  const submit = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      if (window.__bjlAuth && window.__bjlAuth.getSession) await window.__bjlAuth.getSession();
+      const r = await fetch('/.netlify/functions/bjl-opportunities', authedFetchInit({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'create',
+          engagement:       form.engagement.trim(),
+          title:            form.title.trim(),
+          claim_summary:    form.claim_summary.trim(),
+          claim_population: form.claim_population.trim(),
+          evidence_tier:    form.evidence_tier,
+          action_text:      form.action_text.trim(),
+          window_label:     form.window_label.trim(),
+          owner:            form.owner.trim(),
+          notes:            form.notes.trim(),
+          claim_items:      draft.claim_items || [],
+          signal_ids:       form.signal_ids_csv.split(/[,\s]+/).map(s => parseInt(s, 10)).filter(Number.isFinite),
+        }),
+      }));
+      const j = await r.json();
+      if (!r.ok) throw new Error((j && j.error) || `request failed (${r.status})`);
+      onCreated(j.opportunity);
+    } catch (e) {
+      setError(String(e.message || e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="bjl-modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="bjl-modal compose">
+        <div className="compose-head">
+          <div className="compose-title">Send to Bulletin — new candidate</div>
+          <button className="btn ghost" onClick={onClose}>Close</button>
+        </div>
+        <div className="compose-origin">Carried from: {draft.origin}</div>
+
+        <div className="compose-section-label">The claim — carried from the map</div>
+        <label className="compose-field">Engagement
+          <input type="text" value={form.engagement} onChange={(e) => set('engagement', e.target.value)}
+            placeholder="e.g. Herschend 2026 — Silver Dollar City" />
+        </label>
+        <label className="compose-field">Title
+          <input type="text" value={form.title} onChange={(e) => set('title', e.target.value)} />
+        </label>
+        <label className="compose-field">Claim
+          <textarea rows={3} value={form.claim_summary} onChange={(e) => set('claim_summary', e.target.value)} />
+        </label>
+        <label className="compose-field">Population — who was counted
+          <textarea rows={2} value={form.claim_population} onChange={(e) => set('claim_population', e.target.value)} />
+        </label>
+        <label className="compose-field">Evidence tier
+          <select value={form.evidence_tier} onChange={(e) => set('evidence_tier', e.target.value)}>
+            {EVIDENCE_TIERS.map(t => <option key={t} value={t}>{t}</option>)}
+          </select>
+        </label>
+        {form.evidence_tier !== draft.evidence_tier && (
+          <div className="compose-tier-warn">
+            The row this came from is <strong>{draft.evidence_tier}</strong>. You have changed the tier to <strong>{form.evidence_tier}</strong> — the card will say so.
+          </div>
+        )}
+
+        <div className="compose-rule" />
+        <div className="compose-section-label">The recommendation — yours</div>
+        <label className="compose-field">Action
+          <textarea rows={2} value={form.action_text} onChange={(e) => set('action_text', e.target.value)}
+            placeholder="What should the client do about it?" />
+        </label>
+        <label className="compose-field">Window
+          <input type="text" value={form.window_label} onChange={(e) => set('window_label', e.target.value)}
+            placeholder="e.g. before spring break on-sale" />
+        </label>
+        <label className="compose-field">Owner
+          <input type="text" value={form.owner} onChange={(e) => set('owner', e.target.value)} />
+        </label>
+        <label className="compose-field">Marketplace signal ids (comma-separated, optional)
+          <input type="text" value={form.signal_ids_csv} onChange={(e) => set('signal_ids_csv', e.target.value)}
+            placeholder="leave empty for an evergreen claim" />
+        </label>
+        <label className="compose-field">Notes
+          <textarea rows={2} value={form.notes} onChange={(e) => set('notes', e.target.value)} />
+        </label>
+
+        {error && <div className="joy-map-error" style={{marginTop: 10}}>Error: {error}</div>}
+        <div className="compose-actions">
+          <button className="btn primary" disabled={saving || missing.length > 0} onClick={submit}>
+            {saving ? 'Saving…' : 'Create candidate'}
+          </button>
+          {missing.length > 0 && (
+            <span className="compose-missing">Still needed: {missing.map(k => k === 'action_text' ? 'action' : k.replace(/_/g, ' ')).join(', ')}</span>
+          )}
+        </div>
+      </div>
+    </div>
   );
 };
 

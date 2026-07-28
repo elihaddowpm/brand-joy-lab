@@ -4990,3 +4990,171 @@ textarea { font-family: var(--font-text); }
 }
 .bulletin-status-control { display: flex; gap: 4px; flex-wrap: wrap; }
 .bulletin-status-control .btn { font-size: 11px; padding: 3px 8px; }
+
+/* ======================================================================
+   Joy Map workflow — the Run view (steps 1-3) and the compose drawer.
+   Plain styling; CD restyle to follow.
+   ====================================================================== */
+
+.joy-map-run { display: flex; flex-direction: column; gap: 18px; }
+
+.run-step {
+  border: 1px solid var(--iron, #e2e2dc);
+  border-radius: 3px;
+  padding: 14px 16px 16px;
+  background: var(--paper, #fbfaf6);
+}
+.run-step-head {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 14px; font-weight: 600; letter-spacing: 0.01em;
+  color: var(--ink, #1a1a17);
+  margin-bottom: 8px;
+}
+.run-step-n {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; border-radius: 50%;
+  background: var(--ink, #1a1a17); color: var(--paper, #fbfaf6);
+  font-size: 11px; font-weight: 700;
+}
+.run-step-note {
+  font-size: 13px; line-height: 1.5; max-width: 78ch;
+  color: var(--iron-darker, #5a5a55);
+  margin-bottom: 12px;
+}
+.run-step-hint { font-size: 12px; color: var(--iron-dark, #8a8a82); margin-left: 10px; }
+
+.run-doors { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 900px) { .run-doors { grid-template-columns: 1fr; } }
+.run-door {
+  border: 1px solid var(--iron, #e2e2dc);
+  border-radius: 3px;
+  padding: 10px 12px 12px;
+  background: var(--paper-2, #f4f3ed);
+}
+
+.run-ladder { margin-top: 14px; }
+.run-ladder-label {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--iron-dark, #8a8a82); margin-bottom: 5px;
+}
+.run-ladder-opt {
+  display: flex; align-items: flex-start; gap: 7px;
+  font-size: 12.5px; line-height: 1.45; color: var(--ink, #1a1a17);
+  margin-bottom: 3px; max-width: 78ch;
+}
+.run-ladder-opt.disabled { color: var(--iron-dark, #8a8a82); }
+.run-pending { font-style: italic; }
+
+.run-context-fields {
+  margin-top: 14px;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px;
+}
+.run-context-fields > label:last-child { grid-column: 1 / -1; }
+@media (max-width: 900px) { .run-context-fields { grid-template-columns: 1fr; } }
+
+.run-saved { margin-top: 14px; font-size: 12.5px; }
+.run-saved > summary { cursor: pointer; color: var(--iron-darker, #5a5a55); }
+.run-saved-list { list-style: none; margin: 8px 0 0; padding: 0; }
+.run-saved-list li {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  padding: 4px 0; border-bottom: 1px solid var(--hairline, #ecece6);
+}
+.run-saved-list .btn { font-size: 11px; padding: 2px 8px; }
+.run-saved-desc { color: var(--ink, #1a1a17); }
+.run-saved-meta { color: var(--iron-dark, #8a8a82); font-size: 11.5px; }
+.run-saved-note {
+  margin-top: 8px; font-size: 11.5px; font-style: italic;
+  color: var(--iron-dark, #8a8a82); max-width: 78ch;
+}
+
+.run-cohort-sentence {
+  margin-top: 8px; font-size: 13px; font-style: italic;
+  color: var(--iron-darker, #5a5a55); max-width: 78ch;
+}
+
+.joy-map-cx-column-head-label {
+  font-size: 12px; font-weight: 600; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--iron-darker, #5a5a55);
+  margin-bottom: 8px;
+}
+
+/* Resolution ladder line on the focal card. A substitution is never
+   silent — rung (b) is tinted so it reads as a caveat, not a caption. */
+.joy-map-cx-resolution {
+  margin: 8px 0; padding: 6px 9px; border-radius: 2px;
+  font-size: 12.5px; line-height: 1.45;
+  border-left: 3px solid var(--iron, #e2e2dc);
+  background: var(--paper-2, #f4f3ed);
+}
+.joy-map-cx-resolution.rung-substituted {
+  border-left-color: #7a5b1d; background: #fdf8ec;
+}
+.joy-map-cx-resolution.rung-fielded { border-left-color: #1d6a58; }
+.joy-map-cx-resolution-rung {
+  display: block; font-size: 10.5px; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--iron-dark, #8a8a82); margin-bottom: 2px;
+}
+.joy-map-cx-resolution-line { color: var(--ink, #1a1a17); }
+
+/* Step 4 affordances. */
+.joy-map-cx-row-send { margin-top: 6px; }
+.joy-map-send-btn { font-size: 11px; padding: 3px 9px; }
+.joy-map-send-btn.tiny { font-size: 10.5px; padding: 1px 6px; }
+
+.joy-map-toast {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 10px 0; padding: 8px 12px;
+  border: 1px solid #b6d4c8; background: #eef7f3; border-radius: 2px;
+  font-size: 13px; color: var(--ink, #1a1a17);
+}
+.joy-map-toast .btn { font-size: 11px; padding: 2px 8px; }
+
+/* Compose drawer — the bridge from the map to the Bulletin. */
+.bjl-modal-backdrop {
+  position: fixed; inset: 0; z-index: 900;
+  background: rgba(26, 26, 23, 0.42);
+  display: flex; align-items: flex-start; justify-content: center;
+  overflow-y: auto; padding: 40px 16px;
+}
+.bjl-modal {
+  background: var(--paper, #fbfaf6);
+  border: 1px solid var(--iron, #e2e2dc);
+  border-radius: 3px;
+  padding: 18px 20px 20px;
+  width: 100%; max-width: 640px;
+}
+.compose-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin-bottom: 4px;
+}
+.compose-title { font-size: 15px; font-weight: 600; color: var(--ink, #1a1a17); }
+.compose-origin {
+  font-size: 11.5px; color: var(--iron-dark, #8a8a82);
+  margin-bottom: 14px;
+}
+.compose-section-label {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--iron-dark, #8a8a82); margin: 0 0 8px;
+}
+.compose-field { display: block; font-size: 12px; color: var(--iron-darker, #5a5a55); margin-bottom: 10px; }
+.compose-field input,
+.compose-field select,
+.compose-field textarea {
+  display: block; width: 100%; margin-top: 3px;
+  font-family: inherit; font-size: 13px;
+  padding: 5px 7px;
+  border: 1px solid var(--iron, #e2e2dc); border-radius: 2px;
+  background: #fff; color: var(--ink, #1a1a17);
+}
+.compose-field textarea { resize: vertical; }
+.compose-rule {
+  height: 1px; background: var(--iron, #e2e2dc);
+  margin: 6px 0 14px;
+}
+.compose-tier-warn {
+  font-size: 12px; color: #7a5b1d;
+  background: #fdf8ec; border: 1px solid #e6d3a8; border-radius: 2px;
+  padding: 5px 8px; margin-bottom: 10px;
+}
+.compose-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
+.compose-missing { font-size: 11.5px; color: #7a2e10; }
