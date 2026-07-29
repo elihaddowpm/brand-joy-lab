@@ -4925,7 +4925,10 @@ const JoyMapMode = () => {
     }
   };
 
-  const runConnectionsColumn = async (columnId) => {
+  // forceRungB re-runs the same query but tells the resolver to skip
+  // its own items and read the category around them instead. It is the
+  // one-tap escape offered by the pre-run halt card.
+  const runConnectionsColumn = async (columnId, forceRungB) => {
     const col = cxColumns.find(c => c.id === columnId);
     if (!col) return;
     const ids = col.focalIdsCsv
@@ -4941,7 +4944,7 @@ const JoyMapMode = () => {
     const invoke = async () => fetch('/.netlify/functions/bjl-joy-map-connections', authedFetchInit({
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(ids.length > 0 ? { focal_item_ids: ids } : { query }),
+      body: JSON.stringify(ids.length > 0 ? { focal_item_ids: ids } : { query, force_rung_b: !!forceRungB }),
     }));
     try {
       if (window.__bjlAuth && window.__bjlAuth.getSession) await window.__bjlAuth.getSession();
@@ -5184,10 +5187,10 @@ const JoyMapMode = () => {
                         onOpenRoster={(tKey) => fetchRoster(tKey)}
                         predictions={cxPredictions.rows}
                         cohortPreset={cxCohortPreset}
-                        queryText={col.queryInput}
                         doorLabel={col.label}
                         engagement={runEngagement}
                         onSendToBulletin={setCompose}
+                        onRunRungB={col.queryInput.trim() ? () => runConnectionsColumn(col.id, true) : null}
                       />
                     )}
                   </div>
@@ -5294,49 +5297,15 @@ const COHORT_PRESETS = [
 // where a content word of the query survives into a resolved item
 // name; anything else is a substitution and says so on the focal card.
 // -------------------------------------------------------------------------
-const RESOLUTION_STOPWORDS = new Set([
-  'the','and','for','with','who','that','from','into','their','they','are','was',
-  'fans','lover','lovers','people','person','customers','shoppers','buyers',
-  'visitors','guests','goers','brand','brands','company','park','parks',
-]);
-
-const resolutionTokens = (s) => String(s || '')
-  .toLowerCase()
-  .replace(/[^a-z0-9\s]/g, ' ')
-  .split(/\s+/)
-  .filter(t => t.length >= 3 && !RESOLUTION_STOPWORDS.has(t));
-
-const brandResolution = (result, queryText, doorLabel, presetLabel) => {
-  const focals = Array.isArray(result.focals) ? result.focals : [];
-  const names = focals.map(f => f.item_name || `#${f.item_id}`);
-  const query = (queryText || '').trim();
-  if (!query) {
-    return {
-      rung: 'direct',
-      line: `Focal items entered by id — no resolution step. Reading: ${names.join(', ') || '—'}.`,
-    };
-  }
-  const qTokens = resolutionTokens(query);
-  const matched = focals.filter(f => {
-    const nameTokens = new Set(resolutionTokens(f.item_name));
-    return qTokens.some(t => nameTokens.has(t));
-  });
-  if (matched.length > 0) {
-    return {
-      rung: 'fielded',
-      line: `"${query}" is fielded. Reading it directly off ${matched.map(f => f.item_name || `#${f.item_id}`).join(', ')}.`,
-    };
-  }
-  return {
-    rung: 'substituted',
-    line: `${query} isn't fielded nationally; reading through: ${names.join(', ') || 'no items'}, ${doorLabel || 'this door'}, ${presetLabel || 'the cohort'}.`,
-  };
-};
-
+// The rung is decided on the server, where eligibility against the
+// scored ledger is knowable. The client used to guess it by looking for
+// query tokens surviving into an item name; that guess could not see
+// whether the item was scored, which is the thing that actually matters.
 const RESOLUTION_RUNG_LABEL = {
-  direct:      'Rung — direct ids',
-  fielded:     'Rung a — brand items fielded',
-  substituted: 'Rung b — brand unfielded, read through substitutes',
+  direct: 'Rung — direct ids',
+  a:      'Rung a — fielded on scored items',
+  b:      'Rung b — unfielded, read through substitutes',
+  none:   'Ladder exhausted — nothing scored to read',
 };
 
 // Evidence tiers offered on a bulletin card. A draft arrives with the
@@ -5354,7 +5323,7 @@ const deriveEvidenceTier = (t) => {
   return spoke ? 'modeled' : 'unmeasured';
 };
 
-const JoyMapConnectionsSweep = ({ result, showConflicting, profileCache, onOpenProfile, rosterCache, onOpenRoster, predictions, cohortPreset, queryText, doorLabel, engagement, onSendToBulletin }) => {
+const JoyMapConnectionsSweep = ({ result, showConflicting, profileCache, onOpenProfile, rosterCache, onOpenRoster, predictions, cohortPreset, doorLabel, engagement, onSendToBulletin, onRunRungB }) => {
   if (!result || !Array.isArray(result.territories)) return null;
 
   // Front-door escalation surface. When the brief comes back as
@@ -5394,6 +5363,22 @@ const JoyMapConnectionsSweep = ({ result, showConflicting, profileCache, onOpenP
       <div className="conn-clarify" style={{marginTop: 12}}>
         <div className="conn-clarify-eyebrow">No focals</div>
         <div className="conn-clarify-question">{result.note}</div>
+      </div>
+    );
+  }
+  // Ladder exhausted. Nothing the resolver found is in the scored
+  // ledger and the category behind it has nothing either. Saying so is
+  // the whole output — there is no map underneath this.
+  if (result.resolution && result.resolution.rung === 'none') {
+    return (
+      <div className="conn-clarify" style={{marginTop: 12}}>
+        <div className="conn-clarify-eyebrow">Resolution ladder exhausted</div>
+        <div className="conn-clarify-question">{result.resolution.line}</div>
+        {Array.isArray(result.resolution.dropped) && result.resolution.dropped.length > 0 && (
+          <div className="conn-clarify-reason">
+            Dropped: {result.resolution.dropped.map(d => `${d.item_name || `#${d.item_id}`} (id ${d.item_id})`).join('; ')}
+          </div>
+        )}
       </div>
     );
   }
@@ -5508,7 +5493,8 @@ const JoyMapConnectionsSweep = ({ result, showConflicting, profileCache, onOpenP
   ).length;
   const focalIdsForCache = focals.map(f => f.item_id);
   const preset = COHORT_PRESETS.find(p => p.key === cohortPreset) || COHORT_PRESETS[0];
-  const resolution = brandResolution(result, queryText, doorLabel, preset.label);
+  const resolution = result.resolution || { rung: 'direct', line: '' };
+  const halt = result.halt || null;
 
   // The population sentence every claim inherits. One string, written
   // once, so a card in the Bulletin says exactly what the focal card
@@ -5517,7 +5503,7 @@ const JoyMapConnectionsSweep = ({ result, showConflicting, profileCache, onOpenP
     `${preset.label} cohort on ${focals.map(f => f.item_name || `#${f.item_id}`).join(' + ') || 'the focal set'}` +
     ` — ${result.cohort_hot != null ? result.cohort_hot.toLocaleString() : '—'} hot / ` +
     `${result.cohort_cool != null ? result.cohort_cool.toLocaleString() : '—'} cool. ${preset.sentence}` +
-    (resolution.rung === 'substituted' ? ` Substitution: ${resolution.line}` : '');
+    (resolution.rung === 'b' ? ` Substitution: ${resolution.line}` : '');
 
   const claimContext = {
     engagement: engagement || '',
@@ -5598,6 +5584,24 @@ const JoyMapConnectionsSweep = ({ result, showConflicting, profileCache, onOpenP
           </div>
         )}
       </div>
+      {/* Gate 3 — pre-run halt. The rows are withheld, not emptied:
+          sixteen leads computed off a handful of people read exactly
+          like sixteen leads computed off thousands. */}
+      {halt && (
+        <div className="joy-map-cx-halt">
+          <div className="joy-map-cx-halt-eyebrow">Halted — cohort below floor</div>
+          <div className="joy-map-cx-halt-line">{halt.line}</div>
+          <div className="joy-map-cx-halt-ladder">
+            Ladder outcome: {RESOLUTION_RUNG_LABEL[resolution.rung] || resolution.rung}. {resolution.line}
+          </div>
+          {resolution.rung !== 'b' && onRunRungB && (
+            <button className="btn primary" onClick={onRunRungB}>
+              Read the category instead
+            </button>
+          )}
+        </div>
+      )}
+      {!halt && (
       <ul className="joy-map-cx-sweep-rows">
         {territories.map(t => {
           const verdictClass = `verdict-${t.verdict || 'unknown'}`;
@@ -5714,6 +5718,7 @@ const JoyMapConnectionsSweep = ({ result, showConflicting, profileCache, onOpenP
           );
         })}
       </ul>
+      )}
     </div>
   );
 };
