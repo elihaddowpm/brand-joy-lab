@@ -6198,7 +6198,13 @@ const OpportunityBulletin = ({ predictionState, onLoadPredictions }) => {
             return (
               <div key={o.opportunity_id} className={`bulletin-card status-${o.status || 'unknown'}`}>
                 <div className="bulletin-card-head">
-                  {o.register_number != null && <span className="bulletin-register">#{o.register_number}</span>}
+                  {/* register_number is the lineage link to the analyst's
+                      working register. Seed-loaded cards carry one; cards
+                      made in the tool are born without one, and that is
+                      correct — they are tool-native. Renders as a dash
+                      rather than vanishing, so the absence reads as a
+                      property of the card, not as a missing field. */}
+                  <span className="bulletin-register">{o.register_number != null ? `#${o.register_number}` : '—'}</span>
                   <span className="bulletin-title">{o.title}</span>
                   <span className={`bulletin-status-badge status-${o.status || 'unknown'}`}>{o.status || 'unknown'}</span>
                 </div>

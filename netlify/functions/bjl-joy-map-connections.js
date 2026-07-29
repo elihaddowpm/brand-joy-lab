@@ -69,6 +69,35 @@
  * empty and `halt` explains why — the client renders the focal card in
  * an error state instead of sixteen rows of noise.
  *
+ * REGRESSION FIXTURE for the gate. Use this phrasing, not a bare brand
+ * name — see the forensic note below for why:
+ *   query "people who have problems with their internet provider"
+ *   -> Haiku picks 5008 and 5009 (it reasons, verbatim, that "item 5009
+ *      specifically addresses internet provider issues")
+ *   -> the eligibility gate drops both; neither is in bjl_conn_centered_v2
+ *   -> rung b substitutes 4589 "Having access to HIGH-SPEED INTERNET in
+ *      your home"
+ *   -> cohort 6,510 hot / 1,324 cool, sixteen live rows, leads:
+ *      treats +17.6 (n=1,665), value-groceries +20.8 (n=7,452),
+ *      bath +20.7, gift +16.9 at 81%
+ *   Item 5009 must never appear in focals at any rung.
+ *
+ * Forensic note, kept because it corrects the obvious assumption. The
+ * bare string "Hotwire Communications" does NOT reproduce the bug and
+ * never did: the concept extractor emits multi-word terms, the shortlist
+ * matches by literal substring LIKE, so nothing matches, the shortlist
+ * is empty and the front door returns needs_clarification. Verified
+ * stable across repeated runs. The original live failure therefore
+ * carried category language alongside the brand name — which is what
+ * reaches the poisoned shortlist and what the fixture above reproduces.
+ *
+ * That dead-end is worth naming as a fourth gate nobody designed: an
+ * unfielded brand name cannot reach fabrication, because it cannot even
+ * reach the shortlist. Clarification is the correct answer for an n=1
+ * brand. Anything that later makes term matching fuzzier (trigram,
+ * embeddings) removes this accidental protection and puts the whole
+ * weight back on the eligibility gate.
+ *
  * Verdicts on the measured side (from sweep_v2):
  *   measured   — lead pair meets the |r| threshold
  *   flat       — lead exists but the correlation is under the flat
