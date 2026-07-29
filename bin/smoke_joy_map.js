@@ -29,6 +29,18 @@
  *             the shortlist ordering surfaces scored items
  *
  * Exits non-zero if any assertion fails.
+ *
+ * A note on what these assertions do and do not pin. The gate case checks
+ * lifts to the tenth but checks a base on only one of the four leads. That
+ * is fine for regression purposes — the lift is the thing that moves when
+ * the resolver breaks. It is not fine as a model of how the numbers should
+ * be read: Body & Restoration leads at +20.7 on n=375 while Money &
+ * Security leads at +20.8 on n=7,452, and those are not peer claims. The
+ * rendering contract is that no number appears without its n at equal
+ * prominence, base first, so every lift arrives pre-qualified. Visual
+ * confidence weighting is the proper treatment and sits with the CD brief.
+ * Do not read a passing fixture as a statement that two equal lifts carry
+ * equal weight.
  */
 const path = require('path');
 const fs = require('fs');

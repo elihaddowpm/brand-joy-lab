@@ -5409,10 +5409,17 @@ const JoyMapConnectionsSweep = ({ result, showConflicting, profileCache, onOpenP
         {row.other_family && row.other_family !== 'joy' && (
           <span className="joy-map-cx-pair-family"> · {row.other_family}</span>
         )}
+        {/* Rendering contract: no number appears without its n at equal
+            prominence, and the base leads so every lift arrives
+            pre-qualified by the evidence under it. A +20.7 on n=375 and a
+            +20.8 on n=7,452 are not peers, and the line must not let them
+            read as peers. Visual confidence weighting — bar weight scaled
+            to base — is the proper treatment and belongs to the CD brief;
+            this ordering is the cheap half that holds until then. */}
         <span className="joy-map-cx-pair-metrics">
-          {row.shared_answerers != null && <span>{row.shared_answerers.toLocaleString()} shared</span>}
-          {row.pct_move_together != null && <span> · {row.pct_move_together}%</span>}
-          {row.lift_points != null && <span> · lift <strong style={{color: directionColor(row.direction)}}>{signedNum(row.lift_points)}</strong></span>}
+          {row.shared_answerers != null && <span>n={row.shared_answerers.toLocaleString()}</span>}
+          {row.pct_move_together != null && <span> · {row.pct_move_together}% together</span>}
+          {row.lift_points != null && <span> · <strong style={{color: directionColor(row.direction)}}>{signedNum(row.lift_points)}</strong></span>}
         </span>
       </div>
     );
