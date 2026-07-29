@@ -208,6 +208,19 @@ Return ONLY a JSON array of strings, no preamble.${shapeHint}`;
   }
 }
 
+// Ranking note. The old tiebreak was `hit_count DESC, name_len DESC`,
+// which was presumably meant to prefer descriptive names and instead
+// built an open-end promotion engine: long strings are question-shaped
+// ("What types of problems do you have with your Internet…"), short
+// ones are item-shaped ("Having access to HIGH-SPEED INTERNET in your
+// home"). On any open-end-heavy topic every candidate Haiku saw was an
+// unscored verbatim item. So the tiebreak is inverted, and membership
+// in bjl_conn_centered_v2 — the scored ledger — leads the sort.
+//
+// Open-ends are ranked down, never dropped. Verbatim surfaces
+// legitimately want them; they just should not crowd out scored items
+// for the quant surfaces. Every row carries in_centered so a consumer
+// can filter on it explicitly rather than infer it from position.
 async function buildCandidateShortlist(terms) {
   if (terms.length === 0) return [];
   const orConds = terms.map(t =>
@@ -226,9 +239,11 @@ async function buildCandidateShortlist(terms) {
       WHERE ${orConds}
       ORDER BY LOWER(item_name), item_id
     )
-    SELECT item_id, item_name, primary_topic, canonical_brand, is_brand, is_location, hit_count
-    FROM matches
-    ORDER BY hit_count DESC, name_len DESC
+    SELECT m.item_id, m.item_name, m.primary_topic, m.canonical_brand,
+           m.is_brand, m.is_location, m.hit_count,
+           EXISTS (SELECT 1 FROM bjl_conn_centered_v2 c WHERE c.item_id = m.item_id) AS in_centered
+    FROM matches m
+    ORDER BY in_centered DESC, hit_count DESC, name_len ASC
     LIMIT 60
   `;
   const { data, error } = await supabase.rpc('execute_read_sql', { query_text: sql });
@@ -240,6 +255,7 @@ async function buildCandidateShortlist(terms) {
     canonical_brand: r.canonical_brand || null,
     is_brand:        !!r.is_brand,
     is_location:     !!r.is_location,
+    in_centered:     !!r.in_centered,
   }));
 }
 
@@ -249,7 +265,7 @@ async function buildCandidateShortlist(terms) {
 async function pickSemanticSubjects(query, shape, shortlist) {
   if (shortlist.length === 0) return { picks: [], reason: 'shortlist empty' };
   const candidates = shortlist.map(c =>
-    `${c.item_id}: "${c.item_name}"${c.primary_topic ? ` [${c.primary_topic}]` : ''}${c.canonical_brand ? ` (brand: ${c.canonical_brand})` : ''}`
+    `${c.item_id}: "${c.item_name}"${c.primary_topic ? ` [${c.primary_topic}]` : ''}${c.canonical_brand ? ` (brand: ${c.canonical_brand})` : ''}${c.in_centered ? '' : ' <unscored: open-end / verbatim only>'}`
   ).join('\n');
   const shapeGuide = shape === 'brand_lookup'
     ? 'This is a brand_lookup — prefer items whose canonical_brand matches the named brand.'
@@ -269,6 +285,7 @@ async function pickSemanticSubjects(query, shape, shortlist) {
 Rules:
 - 0 to 4 picks. Prefer 1-3 unless the corpus clearly carries the same subject under multiple framings.
 - The item must be the SEMANTIC SUBJECT of the query, not an incidental token match. An item literally named "non" on a query about non-fans is wrong; an item named "Silver Dollar" is right for a Silver Dollar City query.
+- Candidates tagged <unscored: open-end / verbatim only> carry no numeric responses. They are the right answer only when the query is asking to read what people SAID. For anything measured, prefer a scored candidate even when the open-end's wording looks like a closer match — an open-end's question text repeats the topic and reads as a better match than it is.
 - ${shapeGuide}
 - confidence:
     high = the item(s) clearly name the query's subject
@@ -406,6 +423,9 @@ async function resolveEntities(query, shape, context) {
       primary_topic: c.primary_topic,
       match_basis:  'reasoning',    // 'reasoning' | 'embedding' (embedding not wired in Step 1)
       confidence:   picked.confidence,
+      // Carried through so a quant consumer can filter on scoredness
+      // explicitly instead of inferring it from shortlist position.
+      in_centered:  c.in_centered,
     }));
 
   // Brands: any picked item that is_brand or has a canonical_brand.

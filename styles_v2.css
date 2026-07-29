@@ -5086,15 +5086,33 @@ textarea { font-family: var(--font-text); }
   border-left: 3px solid var(--iron, #e2e2dc);
   background: var(--paper-2, #f4f3ed);
 }
-.joy-map-cx-resolution.rung-substituted {
+.joy-map-cx-resolution.rung-b {
   border-left-color: #7a5b1d; background: #fdf8ec;
 }
-.joy-map-cx-resolution.rung-fielded { border-left-color: #1d6a58; }
+.joy-map-cx-resolution.rung-a { border-left-color: #1d6a58; }
 .joy-map-cx-resolution-rung {
   display: block; font-size: 10.5px; text-transform: uppercase;
   letter-spacing: 0.08em; color: var(--iron-dark, #8a8a82); margin-bottom: 2px;
 }
 .joy-map-cx-resolution-line { color: var(--ink, #1a1a17); }
+
+/* Gate 3 — the pre-run halt stands where the sixteen rows would be. */
+.joy-map-cx-halt {
+  margin: 12px 0; padding: 12px 14px; border-radius: 3px;
+  border: 1px solid #d8b8a8; background: #fbf0ec;
+}
+.joy-map-cx-halt-eyebrow {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em;
+  color: #7a2e10; margin-bottom: 5px;
+}
+.joy-map-cx-halt-line {
+  font-size: 13.5px; line-height: 1.5; color: var(--ink, #1a1a17);
+}
+.joy-map-cx-halt-ladder {
+  margin-top: 7px; font-size: 12px; line-height: 1.45;
+  color: var(--iron-darker, #5a5a55);
+}
+.joy-map-cx-halt .btn { margin-top: 10px; }
 
 /* Step 4 affordances. */
 .joy-map-cx-row-send { margin-top: 6px; }
