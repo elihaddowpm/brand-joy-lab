@@ -640,6 +640,221 @@ async function retrieveInsightsTokenFallback(question) {
 // Retrieval orchestrator
 // =============================================================
 
+// =============================================================
+// Demographic segments — the eighth layer
+// =============================================================
+//
+// The only demographic surface the public tool has is
+// bjl_public_segment_read(p_item integer, p_field text), which returns
+// (segment, n, joy_index, vs_overall). Every guardrail is enforced inside
+// the function, not here:
+//   - cell floor: HAVING count(*) >= 60, so thin cells never come back
+//   - political items: item_name matched against a party/office/issue regex
+//     and suppressed to zero rows
+//   - field whitelist: a CASE with ELSE NULL, so 'state', 'city' and any
+//     other unlisted field return zero rows rather than data
+//   - occupation write-ins ('Other - Write In') excluded
+// Do not re-implement any of that here, and do not reach past the function
+// to bjl_respondents. This layer's whole job is to pick a legitimate
+// item_id, name a whitelisted field, and pass both through.
+//
+// ---------------------------------------------------------------------
+// THE ID SPACE. Read this before touching resolveSegmentItem.
+//
+// bjl_public_segment_read keys on bjl_items.item_id (it filters
+// bjl_responses.item_id and checks bjl_items). The retrieval layers in
+// this file do NOT carry that id. bjl_scores_public_safe has no item_id
+// column at all; retrieveScores aliases `question_id AS item_id`, and
+// question_id is a DIFFERENT KEY SPACE THAT COLLIDES NUMERICALLY.
+// Worked example, live at the time of writing:
+//   bjl_scores_public_safe.question_id 84 = "A Theme Park Trip"
+//   bjl_items.item_id            84 = "I wanted to see or touch the
+//                                      item in person before buying"
+//   bjl_items.item_id          1393 = "A Theme Park Trip"
+// Passing the payload's `item_id` into this function would therefore
+// return a real, plausible, confidently-wrong segment table — retail
+// browsing behaviour presented to a visitor as theme-park demographics.
+// There is no error to catch; it just lies. So the bridge is item_name,
+// resolved explicitly below, and NEVER the payload's item_id field.
+//
+// Resolving by name is ambiguous for about a quarter of the public
+// corpus (651 of 904 distinct public item names hit exactly one
+// bjl_items row; 225 hit several; 28 hit none). The collisions are
+// benign — the same question fielded across waves or filed under two
+// topics — so the tiebreak is joy-row count: read the fullest fielding
+// of the concept. Same principle as the rung-B anchor pick.
+//
+// Resolution starts from item names that are already in
+// bjl_scores_public_safe, which is what keeps this inside the public
+// gate. Note that the function itself has no public_safe check — its
+// only content gate is the political regex — so widening the resolution
+// input beyond public-safe names would walk demographic data out of the
+// public corpus. Keep the input where it is.
+// ---------------------------------------------------------------------
+
+const SEGMENT_FIELD_CUES = [
+  // Ordered: the decision-role cues are checked first because they are the
+  // most specific, and their vocabulary ("who decides where to go on
+  // vacation") overlaps every other cue class.
+  ['decisionmaker_vacation', /\b(decision[- ]?makers?|decides?|deciding|decision[- ]?role|who books|who plans|books? the)\b/i, /\b(vacation|trip|travel|holiday|getaway)\b/i],
+  ['decisionmaker_groceries', /\b(decision[- ]?makers?|decides?|deciding|decision[- ]?role|who buys|who shops|does the shopping)\b/i, /\b(grocer|groceries|supermarket|food shopping|household shopping)\b/i],
+  ['occupation', /\b(occupations?|professions?|professional|jobs?|careers?|industry|work in|working in|blue[- ]collar|white[- ]collar|nurses?|teachers?|doctors?|engineers?|drivers?|managers?|retail workers?|healthcare workers?)\b/i],
+  ['generation', /\b(ages?|aged|younger|youngest|older|oldest|young people|old people|generations?|gen ?z|millennials?|boomers?|gen ?x|silent generation|teens?|twentysomethings?)\b/i],
+  ['income_bracket', /\b(income|incomes|earnings?|earners?|salary|salaries|wealth|wealthy|affluent|rich|poor|low[- ]income|high[- ]income|middle class|working class|bracket)\b/i],
+  ['region', /\b(regions?|regional|northeast|midwest|southern|southeast|southwest|northwest|west coast|east coast|part of the country|geograph)\b/i],
+  ['gender', /\b(genders?|men|women|male|females?|males)\b/i],
+];
+
+// Geography below region is not on the whitelist and never will be at this
+// cell size. Detected explicitly so the answer can offer region instead of
+// letting the question fall through to "no data", which would read as the
+// corpus being silent rather than the cut being unavailable.
+const SEGMENT_GEO_TOO_FINE = /\b(by state|per state|which states?|state[- ]by[- ]state|each state|by city|which cit(y|ies)|by zip|zip code|by county|metro area|dma)\b/i;
+
+// Party and office language is refused at the question level. The function
+// also suppresses political ITEMS, but that guard cannot see a question
+// that asks for a political CUT of a non-political item, which is the
+// shape that actually shows up ("how do Republicans feel about camping").
+const SEGMENT_POLITICAL = /\b(democrats?|republicans?|liberals?|conservatives?|progressives?|politics|political|party affiliation|voters?|maga|left[- ]wing|right[- ]wing|red state|blue state|trump|biden|harris)\b/i;
+
+function detectSegmentField(question) {
+  const q = String(question || '');
+  if (SEGMENT_POLITICAL.test(q)) return { field: null, unavailable: 'political', cues: [] };
+  if (SEGMENT_GEO_TOO_FINE.test(q)) return { field: null, unavailable: 'geography_too_fine', cues: [] };
+  for (const [field, cue, qualifier] of SEGMENT_FIELD_CUES) {
+    if (cue.test(q) && (!qualifier || qualifier.test(q))) {
+      return { field, unavailable: null, cues: qualifier ? [cue, qualifier] : [cue] };
+    }
+  }
+  return { field: null, unavailable: null, cues: [] };
+}
+
+// Words that describe the SHAPE of a question rather than its subject.
+// Left in the topic terms they drag the match toward whatever item happens
+// to have a chatty question label, which is how "does joy in going out to
+// eat differ by region" first resolved to a spa trip.
+const SEGMENT_FRAMING_WORDS = new Set([
+  'joy','joyful','joys','happy','happier','happiness','feel','feels','feeling',
+  'differ','differs','different','difference','differences','vary','varies',
+  'compare','compared','comparison','versus','score','scores','scored','rate',
+  'rated','rates','rating','ratings','index','high','higher','highest','low',
+  'lower','lowest','best','worst','love','loves','enjoy','enjoys','prefer',
+  'prefers','think','thinks','matter','matters',
+]);
+
+function segmentTopicTerms(question, cues) {
+  // Strip the cue language first. "young people", "nurses" and "by region"
+  // describe the CUT; they are not the topic, and leaving them in the search
+  // pulls the match toward items that merely discuss demographics.
+  let stripped = String(question || '');
+  for (const re of (cues || [])) {
+    stripped = stripped.replace(new RegExp(re.source, re.flags.includes('g') ? re.flags : re.flags + 'g'), ' ');
+  }
+  const terms = [];
+  for (const t of tokenize(stripped)) {
+    if (SEGMENT_FRAMING_WORDS.has(t)) continue;
+    // Crude singularisation, because the corpus names things in the
+    // singular ("A Vacation") and visitors ask in the plural ("vacations").
+    const singular = (t.length > 4 && t.endsWith('s') && !t.endsWith('ss')) ? t.slice(0, -1) : t;
+    if (singular.length >= 3 && !terms.includes(singular)) terms.push(singular);
+  }
+  return terms.slice(0, 6);
+}
+
+// Bridge from public-safe item NAMES to bjl_items.item_id.
+//
+// This deliberately does NOT reuse the ordering of the main score
+// retrieval. That layer searches item_name OR question OR category_key and
+// ranks by hit count then n, which is right for feeding prose (a loose
+// adjacent row still reads as context) and wrong here (a loose row becomes
+// a demographic table about the wrong subject, stated with full
+// confidence). So the topic match is run again, over item_name only,
+// ranked by how many topic terms the name actually covers.
+//
+// It fails closed. No name covering a topic term means no item, which the
+// caller reports as `no_scored_item` and the prompt turns into silence on
+// demographics. A wrong cut is far more expensive than a missing one.
+async function resolveSegmentItem(question, cues) {
+  const terms = segmentTopicTerms(question, cues);
+  if (terms.length === 0) return null;
+
+  const coverage = terms
+    .map(t => `(CASE WHEN s.item_name ILIKE '%${sqlEscape(t)}%' THEN 1 ELSE 0 END)`)
+    .join(' + ');
+  const anyMatch = terms.map(t => `s.item_name ILIKE '%${sqlEscape(t)}%'`).join(' OR ');
+
+  const sql = `
+    WITH pub AS (
+      SELECT DISTINCT s.item_name, (${coverage})::int AS covered
+      FROM bjl_scores_public_safe s
+      WHERE ${anyMatch}
+    ),
+    cand AS (
+      SELECT p.covered, i.item_id, i.item_name,
+             count(*) FILTER (WHERE r.joy_index IS NOT NULL) AS joy_rows
+      FROM pub p
+      JOIN bjl_items i ON LOWER(i.item_name) = LOWER(p.item_name)
+      LEFT JOIN bjl_responses r ON r.item_id = i.item_id
+      GROUP BY p.covered, i.item_id, i.item_name
+    )
+    SELECT item_id, item_name, covered, joy_rows
+    FROM cand
+    WHERE joy_rows > 0
+    ORDER BY covered DESC, joy_rows DESC
+    LIMIT 1
+  `;
+  const { data, error } = await supabase.rpc('execute_read_sql', { query_text: sql });
+  if (error) {
+    console.error('[bjl-public-chat] resolveSegmentItem error:', error.message);
+    return null;
+  }
+  if (!Array.isArray(data) || data.length === 0) return null;
+  const best = data[0];
+  return { item_id: Number(best.item_id), item_name: best.item_name, covered: Number(best.covered) };
+}
+
+async function retrieveSegments(question) {
+  const { field, unavailable, cues } = detectSegmentField(question);
+  if (unavailable) return { requested: true, field: null, unavailable, item: null, rows: [] };
+  if (!field) return { requested: false, field: null, unavailable: null, item: null, rows: [] };
+
+  const item = await resolveSegmentItem(question, cues);
+  if (!item) return { requested: true, field, unavailable: 'no_scored_item', item: null, rows: [] };
+
+  const sql = `SELECT segment, n, joy_index, vs_overall
+               FROM bjl_public_segment_read(${item.item_id}, '${sqlEscape(field)}')`;
+  const { data, error } = await supabase.rpc('execute_read_sql', { query_text: sql });
+  if (error) {
+    console.error('[bjl-public-chat] retrieveSegments error:', error.message);
+    return { requested: true, field, unavailable: 'read_failed', item, rows: [] };
+  }
+  // Non-answer buckets are not segments. The function already drops the
+  // occupation write-in bucket, but "Prefer not to answer" and "Not
+  // applicable" survive it, and on a live occupation read both come back
+  // large enough to clear the floor and get quoted. "People who declined
+  // to state their job are eight points below average" is a sentence about
+  // the questionnaire, not about people. Dropped here rather than left to
+  // the prompt, because a rule the model has to remember is a rule that
+  // eventually gets forgotten. This does not affect vs_overall, which the
+  // function computes across every answerer before segmenting.
+  const NON_ANSWER = /^(prefer not to answer|not applicable|n\/a|none of the above|other)$/i;
+  const rows = (Array.isArray(data) ? data : []).filter(r => !NON_ANSWER.test(String(r.segment || '').trim()));
+  // Zero rows is a real answer, not an empty result: either the item is
+  // political and suppressed, or every cell fell under the floor of 60.
+  // Either way the honest report is that the cut cannot be shown, which is
+  // why `suppressed` is distinguished from `requested: false`.
+  return {
+    requested: true, field, item,
+    unavailable: rows.length === 0 ? 'suppressed' : null,
+    rows: rows.map(r => ({
+      segment: r.segment,
+      n: Number(r.n),
+      joy_index: Number(r.joy_index),
+      vs_overall: Number(r.vs_overall),
+    })),
+  };
+}
+
 async function retrieve(question) {
   const queryEmbedding = await embedQuery(question);
   const semanticAvailable = !!queryEmbedding;
@@ -705,8 +920,15 @@ async function retrieve(question) {
   const hasStrongStructured =
     (scores.length + ordinal.length + agreement.length + distributions.length + batteries.length) > 0;
 
+  // Eighth layer. It resolves its own item rather than borrowing the score
+  // retrieval's ordering, for the reason spelled out on resolveSegmentItem,
+  // and it only issues queries when the question actually asks for a
+  // demographic cut. Ordinary questions pay nothing for it.
+  const segments = await retrieveSegments(question);
+
   return {
     scores, ordinal, agreement, distributions, batteries, laws, insights, truths,
+    segments,
     global_extremes: globalExtremes,    // v6.9 — always available; the synthesizer reaches for it on superlative questions
     semantic_available: semanticAvailable,
     best_semantic_distance: Number.isFinite(bestSemanticDistance) ? bestSemanticDistance : null,
@@ -805,6 +1027,21 @@ function buildRetrievedPayloadForLLM(retrieved) {
       source_n: r.source_n,
       distance: r.distance != null ? Number(Number(r.distance).toFixed(3)) : null,
     })),
+    // The demographic cut. `item_name` is the item the segments were read
+    // off, and the answer must name it — a generation split on "A Theme
+    // Park Trip" is not a generation split on theme parks in general.
+    // `vs_overall` is the gap against everyone who answered THIS item, not
+    // against the population.
+    segments: (() => {
+      const s = retrieved.segments;
+      if (!s || !s.requested) return null;
+      return {
+        field: s.field,
+        item_name: s.item ? s.item_name || s.item.item_name : null,
+        unavailable: s.unavailable,
+        rows: s.rows,
+      };
+    })(),
     global_extremes: {
       highest: ((retrieved.global_extremes && retrieved.global_extremes.highest) || []).map(r => ({
         item_id: r.item_id,
@@ -943,6 +1180,11 @@ async function groundChips(candidates, retrieved) {
 // =============================================================
 // Handler
 // =============================================================
+
+// Exported for bin/smoke_public_segments.js, which exercises the
+// demographic layer without enqueuing a job or spending a Sonnet call.
+// Not part of the runtime contract; nothing in production imports these.
+exports._segments = { detectSegmentField, segmentTopicTerms, resolveSegmentItem, retrieveSegments };
 
 // v6.15 — Background worker handler.
 //
