@@ -828,15 +828,18 @@ async function retrieveSegments(question) {
     console.error('[bjl-public-chat] retrieveSegments error:', error.message);
     return { requested: true, field, unavailable: 'read_failed', item, rows: [] };
   }
-  // Non-answer buckets are not segments. The function already drops the
-  // occupation write-in bucket, but "Prefer not to answer" and "Not
-  // applicable" survive it, and on a live occupation read both come back
-  // large enough to clear the floor and get quoted. "People who declined
-  // to state their job are eight points below average" is a sentence about
-  // the questionnaire, not about people. Dropped here rather than left to
-  // the prompt, because a rule the model has to remember is a rule that
-  // eventually gets forgotten. This does not affect vs_overall, which the
-  // function computes across every answerer before segmenting.
+  // Non-answer buckets are not segments. "People who declined to state
+  // their job are eight points below average" is a sentence about the
+  // questionnaire, not about people, and on a live occupation read both
+  // buckets clear the floor and are quotable.
+  //
+  // bjl_public_segment_read now excludes 'Not applicable' and 'Prefer not
+  // to answer' itself, so this is a belt-and-suspenders pass in the same
+  // spirit as isReadOnlySql over in the query worker: the database function
+  // is the enforcement layer that every caller inherits, and this catches
+  // the few labels it does not name ('N/A', 'None of the above', 'Other').
+  // Dropping it would be safe today and would silently stop being safe if a
+  // new field arrives with a differently-worded refusal bucket.
   const NON_ANSWER = /^(prefer not to answer|not applicable|n\/a|none of the above|other)$/i;
   const rows = (Array.isArray(data) ? data : []).filter(r => !NON_ANSWER.test(String(r.segment || '').trim()));
   // Zero rows is a real answer, not an empty result: either the item is

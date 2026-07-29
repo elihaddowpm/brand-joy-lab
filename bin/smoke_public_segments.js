@@ -20,6 +20,77 @@
  * Usage:  node bin/smoke_public_segments.js
  *
  * Exits non-zero if any assertion fails.
+ *
+ * ===================================================================
+ * TWO HAZARDS THIS LAYER IS BUILT AROUND
+ *
+ * Both were live during the build. Both belong to the worst failure
+ * class this tool has: wrong but plausible, with no error raised. They
+ * are written up here because the code that avoids them looks like
+ * over-caution unless you know what it is avoiding.
+ *
+ * ---- HAZARD 1: the id spaces collide, and question_id is aliased ----
+ *
+ * bjl_public_segment_read keys on bjl_items.item_id. It filters
+ * bjl_responses.item_id and checks bjl_items.
+ *
+ * The public chat's retrieval layers do NOT carry that id.
+ * bjl_scores_public_safe has no item_id column at all. retrieveScores
+ * emits `question_id AS item_id`, and question_id is a DIFFERENT KEY
+ * SPACE whose integers overlap bjl_items.item_id. Live at the time of
+ * writing:
+ *
+ *   bjl_scores_public_safe.question_id   84 = "A Theme Park Trip"
+ *   bjl_items.item_id                    84 = "I wanted to see or touch
+ *                                              the item in person before
+ *                                              buying"
+ *   bjl_items.item_id                  1393 = "A Theme Park Trip"
+ *
+ * So passing the retrieved payload's `item_id` into the function returns
+ * a full, well-formed, confidently wrong segment table: retail browsing
+ * behaviour served to a visitor as theme-park demographics. Nothing
+ * throws. Nothing logs. The numbers look right because they ARE right,
+ * for a question nobody asked.
+ *
+ * The bridge is therefore item_name, resolved explicitly in
+ * resolveSegmentItem, and never the payload's item_id field. The
+ * database function's own public_safe gate is name-bridged for the same
+ * reason, so the two integer spaces are never compared anywhere in the
+ * stack.
+ *
+ * THIS TRAP IS NOT SPECIFIC TO DEMOGRAPHICS. Any future integration that
+ * takes an id out of the public chat's retrieved payload and hands it to
+ * anything keyed on bjl_items will hit it. The alias is the trap; the
+ * field is called item_id and is not one.
+ *
+ * ---- HAZARD 2: loose topic matching is fine for prose, not for a cut ----
+ *
+ * The first build resolved the segment item by reusing the ordering of
+ * the main score retrieval. That layer searches item_name OR question OR
+ * category_key and ranks by hit count then n. It is tuned to feed prose,
+ * where an adjacent row still reads as useful context.
+ *
+ * Handed a demographic cut, the same looseness resolved
+ *
+ *   "Does joy in going out to eat differ by region?"
+ *
+ * to "A Wellness Retreat or Spa Trip", which tied on hit count via its
+ * question text and won the n tiebreak. The output would have been a
+ * correct regional table about the wrong subject, presented as the
+ * answer to a question about restaurants.
+ *
+ * resolveSegmentItem therefore runs its own match: item_name only, cue
+ * language stripped first (the words naming the CUT are not the TOPIC),
+ * ranked by how many topic terms the name actually covers, and it FAILS
+ * CLOSED. No coverage means no item, which the prompt turns into silence
+ * on demographics. A missing cut costs a follow-up question. A wrong cut
+ * costs the visitor's trust in every number the tool has ever shown them.
+ *
+ * The geography and political cases below are guards of the same kind:
+ * both refuse rather than fall through to "no data", because silence
+ * would read as the corpus being empty rather than the cut being
+ * unavailable.
+ * ===================================================================
  */
 const path = require('path');
 const fs = require('fs');
