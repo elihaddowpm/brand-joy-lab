@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * smoke_public_segments.js — the four fixtures for the public demo's
+ * smoke_public_segments.js — the fixtures for the public demo's
  * demographic layer (bjl_public_segment_read), documented in the
  * "Demographic segments" block of bjl-public-chat-background.js.
  *
@@ -90,6 +90,41 @@
  * both refuse rather than fall through to "no data", because silence
  * would read as the corpus being empty rather than the cut being
  * unavailable.
+ *
+ * ---- HAZARD 2, SECOND SIGHTING: generic verbs are not topics ----
+ *
+ * The same failure came back through a different door while the value
+ * vocabulary was going in:
+ *
+ *   "Do people under 40 enjoy going to concerts more?"
+ *
+ * resolved to "Going OUT TO EAT at a full-service restaurant". The corpus
+ * has no concert item at all — the nearest things are "Listening to LIVE
+ * MUSIC" and "A Music- or Festival-Focused Trip" — so the only term that
+ * matched anything was "going", which appears in 33 of the 904 public
+ * item names. One generic verb was enough to turn a fail-closed into a
+ * confident restaurant table under a concert question.
+ *
+ * Document frequency cannot separate these: "eat" appears in 54 names,
+ * MORE than "going", because substring matching inflates common
+ * fragments. The separation is grammatical, so SEGMENT_FRAMING_WORDS now
+ * carries the generic verbs and quantifiers (going, doing, getting, like,
+ * people, more, most, many) alongside the original measurement language.
+ * That query now correctly returns no_scored_item, and the assertion for
+ * it is below.
+ *
+ * ---- A THIN MARGIN THAT IS DELIBERATELY LEFT THIN ----
+ *
+ * With "going" and the shared stopword "out" both removed, the region
+ * fixture's query reduces to the single term "eat", and two candidates
+ * cover it: "Going OUT TO EAT at a full-service restaurant" (5,407 joy
+ * rows) and "Eating CANDY" (5,406). The correct item wins the joy-row
+ * tiebreak by ONE ROW.
+ *
+ * That is not fixed with more machinery. It is fixed by the assertion
+ * below pinning item_id 4594 exactly, so if the corpus shifts and the
+ * pick flips to candy, this harness fails loudly instead of the demo
+ * quietly answering a restaurant question with confectionery.
  * ===================================================================
  */
 const path = require('path');
@@ -214,6 +249,117 @@ async function caseGeography() {
     'Does joy in going out to eat differ by region?');
   check('region cut resolves', alt.field === 'region', alt.field);
   check('region returns rows', alt.rows.length > 0, `${alt.rows.length}`);
+  // Pinned exactly. See "A THIN MARGIN" in the header: this beats
+  // "Eating CANDY" by a single joy row, and a flip must be loud.
+  check('read off "Going OUT TO EAT", not "Eating CANDY"', !!alt.item && alt.item.item_id === 4594,
+    alt.item && `${alt.item.item_id} "${alt.item.item_name}"`);
+}
+
+// ---------------------------------------------------------------------
+// The value vocabulary. SEGMENT_VALUES is the complete set of values each
+// field can hold, and it travels to the synthesizer in the payload rather
+// than being written into the prompt, so there is one place to correct it
+// and no chance of a prompt copy drifting from the database.
+//
+// These three cases cover the three things it has to make possible:
+// mapping a word the visitor used onto a value the corpus has, expanding
+// a threshold into every value on the qualifying side, and telling a
+// value that fell under the reporting floor apart from a value that was
+// never a category.
+// ---------------------------------------------------------------------
+
+async function caseOccupationVocabulary() {
+  // "Accountants" is the point. The first build hardcoded eight
+  // professions into the occupation cue — nurses, teachers, doctors,
+  // engineers, drivers, managers, retail workers, healthcare workers —
+  // so a question naming any of the other twenty-five occupations did not
+  // route at all and the visitor got a general answer with no indication
+  // a cut had been declined. Routing is now by person-noun across the
+  // whole vocabulary.
+  //
+  // It also carries the subject-naming rule: the resolver picked
+  // "Listening to MUSIC" out of nine music-shaped items, and the prompt
+  // requires the answer to open by naming it, because the visitor is the
+  // only one who can tell us it picked wrong.
+  const seg = await run('VOCABULARY — an occupation outside the old hardcoded eight',
+    'How do accountants feel about listening to music?');
+  check('field is occupation', seg.field === 'occupation', seg.field);
+  check('resolved to "Listening to MUSIC"', !!seg.item && seg.item.item_id === 236,
+    seg.item && `${seg.item.item_id} "${seg.item.item_name}"`);
+  check('full occupation vocabulary travels with the result',
+    seg.available_values.length === 33, `${seg.available_values.length}`);
+  check('the mapped value is in the vocabulary', seg.available_values.includes('Accounting'));
+  // The honest outcome for this particular question: Accounting is a real
+  // category, but on this item its cell is under the floor of 60 and the
+  // function never returns it. available_values is what lets the answer
+  // say "too small to report on this measure" instead of "no such cut",
+  // which are different sentences and only one of them is true.
+  check('Accounting is under the floor on this item, so it is absent from rows',
+    !rowFor(seg, 'Accounting'), seg.rows.map(r => r.segment).join(', '));
+  check('every returned row still clears the floor', seg.rows.length > 0 && seg.rows.every(r => r.n >= 60),
+    seg.rows.map(r => `${r.segment}:${r.n}`).join(' '));
+}
+
+async function caseIncomeThreshold() {
+  // A threshold is not a value. "Below 50k" names a cut point, and the
+  // three brackets under it are three separate rows with three separate
+  // bases; the prompt reads across them and states each n rather than
+  // averaging into a number nobody measured.
+  const seg = await run('VOCABULARY — a threshold selects every qualifying bracket',
+    'Do people making below 50k get less joy from taking a vacation?');
+  check('field is income_bracket', seg.field === 'income_bracket', seg.field);
+  check('resolved to "Taking a VACATION"', !!seg.item && /vacation/i.test(seg.item.item_name),
+    seg.item && `${seg.item.item_id} "${seg.item.item_name}"`);
+  check('all nine brackets are in the vocabulary', seg.available_values.length === 9,
+    `${seg.available_values.length}`);
+  // Ascending order is load-bearing: it is how "below" and "above" are
+  // resolved into a set of values at all.
+  check('vocabulary is ordered low to high',
+    seg.available_values[0] === 'Less than $25,000'
+    && seg.available_values[8] === '$200,000 or more',
+    `${seg.available_values[0]} … ${seg.available_values[8]}`);
+  const under50 = ['Less than $25,000', '$25,000 to $34,999', '$35,000 to $49,999'];
+  const got = under50.filter(v => rowFor(seg, v));
+  check('all three sub-50k brackets came back with their own n', got.length === 3,
+    got.map(v => `${v}:${rowFor(seg, v).n}`).join(' '));
+  // The finding itself, so the fixture fails if the gradient inverts.
+  check('the gradient runs the way the answer will claim',
+    rowFor(seg, 'Less than $25,000').joy_index < rowFor(seg, '$100,000 to $124,999').joy_index,
+    `${rowFor(seg, 'Less than $25,000').joy_index} vs ${rowFor(seg, '$100,000 to $124,999').joy_index}`);
+}
+
+async function caseAgeThreshold() {
+  // Ages are not stored; generation is. "Under 40" routes to generation
+  // and the prompt is required to say the band is approximate rather than
+  // present an age cut as a measured one.
+  const seg = await run('VOCABULARY — an age threshold routes to generation',
+    'Do people under 40 enjoy listening to live music?');
+  check('field is generation', seg.field === 'generation', seg.field);
+  check('resolved to "Listening to LIVE MUSIC"', !!seg.item && seg.item.item_id === 4625,
+    seg.item && `${seg.item.item_id} "${seg.item.item_name}"`);
+  check('all five generations are in the vocabulary', seg.available_values.length === 5,
+    seg.available_values.join(', '));
+  check('vocabulary is ordered youngest to oldest',
+    seg.available_values[0] === 'Gen Z' && seg.available_values[4] === 'Silent',
+    `${seg.available_values[0]} … ${seg.available_values[4]}`);
+  const genz = rowFor(seg, 'Gen Z');
+  const mil = rowFor(seg, 'Millennial');
+  check('both under-40 generations came back with their own n', !!genz && !!mil,
+    genz && mil && `Gen Z:${genz.n} Millennial:${mil.n}`);
+
+  // Same cue, no such item. The corpus has no concert measure, so the
+  // only honest outcome is silence on demographics — see HAZARD 2, SECOND
+  // SIGHTING. Before the framing-word fix this returned a restaurant
+  // table under a concert question.
+  const none = await run('VOCABULARY — the same cue over a topic the corpus does not measure',
+    'Do people under 40 enjoy going to concerts more?');
+  check('fails closed', none.unavailable === 'no_scored_item', none.unavailable);
+  check('no item resolved', !none.item);
+  check('no rows', none.rows.length === 0, `${none.rows.length}`);
+  // The vocabulary still travels, so the answer can name what generation
+  // CAN do instead of going silent about the whole field.
+  check('vocabulary still travels on a failed resolve', none.available_values.length === 5,
+    none.available_values.join(', '));
 }
 
 async function caseNoCue() {
@@ -238,6 +384,24 @@ function caseCueUnit() {
     ['How do the people who decide where the family goes on vacation feel?', 'decisionmaker_vacation'],
     ['What about whoever decides on groceries for the household?', 'decisionmaker_groceries'],
     ['How joyful is going to the movies?', null],
+    // The value vocabulary, routing on words the old cue list did not know.
+    ['How do accountants feel about listening to music?', 'occupation'],
+    ['What do plumbers enjoy?', 'occupation'],
+    ['Do people making below 50k get less joy from a vacation?', 'income_bracket'],
+    ['What about households over $150,000?', 'income_bracket'],
+    ['Do people under 40 enjoy live music?', 'generation'],
+    ['How about people in their sixties?', 'generation'],
+    ['Is it different in the South?', 'region'],
+    // Negative controls. Half the occupation vocabulary doubles as subject
+    // matter, so these are the queries that would break if routing ever
+    // matched bare value names instead of person-nouns — and the last two
+    // are the reason the income cue requires a magnitude, not just a
+    // dollar sign.
+    ['What are the biggest drivers of joy?', null],
+    ['How do people feel about the internet?', null],
+    ['Is retail therapy joyful?', null],
+    ['How joyful is a road trip out west?', null],
+    ['Is a $50 dinner joyful?', null],
   ];
   for (const [q, want] of expect) {
     const got = detectSegmentField(q).field;
@@ -252,6 +416,9 @@ function caseCueUnit() {
   await casePolitical();
   await caseGeography();
   await caseNoCue();
+  await caseOccupationVocabulary();
+  await caseIncomeThreshold();
+  await caseAgeThreshold();
   console.log(failures === 0 ? '\nAll assertions passed.' : `\n${failures} assertion(s) FAILED.`);
   process.exit(failures === 0 ? 0 : 1);
 })().catch(e => { console.error('harness failed:', e); process.exit(1); });

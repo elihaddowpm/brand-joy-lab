@@ -692,17 +692,161 @@ async function retrieveInsightsTokenFallback(question) {
 // public corpus. Keep the input where it is.
 // ---------------------------------------------------------------------
 
+// ---------------------------------------------------------------------
+// THE VALUE VOCABULARY.
+//
+// A snapshot of the distinct values each whitelisted field actually holds
+// in bjl_respondents, ordered the way an answer should read them (income
+// ascending, generations youngest-first, decision roles most- to
+// least-involved). Re-derive with:
+//
+//   SELECT <field>, count(*) FROM bjl_respondents
+//   WHERE <field> IS NOT NULL GROUP BY 1 ORDER BY 2 DESC;
+//
+// This list is shipped to the synthesizer in the payload rather than
+// written into the prompt, so there is exactly one place to correct when
+// the corpus changes and no chance of the prompt's copy drifting from the
+// database's. What the model does with it — mapping "nurses" onto
+// "Healthcare / Medical", expanding "below 50k" into the three brackets
+// under that line, listing what exists when nothing maps — is a compose
+// concern and lives in prompts/public_chat_synthesis.md.
+//
+// The refusal buckets are absent on purpose. bjl_public_segment_read
+// excludes 'Not applicable', 'Prefer not to answer' and 'Other - Write In'
+// (occupation counts 36 distinct values in the raw column; 33 are
+// servable), so listing them here would advertise cuts that can never come
+// back. NULLs are likewise not a segment.
+// ---------------------------------------------------------------------
+const SEGMENT_VALUES = {
+  generation: ['Gen Z', 'Millennial', 'Gen X', 'Boomer', 'Silent'],
+  gender: ['Female', 'Male', 'Transgender Female', 'Transgender Male', 'Gender Variant / Non-conforming'],
+  region: ['Northeast', 'Midwest', 'South', 'West'],
+  income_bracket: [
+    'Less than $25,000', '$25,000 to $34,999', '$35,000 to $49,999',
+    '$50,000 to $74,999', '$75,000 to $99,999', '$100,000 to $124,999',
+    '$125,000 to $149,999', '$150,000 to $199,999', '$200,000 or more',
+  ],
+  decisionmaker_vacation: [
+    'Sole or primary decision-maker', 'Share equally in decision-making',
+    'Influence or participate in choosing', 'Not involved in choosing',
+    'Do not use this product',
+  ],
+  decisionmaker_groceries: [
+    'Sole or primary decision-maker', 'Share equally in decision-making',
+    'Influence or participate in choosing', 'Not involved in choosing',
+    'Do not use this product',
+  ],
+  occupation: [
+    'Accounting', 'Advertising', 'Aerospace / Aviation / Automotive',
+    'Agriculture / Forestry / Fishing', 'Biotechnology',
+    'Business / Professional Services', 'Business Services (Hotels, Lodging Places)',
+    'Communications', 'Computers (Hardware, Desktop Software)', 'Construction / Home Improvement',
+    'Consulting', 'Education', 'Engineering / Architecture', 'Entertainment / Recreation',
+    'Finance / Banking / Insurance', 'Food Service', 'Government / Military',
+    'Healthcare / Medical', 'Internet', 'Legal', 'Manufacturing',
+    'Media / Printing / Publishing', 'Military', 'Mining', 'Non-Profit',
+    'Pharmaceutical / Chemical', 'Real Estate', 'Research / Science', 'Retail',
+    'Telecommunications', 'Transportation / Distribution', 'Utilities', 'Wholesale',
+  ],
+};
+
+// Ages are not stored; generation is. This is the bridge for "under 40"
+// and it is approximate by construction, which is why the prompt is
+// required to say so rather than presenting an age band as a measured cut.
+const SEGMENT_GENERATION_AGES = {
+  'Gen Z': 'roughly 14-29',
+  'Millennial': 'roughly 30-44',
+  'Gen X': 'roughly 45-60',
+  'Boomer': 'roughly 61-79',
+  'Silent': 'roughly 80+',
+};
+
+// Occupation routing is by PERSON-NOUN, never by the bare value name.
+// Half the occupation vocabulary doubles as subject matter — Retail,
+// Internet, Entertainment / Recreation, Real Estate, Media, Construction,
+// Mining, Agriculture, Utilities — so matching "retail" or "the internet"
+// would route ordinary topic questions into a demographic cut nobody
+// asked for. "Retail workers" is a cut; "retail" is a category.
+const SEGMENT_OCCUPATION_DOMAINS = [
+  'healthcare', 'health care', 'medical', 'medicine', 'education', 'teaching',
+  'retail', 'finance', 'banking', 'insurance', 'construction', 'manufacturing',
+  'hospitality', 'tech', 'technology', 'software', 'law', 'legal', 'accounting',
+  'advertising', 'media', 'publishing', 'journalism', 'government', 'military',
+  'agriculture', 'farming', 'transportation', 'logistics', 'trucking',
+  'food service', 'restaurants', 'real estate', 'non[- ]?profit', 'consulting',
+  'utilities', 'mining', 'telecom(munications)?', 'aerospace', 'aviation',
+  'automotive', 'pharma(ceuticals?)?', 'biotech(nology)?', 'engineering',
+  'architecture', 'science', 'research', 'wholesale', 'entertainment',
+].join('|');
+
+const SEGMENT_OCCUPATION_PEOPLE = new RegExp(
+  '\\b(' + [
+    // generic framings
+    'occupations?', 'professions?', 'professionals?', 'jobs?', 'careers?',
+    'industr(y|ies)', 'work for a living',
+    'blue[- ]collar', 'white[- ]collar', '\\w+ workers?',
+    'trades?people', 'tradesmen',
+    // A domain word only counts inside a construction that makes it about
+    // PEOPLE. "People in their sixties" is an age band, not an occupation,
+    // which is what a bare `people in \\w+` pattern got wrong; and half
+    // these words are subject matter on their own.
+    `(work(s|ing)? in|people in|employed in|jobs in|careers in|works? for)( the)? (${SEGMENT_OCCUPATION_DOMAINS})`,
+    `(${SEGMENT_OCCUPATION_DOMAINS}) (workers?|industry|sector|professionals?|jobs?|staff|employees?)`,
+    // Healthcare / Medical
+    'nurses?', 'doctors?', 'physicians?', 'surgeons?', 'dentists?',
+    'pharmacists?', 'paramedics?', 'emts?', 'caregivers?', 'therapists?',
+    'clinicians?', 'medical staff',
+    // Education
+    'teachers?', 'professors?', 'educators?', 'principals?', 'tutors?',
+    // Accounting / Legal / Finance
+    'accountants?', 'bookkeepers?', 'cpas?', 'lawyers?', 'attorneys?',
+    'paralegals?', 'judges?', 'bankers?', 'financial advis[eo]rs?',
+    'insurance agents?', 'brokers?',
+    // Computers / Engineering / Research
+    'programmers?', 'developers?', 'coders?', 'engineers?', 'architects?',
+    'scientists?', 'researchers?', 'chemists?',
+    // Construction / Manufacturing / Utilities / Mining / Agriculture
+    'contractors?', 'builders?', 'plumbers?', 'electricians?', 'carpenters?',
+    'machinists?', 'welders?', 'miners?', 'farmers?', 'ranchers?', 'fishermen',
+    // Transportation / Aerospace
+    // Not bare "drivers" — "the drivers of joy" is the house idiom.
+    'truckers?', 'truck drivers?', 'delivery drivers?', 'couriers?', 'pilots?',
+    'mechanics?', 'flight attendants?',
+    // Food service / Retail / Hospitality
+    'chefs?', 'cooks?', 'waiters?', 'waitresses?', 'servers?', 'bartenders?',
+    'baristas?', 'cashiers?', 'sales associates?', 'store clerks?',
+    // Media / Advertising / Consulting / Non-profit / Government / Military
+    'journalists?', 'reporters?', 'editors?', 'publishers?', 'advertis(ers?|ing people)',
+    'consultants?', 'realtors?', 'real estate agents?', 'civil servants?',
+    'soldiers?', 'veterans?', 'service members?', 'marines?', 'managers?',
+  ].join('|') + ')\\b', 'i');
+
+// "below 50k", "over $100,000", "six figures". A bare number is not enough
+// — it has to carry a currency marker — or "under 40" would resolve to an
+// income bracket instead of an age.
+const SEGMENT_INCOME_THRESHOLD = /\b(under|below|less than|over|above|more than|at least|up to|starting at|between|earning|earns?|making|makes?)\b[^.?!]{0,24}\$?\s?\d{2,3}\s?(k\b|,?000\b)|\$\s?\d{2,3}\s?(k\b|,?\d{3}\b)|\b(six|6)[- ]figures?\b/i;
+
+// "under 40", "over 65", "25 to 34 year olds". Routed to generation, which
+// is the only age-like field that exists; the prompt is responsible for
+// saying the band is approximate.
+const SEGMENT_AGE_THRESHOLD = /\b(under|over|above|below|younger than|older than|at least)\s+\d{2}\b|\b\d{2}\s*(-|–|to)\s*\d{2}\s*(year|yr)[- ]?olds?\b|\b\d{2}[- ]year[- ]olds?\b|\bin their (twenties|thirties|forties|fifties|sixties|seventies)\b/i;
+
 const SEGMENT_FIELD_CUES = [
   // Ordered: the decision-role cues are checked first because they are the
   // most specific, and their vocabulary ("who decides where to go on
   // vacation") overlaps every other cue class.
-  ['decisionmaker_vacation', /\b(decision[- ]?makers?|decides?|deciding|decision[- ]?role|who books|who plans|books? the)\b/i, /\b(vacation|trip|travel|holiday|getaway)\b/i],
-  ['decisionmaker_groceries', /\b(decision[- ]?makers?|decides?|deciding|decision[- ]?role|who buys|who shops|does the shopping)\b/i, /\b(grocer|groceries|supermarket|food shopping|household shopping)\b/i],
-  ['occupation', /\b(occupations?|professions?|professional|jobs?|careers?|industry|work in|working in|blue[- ]collar|white[- ]collar|nurses?|teachers?|doctors?|engineers?|drivers?|managers?|retail workers?|healthcare workers?)\b/i],
-  ['generation', /\b(ages?|aged|younger|youngest|older|oldest|young people|old people|generations?|gen ?z|millennials?|boomers?|gen ?x|silent generation|teens?|twentysomethings?)\b/i],
-  ['income_bracket', /\b(income|incomes|earnings?|earners?|salary|salaries|wealth|wealthy|affluent|rich|poor|low[- ]income|high[- ]income|middle class|working class|bracket)\b/i],
-  ['region', /\b(regions?|regional|northeast|midwest|southern|southeast|southwest|northwest|west coast|east coast|part of the country|geograph)\b/i],
-  ['gender', /\b(genders?|men|women|male|females?|males)\b/i],
+  ['decisionmaker_vacation', /\b(decision[- ]?makers?|decides?|deciding|decision[- ]?role|sole or primary|share equally|who books|who plans|books? the)\b/i, /\b(vacation|trip|travel|holiday|getaway)\b/i],
+  ['decisionmaker_groceries', /\b(decision[- ]?makers?|decides?|deciding|decision[- ]?role|sole or primary|share equally|who buys|who shops|does the shopping)\b/i, /\b(grocer|groceries|supermarket|food shopping|household shopping)\b/i],
+  ['occupation', SEGMENT_OCCUPATION_PEOPLE],
+  ['income_bracket', SEGMENT_INCOME_THRESHOLD],
+  ['generation', SEGMENT_AGE_THRESHOLD],
+  ['generation', /\b(ages?|aged|younger|youngest|older|oldest|young people|old people|generations?|gen ?z|zoomers?|millennials?|boomers?|baby boomers?|gen ?x|silent generation|teens?|teenagers?|twentysomethings?|retirees?|seniors?)\b/i],
+  ['income_bracket', /\b(income|incomes|earnings?|earners?|salary|salaries|wealth|wealthy|affluent|rich|poor|low[- ]income|high[- ]income|middle class|working class|bracket|paycheck)\b/i],
+  // The four region VALUES only count with a determiner. Bare "south" and
+  // "west" are everywhere in item names and topic language ("Southwest
+  // Airlines", "a road trip out west"); "the South" is a cut.
+  ['region', /\b(regions?|regional|midwestern|southern|southeast|southwest|northwest|west coast|east coast|part of the country|geograph|the (northeast|midwest|south|west))\b/i],
+  ['gender', /\b(genders?|men|women|male|females?|males|transgender|non[- ]?binary|non[- ]?conforming)\b/i],
 ];
 
 // Geography below region is not on the whitelist and never will be at this
@@ -740,6 +884,19 @@ const SEGMENT_FRAMING_WORDS = new Set([
   'rated','rates','rating','ratings','index','high','higher','highest','low',
   'lower','lowest','best','worst','love','loves','enjoy','enjoys','prefer',
   'prefers','think','thinks','matter','matters',
+  // Generic verbs and quantifiers. These carry no subject but DO match item
+  // names — "going" is in 33 of the 904 public item names — so leaving them
+  // in lets a query with no real match in the corpus still find one.
+  // "Do people under 40 enjoy going to concerts more?" resolved to "Going
+  // OUT TO EAT at a full-service restaurant" on the strength of "going"
+  // alone: the corpus has no concert item, and the honest outcome is
+  // no_scored_item, not a restaurant table under a concert question.
+  // Frequency cannot separate these — "eat" appears in 54 names, more than
+  // "going" — because substring matching inflates common fragments. The
+  // separation is grammatical, so the list is curated.
+  'going','goes','went','doing','getting','gets','having',
+  'like','likes','liked','people','person','persons','folks','someone',
+  'anyone','everyone','more','less','most','least','much','many',
 ]);
 
 function segmentTopicTerms(question, cues) {
@@ -815,18 +972,25 @@ async function resolveSegmentItem(question, cues) {
 
 async function retrieveSegments(question) {
   const { field, unavailable, cues } = detectSegmentField(question);
-  if (unavailable) return { requested: true, field: null, unavailable, item: null, rows: [] };
-  if (!field) return { requested: false, field: null, unavailable: null, item: null, rows: [] };
+  if (unavailable) return { requested: true, field: null, unavailable, item: null, rows: [], available_values: [] };
+  if (!field) return { requested: false, field: null, unavailable: null, item: null, rows: [], available_values: [] };
+
+  // The field's full vocabulary travels with the result whether or not any
+  // rows come back. It is what lets the answer say "we cut occupation 33
+  // ways and none of them is 'gig worker'" instead of going quiet, and it
+  // is the only way the model can tell a segment that fell under the floor
+  // from a segment that was never a category.
+  const availableValues = SEGMENT_VALUES[field] || [];
 
   const item = await resolveSegmentItem(question, cues);
-  if (!item) return { requested: true, field, unavailable: 'no_scored_item', item: null, rows: [] };
+  if (!item) return { requested: true, field, unavailable: 'no_scored_item', item: null, rows: [], available_values: availableValues };
 
   const sql = `SELECT segment, n, joy_index, vs_overall
                FROM bjl_public_segment_read(${item.item_id}, '${sqlEscape(field)}')`;
   const { data, error } = await supabase.rpc('execute_read_sql', { query_text: sql });
   if (error) {
     console.error('[bjl-public-chat] retrieveSegments error:', error.message);
-    return { requested: true, field, unavailable: 'read_failed', item, rows: [] };
+    return { requested: true, field, unavailable: 'read_failed', item, rows: [], available_values: availableValues };
   }
   // Non-answer buckets are not segments. "People who declined to state
   // their job are eight points below average" is a sentence about the
@@ -848,6 +1012,7 @@ async function retrieveSegments(question) {
   // why `suppressed` is distinguished from `requested: false`.
   return {
     requested: true, field, item,
+    available_values: availableValues,
     unavailable: rows.length === 0 ? 'suppressed' : null,
     rows: rows.map(r => ({
       segment: r.segment,
@@ -1035,6 +1200,14 @@ function buildRetrievedPayloadForLLM(retrieved) {
     // Park Trip" is not a generation split on theme parks in general.
     // `vs_overall` is the gap against everyone who answered THIS item, not
     // against the population.
+    //
+    // `available_values` is the field's complete vocabulary, present even
+    // when `rows` is empty. It carries the mapping burden: the visitor
+    // says "nurses" and the corpus says "Healthcare / Medical", and the
+    // model needs both halves to translate, to expand a threshold into the
+    // brackets it covers, and to name what exists when nothing maps.
+    // `generation_ages` is the approximate age bridge, present only for
+    // generation, because ages are not stored.
     segments: (() => {
       const s = retrieved.segments;
       if (!s || !s.requested) return null;
@@ -1042,6 +1215,8 @@ function buildRetrievedPayloadForLLM(retrieved) {
         field: s.field,
         item_name: s.item ? s.item_name || s.item.item_name : null,
         unavailable: s.unavailable,
+        available_values: s.available_values || [],
+        generation_ages: s.field === 'generation' ? SEGMENT_GENERATION_AGES : undefined,
         rows: s.rows,
       };
     })(),
@@ -1341,6 +1516,34 @@ exports.handler = async (event) => {
       completed_at:   new Date().toISOString(),
       progress_stage: 'complete',
     }).eq('job_id', jobId);
+
+    // What the visitor actually read, on the row, in a column you can scan.
+    //
+    // The answer is already inside `finding`, but `finding` is a JSON blob
+    // several kilobytes wide, so "why was that answer bad" turns into
+    // parsing every row by hand. 300 characters is enough to see the
+    // opening claim — which, for a segment read, now includes the item the
+    // resolver picked — and enough to spot a fallback or a truncation at a
+    // glance.
+    //
+    // Deliberately NOT dispatch_response_preview. That column means one
+    // thing across six functions: the body of a FAILED background dispatch.
+    // Non-null there is a signal that the worker never ran, the watchdog
+    // reads it that way, and filling it on every healthy public job would
+    // destroy it as a diagnostic.
+    //
+    // Separate statement, and its own try, because the write above is the
+    // one the visitor is waiting on. A preview that cannot be stored — the
+    // column not yet added, most likely — must not turn a completed answer
+    // into a failed job.
+    try {
+      const { error: previewErr } = await supabase.from('bjl_query_jobs')
+        .update({ response_preview: String(finding.answer || '').replace(/\s+/g, ' ').trim().slice(0, 300) })
+        .eq('job_id', jobId);
+      if (previewErr) console.warn('[bjl-public-chat-background] response_preview not stored:', previewErr.message);
+    } catch (previewErr) {
+      console.warn('[bjl-public-chat-background] response_preview not stored:', previewErr && previewErr.message);
+    }
 
     return { statusCode: 200, body: 'ok' };
   } catch (err) {
