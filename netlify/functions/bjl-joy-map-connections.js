@@ -44,6 +44,26 @@
  *           The substitution is labelled, never silent.
  *   none    nothing eligible at any rung. No sweep runs.
  *
+ * Rung A2 (customer gate) — PARKED, deliberately not built. The design
+ * is settled so it does not get re-litigated:
+ *   Shape. When a brand string matches an ANSWER VALUE rather than an
+ *   item name — "who is your ISP?" answered "Hotwire" — the cohort is
+ *   respondents who gave that raw_value on the chooser item versus the
+ *   other non-null answerers of the same item, and the focals are
+ *   category anchors. Floor of n >= 60 on the value; below it, fall to
+ *   rung B with the substitution labelled. A2 is never claimed off a
+ *   thin match.
+ *   Where it belongs. Server-side, as a value_gate mode on
+ *   bjl_map_cohort. The client passes the mode and nothing else. Do not
+ *   build this in JS.
+ *   Why it is parked. It is an enhancement with a demand trigger, not a
+ *   missing guardrail — gates 1 and 3 close the safety hole on their
+ *   own. Build it when either trigger fires: (a) a live engagement that
+ *   needs a customer-cohort read, e.g. a grocery or telecom prospect
+ *   whose pitch is "their customers vs everyone else's"; or (b) the
+ *   front-door logs showing a brand query whose answer-value n actually
+ *   clears 60. Hotwire's n=1 suggests (b) may be rare in this corpus.
+ *
  * Pre-run halt. Even an eligible focal can isolate a cohort too small
  * to read. Below COHORT_FLOOR per side the territories array comes back
  * empty and `halt` explains why — the client renders the focal card in
