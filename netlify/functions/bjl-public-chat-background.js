@@ -861,16 +861,60 @@ const SEGMENT_GEO_TOO_FINE = /\b(by state|per state|which states?|state[- ]by[- 
 // shape that actually shows up ("how do Republicans feel about camping").
 const SEGMENT_POLITICAL = /\b(democrats?|republicans?|liberals?|conservatives?|progressives?|politics|political|party affiliation|voters?|maga|left[- ]wing|right[- ]wing|red state|blue state|trump|biden|harris)\b/i;
 
+// "Who loves theme parks most?" is a demographic question that names no
+// demographic. It is the founding case for this whole layer and it must
+// not route nowhere, so when the intent is unmistakable and no field is
+// named, the cut defaults to generation: the only field with full
+// coverage of the corpus and the only one every visitor can read without
+// a legend.
+//
+// The default is BOUNDED, and the bounds are the point. One field, never
+// a sweep across all seven — that would be a fishing expedition presented
+// as a finding, and with seven fields and a dozen segments each, something
+// always looks like a gap. The choice is declared in the answer rather
+// than implied, and the answer closes by naming the other cuts, so the
+// visitor learns the menu instead of being handed a cut they did not ask
+// for and cannot tell was chosen.
+//
+// Deliberately narrow. It needs a superlative or a group-shaped question,
+// not a bare "who": "who is this brand for" is not a request for a
+// demographic table.
+const SEGMENT_INTENT_UNNAMED = [
+  /\bwho (loves?|likes?|enjoys?|feels?|gets?|finds?|rates?|scores?)\b[^?.!]*\b(most|the most|highest|best|more|least|lowest)\b/i,
+  /\bwho\b[^?.!]*\b(gets?|feels?) the most (joy|happiness)\b/i,
+  /\bwho'?s (happiest|most joyful|least happy)\b/i,
+  /\bwho (is|are) (most|least) likely\b/i,
+  /\bwhich (group|groups|segment|segments|demographic|demographics|audience)\b/i,
+  /\bwhat (kind|sort|type)s? of (people|person)\b/i,
+];
+
+// What to strip before searching for the topic. NOT the matching intent
+// pattern itself — several of those span the whole sentence, and stripping
+// the span would take the subject with it ("who loves THEME PARKS most").
+const SEGMENT_INTENT_STRIP = /\bwho (loves?|likes?|enjoys?|feels?|gets?|finds?|rates?|scores?)\b|\bwho'?s\b|\bwhich (group|groups|segment|segments|demographic|demographics|audience)\b|\bwhat (kind|sort|type)s? of (people|person)\b|\blikely to\b/i;
+
+const SEGMENT_DEFAULT_FIELD = 'generation';
+
+// The cuts offered alongside a defaulted read, in the order the answer
+// should name them. Gender is omitted on purpose: it is available, but
+// volunteering it as a suggested cut is a different act from answering it
+// when asked. The decision-role fields are omitted because they only mean
+// something on vacation and grocery items.
+const SEGMENT_OFFER_FIELDS = ['occupation', 'income_bracket', 'region'];
+
 function detectSegmentField(question) {
   const q = String(question || '');
-  if (SEGMENT_POLITICAL.test(q)) return { field: null, unavailable: 'political', cues: [] };
-  if (SEGMENT_GEO_TOO_FINE.test(q)) return { field: null, unavailable: 'geography_too_fine', cues: [] };
+  if (SEGMENT_POLITICAL.test(q)) return { field: null, unavailable: 'political', cues: [], defaulted: false };
+  if (SEGMENT_GEO_TOO_FINE.test(q)) return { field: null, unavailable: 'geography_too_fine', cues: [], defaulted: false };
   for (const [field, cue, qualifier] of SEGMENT_FIELD_CUES) {
     if (cue.test(q) && (!qualifier || qualifier.test(q))) {
-      return { field, unavailable: null, cues: qualifier ? [cue, qualifier] : [cue] };
+      return { field, unavailable: null, cues: qualifier ? [cue, qualifier] : [cue], defaulted: false };
     }
   }
-  return { field: null, unavailable: null, cues: [] };
+  if (SEGMENT_INTENT_UNNAMED.some(re => re.test(q))) {
+    return { field: SEGMENT_DEFAULT_FIELD, unavailable: null, cues: [SEGMENT_INTENT_STRIP], defaulted: true };
+  }
+  return { field: null, unavailable: null, cues: [], defaulted: false };
 }
 
 // Words that describe the SHAPE of a question rather than its subject.
@@ -971,9 +1015,9 @@ async function resolveSegmentItem(question, cues) {
 }
 
 async function retrieveSegments(question) {
-  const { field, unavailable, cues } = detectSegmentField(question);
-  if (unavailable) return { requested: true, field: null, unavailable, item: null, rows: [], available_values: [] };
-  if (!field) return { requested: false, field: null, unavailable: null, item: null, rows: [], available_values: [] };
+  const { field, unavailable, cues, defaulted } = detectSegmentField(question);
+  if (unavailable) return { requested: true, field: null, unavailable, item: null, rows: [], available_values: [], field_defaulted: false, other_fields: [] };
+  if (!field) return { requested: false, field: null, unavailable: null, item: null, rows: [], available_values: [], field_defaulted: false, other_fields: [] };
 
   // The field's full vocabulary travels with the result whether or not any
   // rows come back. It is what lets the answer say "we cut occupation 33
@@ -981,16 +1025,19 @@ async function retrieveSegments(question) {
   // is the only way the model can tell a segment that fell under the floor
   // from a segment that was never a category.
   const availableValues = SEGMENT_VALUES[field] || [];
+  // Present only when the field was chosen for the visitor rather than by
+  // them. The prompt uses it to declare the choice and to name the menu.
+  const otherFields = defaulted ? SEGMENT_OFFER_FIELDS.filter(f => f !== field) : [];
 
   const item = await resolveSegmentItem(question, cues);
-  if (!item) return { requested: true, field, unavailable: 'no_scored_item', item: null, rows: [], available_values: availableValues };
+  if (!item) return { requested: true, field, unavailable: 'no_scored_item', item: null, rows: [], available_values: availableValues, field_defaulted: !!defaulted, other_fields: otherFields };
 
   const sql = `SELECT segment, n, joy_index, vs_overall
                FROM bjl_public_segment_read(${item.item_id}, '${sqlEscape(field)}')`;
   const { data, error } = await supabase.rpc('execute_read_sql', { query_text: sql });
   if (error) {
     console.error('[bjl-public-chat] retrieveSegments error:', error.message);
-    return { requested: true, field, unavailable: 'read_failed', item, rows: [], available_values: availableValues };
+    return { requested: true, field, unavailable: 'read_failed', item, rows: [], available_values: availableValues, field_defaulted: !!defaulted, other_fields: otherFields };
   }
   // Non-answer buckets are not segments. "People who declined to state
   // their job are eight points below average" is a sentence about the
@@ -1013,6 +1060,8 @@ async function retrieveSegments(question) {
   return {
     requested: true, field, item,
     available_values: availableValues,
+    field_defaulted: !!defaulted,
+    other_fields: otherFields,
     unavailable: rows.length === 0 ? 'suppressed' : null,
     rows: rows.map(r => ({
       segment: r.segment,
@@ -1217,6 +1266,12 @@ function buildRetrievedPayloadForLLM(retrieved) {
         unavailable: s.unavailable,
         available_values: s.available_values || [],
         generation_ages: s.field === 'generation' ? SEGMENT_GENERATION_AGES : undefined,
+        // True when the visitor asked a demographic question without
+        // naming a demographic, so the field was chosen for them. The
+        // answer has to declare the choice; `other_fields` is the menu it
+        // closes on, so the next question can be asked deliberately.
+        field_defaulted: !!s.field_defaulted,
+        other_fields: s.other_fields || [],
         rows: s.rows,
       };
     })(),

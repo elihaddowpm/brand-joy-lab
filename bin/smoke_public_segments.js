@@ -371,6 +371,50 @@ async function caseNoCue() {
   check('no rows', seg.rows.length === 0, `${seg.rows.length}`);
 }
 
+async function caseUnnamedField() {
+  // The spec's founding fixture, and the one that routed nowhere until
+  // now: a demographic question that names no demographic. It must not
+  // fall through to a general answer, because the visitor asked who, and
+  // a general answer silently declines the question they asked.
+  //
+  // The default is generation, and it is BOUNDED. One field, never a
+  // sweep across all seven — with seven fields and a dozen segments each,
+  // something always looks like a gap, and a sweep would present fishing
+  // as a finding. The choice is declared in the answer and the other cuts
+  // are named, so a cut the visitor did not choose is never mistaken for
+  // the only one available or the strongest one found.
+  const seg = await run('UNNAMED FIELD — demographic intent with no demographic named',
+    'Who loves theme parks most?');
+  check('routes rather than falling through', seg.requested === true, `${seg.requested}`);
+  check('defaults to generation', seg.field === 'generation', seg.field);
+  check('the default is flagged, so the answer must declare it', seg.field_defaulted === true,
+    `${seg.field_defaulted}`);
+  check('offers the other cuts by name',
+    seg.other_fields.join(',') === 'occupation,income_bracket,region', seg.other_fields.join(', '));
+  check('generation is not offered back to itself', !seg.other_fields.includes('generation'));
+  // The intent pattern spans the sentence, so stripping the match would
+  // take the subject with it. Only the framing verb is stripped, and the
+  // topic still resolves to the same item as the explicit generation
+  // fixture above.
+  check('topic survives the cue strip', !!seg.item && seg.item.item_id === 4607,
+    seg.item && `${seg.item.item_id} "${seg.item.item_name}"`);
+  const mil = rowFor(seg, 'Millennial');
+  const boo = rowFor(seg, 'Boomer');
+  check('Millennial row with its n', !!mil && mil.n >= 60, mil && `n=${mil.n} JI=${mil.joy_index}`);
+  check('Boomer row with its n', !!boo && boo.n >= 60, boo && `n=${boo.n} JI=${boo.joy_index}`);
+  check('the split the answer will lead on', !!mil && !!boo && mil.joy_index > boo.joy_index,
+    mil && boo && `${(mil.joy_index - boo.joy_index).toFixed(1)} points`);
+
+  // An explicitly named field must never be overwritten by the default,
+  // and must never carry the "I chose this for you" flag.
+  const named = await run('UNNAMED FIELD — an explicit field still wins and is not flagged',
+    'Which region loves theme parks most?');
+  check('explicit field beats the default', named.field === 'region', named.field);
+  check('not flagged as defaulted', named.field_defaulted === false, `${named.field_defaulted}`);
+  check('no menu offered when the visitor chose', named.other_fields.length === 0,
+    named.other_fields.join(', '));
+}
+
 function caseCueUnit() {
   // Cue routing in isolation, so a regression in the regexes is legible
   // without a database round trip.
@@ -402,6 +446,13 @@ function caseCueUnit() {
     ['Is retail therapy joyful?', null],
     ['How joyful is a road trip out west?', null],
     ['Is a $50 dinner joyful?', null],
+    // Demographic intent, no demographic named: defaults to generation.
+    ['Who loves theme parks most?', 'generation'],
+    ['Which group gets the most joy from cooking?', 'generation'],
+    ['What kind of people enjoy camping?', 'generation'],
+    // A bare "who" is not a demographic request. These must stay silent.
+    ['Who is this brand for?', null],
+    ['Who makes the best coffee?', null],
   ];
   for (const [q, want] of expect) {
     const got = detectSegmentField(q).field;
@@ -419,6 +470,7 @@ function caseCueUnit() {
   await caseOccupationVocabulary();
   await caseIncomeThreshold();
   await caseAgeThreshold();
+  await caseUnnamedField();
   console.log(failures === 0 ? '\nAll assertions passed.' : `\n${failures} assertion(s) FAILED.`);
   process.exit(failures === 0 ? 0 : 1);
 })().catch(e => { console.error('harness failed:', e); process.exit(1); });
