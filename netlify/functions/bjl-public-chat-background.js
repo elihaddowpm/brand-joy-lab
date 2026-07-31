@@ -835,8 +835,16 @@ const SEGMENT_FIELD_CUES = [
   // Ordered: the decision-role cues are checked first because they are the
   // most specific, and their vocabulary ("who decides where to go on
   // vacation") overlaps every other cue class.
-  ['decisionmaker_vacation', /\b(decision[- ]?makers?|decides?|deciding|decision[- ]?role|sole or primary|share equally|who books|who plans|books? the)\b/i, /\b(vacation|trip|travel|holiday|getaway)\b/i],
-  ['decisionmaker_groceries', /\b(decision[- ]?makers?|decides?|deciding|decision[- ]?role|sole or primary|share equally|who buys|who shops|does the shopping)\b/i, /\b(grocer|groceries|supermarket|food shopping|household shopping)\b/i],
+  // The qualifiers carry `s?` and `(y|ies)` on every noun. They did not,
+  // and that was the whole of the 18:25 defect: `vacation\b` does not
+  // match "vacations", so "what types of VACATIONS bring more joy to the
+  // decisionmaker versus the influencer" matched the decision-role cue,
+  // failed the qualifier on a plural, routed nowhere, and came back as
+  // "the Lab hasn't measured that split" — about a split with near-full
+  // panel coverage. A trailing s is not a reason to tell someone their
+  // question is unanswerable.
+  ['decisionmaker_vacation', /\b(decision[- ]?makers?|decides?|deciding|decision[- ]?role|influencers?|sole or primary|share equally|who books?|who plans?|books? the)\b/i, /\b(vacations?|trips?|travel(l?ing)?|holidays?|getaways?)\b/i],
+  ['decisionmaker_groceries', /\b(decision[- ]?makers?|decides?|deciding|decision[- ]?role|influencers?|sole or primary|share equally|who buys|who shops|does the shopping)\b/i, /\b(grocer(y|ies)?|supermarkets?|food shopping|household shopping)\b/i],
   ['occupation', SEGMENT_OCCUPATION_PEOPLE],
   ['income_bracket', SEGMENT_INCOME_THRESHOLD],
   ['generation', SEGMENT_AGE_THRESHOLD],
@@ -904,17 +912,53 @@ const SEGMENT_OFFER_FIELDS = ['occupation', 'income_bracket', 'region'];
 
 function detectSegmentField(question) {
   const q = String(question || '');
-  if (SEGMENT_POLITICAL.test(q)) return { field: null, unavailable: 'political', cues: [], defaulted: false };
-  if (SEGMENT_GEO_TOO_FINE.test(q)) return { field: null, unavailable: 'geography_too_fine', cues: [], defaulted: false };
+  if (SEGMENT_POLITICAL.test(q)) return { field: null, field2: null, unavailable: 'political', cues: [], defaulted: false };
+  if (SEGMENT_GEO_TOO_FINE.test(q)) return { field: null, field2: null, unavailable: 'geography_too_fine', cues: [], defaulted: false };
+
+  // Every field the question names, in cue order, not just the first.
+  // "Do millennial women like coffee?" names two, and reading them as two
+  // separate cuts answers a question nobody asked: the generation row and
+  // the gender row are both about people who are mostly not millennial
+  // women. bjl_public_segment_read takes an optional p_field2 and returns
+  // the combined cell, with the same floor applied to the intersection.
+  const matched = [];
+  const cues = [];
   for (const [field, cue, qualifier] of SEGMENT_FIELD_CUES) {
+    if (matched.includes(field)) continue;
     if (cue.test(q) && (!qualifier || qualifier.test(q))) {
-      return { field, unavailable: null, cues: qualifier ? [cue, qualifier] : [cue], defaulted: false };
+      matched.push(field);
+      // The cue is stripped before the topic search; the QUALIFIER is not.
+      // A qualifier only exists on the decision-role fields, where it names
+      // the product domain — which is the topic, not the cut. Stripping it
+      // left "what types of vacations bring more joy to the decisionmaker
+      // versus the influencer" searching on "type" and "bring", and it
+      // resolved to "have you experienced changes in the things that bring
+      // you joy". The cue is what to remove; the qualifier is what to keep.
+      cues.push(cue);
     }
   }
-  if (SEGMENT_INTENT_UNNAMED.some(re => re.test(q))) {
-    return { field: SEGMENT_DEFAULT_FIELD, unavailable: null, cues: [SEGMENT_INTENT_STRIP], defaulted: true };
+  if (matched.length > 0) {
+    return {
+      field: matched[0],
+      // Two at most. A three-way cell would be under the floor almost
+      // everywhere, and an answer built on the two cells that survived
+      // would be a survivorship artefact rather than a finding.
+      field2: matched.length > 1 ? matched[1] : null,
+      // "Millennial women in the South" names three, and the two that
+      // survive the cap are decided by cue order, which means nothing.
+      // Reading two and saying nothing would answer about millennial women
+      // nationally under a question about the South — the same wrong-but-
+      // plausible shape the cross exists to prevent. So the dropped fields
+      // travel, and the answer is required to scope them out loud.
+      fields_omitted: matched.slice(2),
+      unavailable: null, cues, defaulted: false,
+    };
   }
-  return { field: null, unavailable: null, cues: [], defaulted: false };
+
+  if (SEGMENT_INTENT_UNNAMED.some(re => re.test(q))) {
+    return { field: SEGMENT_DEFAULT_FIELD, field2: null, fields_omitted: [], unavailable: null, cues: [SEGMENT_INTENT_STRIP], defaulted: true };
+  }
+  return { field: null, field2: null, fields_omitted: [], unavailable: null, cues: [], defaulted: false };
 }
 
 // Words that describe the SHAPE of a question rather than its subject.
@@ -941,6 +985,12 @@ const SEGMENT_FRAMING_WORDS = new Set([
   'going','goes','went','doing','getting','gets','having',
   'like','likes','liked','people','person','persons','folks','someone',
   'anyone','everyone','more','less','most','least','much','many',
+  // Typology and delivery verbs. "What TYPES of vacations BRING more joy"
+  // is asking about vacations; "type" and "bring" are how the question is
+  // shaped, and "bring" alone matched "changes in the things that bring
+  // you joy".
+  'type','types','kind','kinds','sort','sorts','bring','brings','bringing',
+  'give','gives','giving','versus',
 ]);
 
 function segmentTopicTerms(question, cues) {
@@ -1015,9 +1065,9 @@ async function resolveSegmentItem(question, cues) {
 }
 
 async function retrieveSegments(question) {
-  const { field, unavailable, cues, defaulted } = detectSegmentField(question);
-  if (unavailable) return { requested: true, field: null, unavailable, item: null, rows: [], available_values: [], field_defaulted: false, other_fields: [] };
-  if (!field) return { requested: false, field: null, unavailable: null, item: null, rows: [], available_values: [], field_defaulted: false, other_fields: [] };
+  const { field, field2, fields_omitted: fieldsOmitted, unavailable, cues, defaulted } = detectSegmentField(question);
+  if (unavailable) return { requested: true, field: null, field2: null, fields_omitted: [], unavailable, item: null, rows: [], available_values: [], field_defaulted: false, other_fields: [] };
+  if (!field) return { requested: false, field: null, field2: null, fields_omitted: [], unavailable: null, item: null, rows: [], available_values: [], field_defaulted: false, other_fields: [] };
 
   // The field's full vocabulary travels with the result whether or not any
   // rows come back. It is what lets the answer say "we cut occupation 33
@@ -1030,14 +1080,43 @@ async function retrieveSegments(question) {
   const otherFields = defaulted ? SEGMENT_OFFER_FIELDS.filter(f => f !== field) : [];
 
   const item = await resolveSegmentItem(question, cues);
-  if (!item) return { requested: true, field, unavailable: 'no_scored_item', item: null, rows: [], available_values: availableValues, field_defaulted: !!defaulted, other_fields: otherFields };
+  if (!item) return { requested: true, field, field2, fields_omitted: fieldsOmitted, unavailable: 'no_scored_item', item: null, rows: [], available_values: availableValues, field_defaulted: !!defaulted, other_fields: otherFields };
 
-  const sql = `SELECT segment, n, joy_index, vs_overall
-               FROM bjl_public_segment_read(${item.item_id}, '${sqlEscape(field)}')`;
-  const { data, error } = await supabase.rpc('execute_read_sql', { query_text: sql });
-  if (error) {
-    console.error('[bjl-public-chat] retrieveSegments error:', error.message);
-    return { requested: true, field, unavailable: 'read_failed', item, rows: [], available_values: availableValues, field_defaulted: !!defaulted, other_fields: otherFields };
+  const readSegments = async (f2) => {
+    const args = f2
+      ? `${item.item_id}, '${sqlEscape(field)}', '${sqlEscape(f2)}'`
+      : `${item.item_id}, '${sqlEscape(field)}'`;
+    const { data, error } = await supabase.rpc('execute_read_sql', {
+      query_text: `SELECT segment, n, joy_index, vs_overall FROM bjl_public_segment_read(${args})`,
+    });
+    if (error) {
+      console.error('[bjl-public-chat] retrieveSegments error:', error.message);
+      return null;
+    }
+    return Array.isArray(data) ? data : [];
+  };
+
+  // Try the intersection first when the question named two fields. The
+  // combined cells carry the same floor, so a thin intersection comes back
+  // empty — which is the common case, since crossing two fields multiplies
+  // the number of cells and divides the base among them.
+  //
+  // Empty is not a dead end. It falls back to the first field alone and
+  // says so, because "millennial women are too thin to isolate on this
+  // item, but here is generation" is a real answer and "no data" is not.
+  // What it must never do is report the two single-field cuts as if they
+  // described the intersection: the generation row and the gender row are
+  // both mostly about people who are not millennial women.
+  let usedField2 = field2 || null;
+  let intersectionThin = false;
+  let data = await readSegments(field2);
+  if (field2 && Array.isArray(data) && data.length === 0) {
+    intersectionThin = true;
+    usedField2 = null;
+    data = await readSegments(null);
+  }
+  if (data === null) {
+    return { requested: true, field, field2, fields_omitted: fieldsOmitted, unavailable: 'read_failed', item, rows: [], available_values: availableValues, field_defaulted: !!defaulted, other_fields: otherFields };
   }
   // Non-answer buckets are not segments. "People who declined to state
   // their job are eight points below average" is a sentence about the
@@ -1059,7 +1138,17 @@ async function retrieveSegments(question) {
   // why `suppressed` is distinguished from `requested: false`.
   return {
     requested: true, field, item,
+    // The field actually read against, which is null when a requested
+    // intersection came back under the floor and we fell back.
+    field2: usedField2,
+    // The field the visitor asked to cross with, whether or not it
+    // survived. The answer needs this to say what it could not isolate.
+    field2_requested: field2 || null,
+    // Fields the question named that no read covers. Two is the ceiling.
+    fields_omitted: fieldsOmitted || [],
+    intersection_thin: intersectionThin,
     available_values: availableValues,
+    available_values2: usedField2 ? (SEGMENT_VALUES[usedField2] || []) : [],
     field_defaulted: !!defaulted,
     other_fields: otherFields,
     unavailable: rows.length === 0 ? 'suppressed' : null,
@@ -1262,9 +1351,21 @@ function buildRetrievedPayloadForLLM(retrieved) {
       if (!s || !s.requested) return null;
       return {
         field: s.field,
+        // Non-null when the rows are combined cells ("Millennial × Female").
+        field2: s.field2 || null,
+        // Non-null when a cross was asked for. If it is set and `field2`
+        // is null, the intersection was under the floor and these rows are
+        // the first field alone — which the answer must say out loud.
+        field2_requested: s.field2_requested || null,
+        // Demographics the question named that this read does not cover,
+        // because two fields is the ceiling. Non-empty means the answer
+        // owes the visitor a sentence scoping them out.
+        fields_omitted: s.fields_omitted || [],
+        intersection_thin: !!s.intersection_thin,
         item_name: s.item ? s.item_name || s.item.item_name : null,
         unavailable: s.unavailable,
         available_values: s.available_values || [],
+        available_values2: s.available_values2 || [],
         generation_ages: s.field === 'generation' ? SEGMENT_GENERATION_AGES : undefined,
         // True when the visitor asked a demographic question without
         // naming a demographic, so the field was chosen for them. The

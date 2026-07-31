@@ -22,9 +22,9 @@
  * Exits non-zero if any assertion fails.
  *
  * ===================================================================
- * TWO HAZARDS THIS LAYER IS BUILT AROUND
+ * THE HAZARDS THIS LAYER IS BUILT AROUND
  *
- * Both were live during the build. Both belong to the worst failure
+ * Every one of these was live, and every one belongs to the worst failure
  * class this tool has: wrong but plausible, with no error raised. They
  * are written up here because the code that avoids them looks like
  * over-caution unless you know what it is avoiding.
@@ -112,6 +112,31 @@
  * people, more, most, many) alongside the original measurement language.
  * That query now correctly returns no_scored_item, and the assertion for
  * it is below.
+ *
+ * ---- HAZARD 3: a routing miss narrated as a missing measurement ----
+ *
+ * A live visitor asked:
+ *
+ *   "What types of vacations bring more joy to the decisionmaker versus
+ *    the influencer?"
+ *
+ * and was told the Lab hadn't measured that split. It has. It has
+ * near-full panel coverage and the function serves it off any single item.
+ * The routing had failed on a plural — `vacation\b` does not match
+ * "vacations" — and the synthesizer, handed a null field, had no way to
+ * tell "nothing was routed" from "nothing exists" and reached for the
+ * worse of the two.
+ *
+ * That is the hazard, and it is not really about plurals: any routing gap
+ * anywhere in this layer arrives at the synthesizer looking exactly like
+ * an empty corpus. A visitor can catch a wrong number. They cannot catch
+ * being told a question is unanswerable — they just stop asking.
+ *
+ * Two things guard it. The qualifiers are plural-safe, asserted in
+ * casePartialSupport and in the cue unit. And prompt rule 13 forbids the
+ * absence phrasing outright whenever a field or a vocabulary is present,
+ * requiring instead that the surface's limit be scoped in a clause and the
+ * supported portion served immediately after it.
  *
  * ---- A THIN MARGIN THAT IS DELIBERATELY LEFT THIN ----
  *
@@ -415,6 +440,95 @@ async function caseUnnamedField() {
     named.other_fields.join(', '));
 }
 
+async function casePartialSupport() {
+  // The 18:25 defect, from a live visitor query. It came back as "the Lab
+  // hasn't measured the decisionmaker versus influencer split directly" —
+  // a false claim about the panel, on a split with near-full coverage that
+  // the function serves off any single item.
+  //
+  // The cause was one missing character. The qualifier was
+  // /\b(vacation|trip|travel|holiday|getaway)\b/ and `vacation\b` does not
+  // match "vacations". So the cue matched, the qualifier failed on a
+  // trailing s, the field came back null, and the synthesizer had nothing
+  // to distinguish "no cut was routed" from "no such cut exists" — so it
+  // narrated a routing miss as an absence of data. Every qualifier now
+  // carries s? / (y|ies), and prompt rule 13 forbids the phrasing outright
+  // whenever a field is served.
+  const seg = await run('PARTIAL SUPPORT — a plural qualifier still routes (the 18:25 defect)',
+    'What types of vacations bring more joy to the decisionmaker versus the influencer?');
+  check('routes rather than reading as unmeasured', seg.field === 'decisionmaker_vacation', seg.field);
+  check('nothing unavailable', seg.unavailable === null, seg.unavailable);
+  // The second, independent bug in the same query. Once it routed, the
+  // qualifier ("vacations") was being stripped along with the cue, leaving
+  // the resolver searching on "type" and "bring" — which landed on item
+  // 314, "have you experienced changes in the things that bring you joy".
+  // Only the CUE is stripped now; the qualifier names the product domain,
+  // which is the topic.
+  check('resolved to "Taking a VACATION" (228, not 314)', !!seg.item && seg.item.item_id === 228,
+    seg.item && `${seg.item.item_id} "${seg.item.item_name}"`);
+  check('all five decision-role values travel', seg.available_values.length === 5,
+    seg.available_values.join(', '));
+  const share = rowFor(seg, 'Share equally in decision-making');
+  const sole = rowFor(seg, 'Sole or primary decision-maker');
+  const infl = rowFor(seg, 'Influence or participate in choosing');
+  const not = rowFor(seg, 'Not involved in choosing');
+  check('Share equally 79.1 n=3541', !!share && share.joy_index === 79.1 && share.n === 3541,
+    share && `${share.joy_index} n=${share.n}`);
+  check('Sole 76.2 n=4609', !!sole && sole.joy_index === 76.2 && sole.n === 4609,
+    sole && `${sole.joy_index} n=${sole.n}`);
+  check('Influence 68.6', !!infl && infl.joy_index === 68.6, infl && `${infl.joy_index} n=${infl.n}`);
+  check('Not involved 58.1', !!not && not.joy_index === 58.1, not && `${not.joy_index} n=${not.n}`);
+  // The gradient is the finding: agency tracks joy, monotonically, across
+  // four rows all comfortably above the floor.
+  check('the agency gradient is monotonic',
+    !!share && !!sole && !!infl && !!not &&
+    share.joy_index > sole.joy_index && sole.joy_index > infl.joy_index && infl.joy_index > not.joy_index,
+    [share, sole, infl, not].filter(Boolean).map(r => r.joy_index).join(' > '));
+}
+
+async function caseIntersection() {
+  // Two fields named, one cell read. Answering this as two separate cuts
+  // is the wrong-but-plausible failure again: the generation row and the
+  // gender row are both mostly about people who are not millennial women,
+  // and stating them under a question about millennial women is a finding
+  // about nobody.
+  const seg = await run('INTERSECTION — two named fields read as one combined cell',
+    'Do millennial women like coffee?');
+  check('first field is generation', seg.field === 'generation', seg.field);
+  check('second field is gender', seg.field2 === 'gender', `${seg.field2}`);
+  check('the cross was not thin', seg.intersection_thin === false, `${seg.intersection_thin}`);
+  check('resolved to "Drinking COFFEE"', !!seg.item && seg.item.item_id === 4765,
+    seg.item && `${seg.item.item_id} "${seg.item.item_name}"`);
+  check('both vocabularies travel',
+    seg.available_values.length === 5 && seg.available_values2.length === 5,
+    `${seg.available_values.length} × ${seg.available_values2.length}`);
+  // The segment strings are combined cells, which is what lets the prompt
+  // say "millennial women" without lying. If these ever come back as bare
+  // "Millennial", the p_field2 overload stopped being used and rule 14's
+  // fallback branch should have fired instead of silently degrading.
+  check('every row is a combined cell', seg.rows.length > 0 && seg.rows.every(r => / × /.test(r.segment)),
+    seg.rows.map(r => r.segment).slice(0, 3).join(' | '));
+  const mf = rowFor(seg, 'Millennial × Female');
+  check('Millennial × Female 56.6 n=597', !!mf && mf.joy_index === 56.6 && mf.n === 597,
+    mf && `${mf.joy_index} n=${mf.n}`);
+  check('and it carries its own vs_overall', !!mf && mf.vs_overall === 9.2, mf && `${mf.vs_overall}`);
+  check('the floor applies to the intersection', seg.rows.every(r => r.n >= 60),
+    seg.rows.map(r => `${r.segment}:${r.n}`).join(' '));
+  // The cell the question asked about is the one the answer leads on, and
+  // it is the top of the table — not an artefact of asking for it.
+  check('the asked-for cell is the strongest', !!mf && seg.rows[0].segment === 'Millennial × Female',
+    seg.rows[0] && seg.rows[0].segment);
+
+  // One field named, no cross. field2 stays null so rule 14 does not fire
+  // and no × ever appears in a single-cut answer.
+  const single = await run('INTERSECTION — one named field is not crossed with anything',
+    'Do millennials like coffee?');
+  check('no second field', single.field2 === null, `${single.field2}`);
+  check('nothing was requested to cross', single.field2_requested === null, `${single.field2_requested}`);
+  check('rows are plain segments', single.rows.every(r => !/ × /.test(r.segment)),
+    single.rows.map(r => r.segment).slice(0, 3).join(' | '));
+}
+
 function caseCueUnit() {
   // Cue routing in isolation, so a regression in the regexes is legible
   // without a database round trip.
@@ -453,11 +567,44 @@ function caseCueUnit() {
     // A bare "who" is not a demographic request. These must stay silent.
     ['Who is this brand for?', null],
     ['Who makes the best coffee?', null],
+    // Plurals. Every one of these routed nowhere until the qualifiers grew
+    // an s, and routing nowhere is what got narrated as "not measured".
+    ['What types of vacations bring more joy to the decisionmaker versus the influencer?', 'decisionmaker_vacation'],
+    ['Who decides on groceries in the household?', 'decisionmaker_groceries'],
+    ['Do the people who plan the trips enjoy them more?', 'decisionmaker_vacation'],
   ];
   for (const [q, want] of expect) {
     const got = detectSegmentField(q).field;
     check(`"${q.slice(0, 46)}${q.length > 46 ? '…' : ''}" -> ${want || '(none)'}`, got === want, got || '(none)');
   }
+
+  // Second-field detection, in isolation. The cap is two: a three-way cell
+  // is under the floor almost everywhere, and an answer built on the cells
+  // that happened to survive would be a survivorship artefact.
+  const pairs = [
+    ['Do millennial women like coffee?', 'generation', 'gender'],
+    ['How do boomers in the South feel about vacations?', 'generation', 'region'],
+    ['Do young people like theme parks more?', 'generation', null],
+    ['Do men and women differ here?', 'gender', null],
+  ];
+  for (const [q, f1, f2] of pairs) {
+    const got = detectSegmentField(q);
+    check(`"${q.slice(0, 42)}${q.length > 42 ? '…' : ''}" -> ${f1} × ${f2 || '(none)'}`,
+      got.field === f1 && got.field2 === f2, `${got.field} × ${got.field2 || '(none)'}`);
+  }
+  // Three named fields. Two survive, and which two is decided by cue
+  // order, which carries no meaning — so the third cannot just vanish.
+  // Reading generation × region under "millennial women in the South"
+  // would answer about millennial southerners of both genders and look
+  // exactly like an answer to the question asked.
+  const three = detectSegmentField('Do millennial women in the South like coffee?');
+  check('three named fields are capped at two',
+    three.field === 'generation' && three.field2 === 'region', `${three.field} × ${three.field2}`);
+  check('the dropped field is disclosed, not swallowed',
+    three.fields_omitted.join(',') === 'gender', three.fields_omitted.join(', ') || '(none)');
+  const two = detectSegmentField('Do millennial women like coffee?');
+  check('nothing is dropped when two fit', two.fields_omitted.length === 0,
+    two.fields_omitted.join(', ') || '(none)');
 }
 
 (async () => {
@@ -471,6 +618,8 @@ function caseCueUnit() {
   await caseIncomeThreshold();
   await caseAgeThreshold();
   await caseUnnamedField();
+  await casePartialSupport();
+  await caseIntersection();
   console.log(failures === 0 ? '\nAll assertions passed.' : `\n${failures} assertion(s) FAILED.`);
   process.exit(failures === 0 ? 0 : 1);
 })().catch(e => { console.error('harness failed:', e); process.exit(1); });
