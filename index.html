@@ -5323,6 +5323,105 @@ const deriveEvidenceTier = (t) => {
   return spoke ? 'modeled' : 'unmeasured';
 };
 
+// -------------------------------------------------------------------------
+// Capture builders — one per surface that can put a finding in the register.
+// -------------------------------------------------------------------------
+// A builder turns something already on screen into a compose draft. It
+// never queries, never computes a new number, and never writes: the
+// analyst still supplies the action, the window and any signals on the
+// compose form, and the card lands as a candidate.
+//
+// What a builder is actually FOR is the claim_population. The register's
+// three NOT NULL columns are what is true, who it holds for, and which
+// items it rests on, and the middle one is the one a finding lifted out
+// of a conversation loses first. Each surface knows who was counted in a
+// different way, so each surface gets its own builder rather than a
+// shared one that would have to guess.
+//
+// Every builder returns { draft } or { refusal }. A refusal is a
+// sentence for the analyst, not a thrown error and not a silent no-op.
+
+// The Intelligence pane. The only builder that can say no, and the
+// reason the shape has a refusal branch at all.
+//
+// A synthesized block is { claim, frame, evidence[], implication }. There
+// is no population field anywhere in that schema — the base sizes live
+// inside the evidence prose as "n = 340", and an audience arm, when one
+// ran, puts its size in the turn's structured payload. So the population
+// is read back out of the material the block already cites, verbatim,
+// and when the block cites no base at all there is nothing to read and
+// the builder refuses.
+//
+// It refuses rather than falling back to something like "BJL respondents"
+// because that phrase would be true of every claim this tool has ever
+// made and therefore says nothing. A card whose population line means
+// nothing is worse than a card that was never made: it passes the NOT
+// NULL constraint, reads as authored, and cannot be checked.
+const intelligencePopulation = (block, structured) => {
+  const s = structured || {};
+  const audienceN = Number(s.audience_size);
+  if (Number.isFinite(audienceN) && audienceN > 0) {
+    return `The audience arm of this investigation — n = ${audienceN.toLocaleString()}.`;
+  }
+  // Bases as the block states them, kept as the strings they are. A
+  // rounded or re-formatted n is a number this tool made up.
+  const bases = [];
+  for (const line of (Array.isArray(block.evidence) ? block.evidence : [])) {
+    if (typeof line !== 'string') continue;
+    const m = line.match(/n\s*=\s*[\d,]+/i);
+    if (m) bases.push(m[0].replace(/\s+/g, ' '));
+  }
+  if (bases.length === 0) return null;
+  return `Respondents who answered the items cited below — ${bases.join('; ')}.`;
+};
+
+const intelligenceDraft = ({ block, structured, question, engagement }) => {
+  if (!block || !block.claim) {
+    return { refusal: 'This turn produced no insight block to capture.' };
+  }
+  const population = intelligencePopulation(block, structured);
+  if (!population) {
+    return {
+      refusal: 'This insight does not name who was counted — no base size in its evidence and no audience read on the turn. '
+             + 'The register requires a population for every claim, and one cannot be inferred from prose. '
+             + 'Ask the question again in a form that returns rows, and capture that.',
+    };
+  }
+  const evidence = (Array.isArray(block.evidence) ? block.evidence : []).filter(l => typeof l === 'string');
+  // Measured only when the claim rests on rows that carry their bases.
+  // An audience-sized block whose evidence names no n is a real finding
+  // about a real audience and still not a measured claim about items.
+  const cited = evidence.some(l => /n\s*=\s*[\d,]+/i.test(l));
+  return {
+    draft: {
+      origin: `Investigation — ${question || 'this turn'}`,
+      engagement: engagement || '',
+      title: String(block.claim).slice(0, 120),
+      claim_summary: [block.claim, block.frame || '', ...evidence].filter(Boolean).join(' '),
+      claim_population: population,
+      evidence_tier: cited ? 'measured' : 'unmeasured',
+      // Blocks cite items by name, never by id. An empty claim_items is
+      // honest; a guessed id would be the id-space collision all over
+      // again, one table further along.
+      claim_items: [],
+    },
+  };
+};
+
+// The Audience Map and the Dance Map have no builder here, deliberately.
+// Neither renderer is mounted anywhere in this file — AudienceMapResults
+// and JoyMapDanceMapResults survive as components with no entry point,
+// as the note at the top of JoyMapMode says. A builder for a surface
+// nobody can reach is untestable by construction, and the fields it
+// would have to name are not the fields those payloads carry: the
+// Audience Map's rows are { item_name, cohort_ji, corpus_ji, cohort_n }
+// and the Dance Map's cards are audience-map dimensions with a
+// cohort_n, not the focal/other pairs with shared answerers that the
+// per-surface table describes. That description fits the Connections
+// sweep, which already has its builder above. When those two surfaces
+// get an entry point, their builders get written against the payloads
+// they actually emit.
+
 const JoyMapConnectionsSweep = ({ result, showConflicting, profileCache, onOpenProfile, rosterCache, onOpenRoster, predictions, cohortPreset, doorLabel, engagement, onSendToBulletin, onRunRungB }) => {
   if (!result || !Array.isArray(result.territories)) return null;
 
@@ -5696,7 +5795,7 @@ const JoyMapConnectionsSweep = ({ result, showConflicting, profileCache, onOpenP
                     onClick={() => onSendToBulletin(territoryDraft(t, state))}
                     title="Pre-fill a candidate opportunity card from this row. You add the action, the window and any signals."
                   >
-                    Send to Bulletin →
+                    Capture this finding
                   </button>
                 </div>
               )}
@@ -5778,7 +5877,7 @@ const JoyMapTerritoryProfile = ({ profile, territoryKey, territoryName, rosterEn
       <button className="btn ghost joy-map-send-btn tiny"
         onClick={() => onSendToBulletin(findingDraft(i, measuredRow))}
         title="Pre-fill a candidate opportunity card from this finding.">
-        → bulletin
+        capture
       </button>
     </td>
   ) : null;
@@ -7578,6 +7677,12 @@ const BlockView = ({ block, blockIndex, structured, jobId, question, activeProje
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState(null);
+  // Capture is a separate verb from save. Save puts the finding in a
+  // project; capture proposes it as a card in the register, which is why
+  // it can refuse and save cannot.
+  const [compose, setCompose] = useState(null);
+  const [refusal, setRefusal] = useState(null);
+  const [captured, setCaptured] = useState(null);
 
   if (!block || !block.claim) return null;
 
@@ -7609,6 +7714,13 @@ const BlockView = ({ block, blockIndex, structured, jobId, question, activeProje
 
   const activeProject = (projects || []).find(p => p.id === activeProjectId) || null;
 
+  const capture = () => {
+    const built = intelligenceDraft({ block, structured, question, engagement: '' });
+    if (built.refusal) { setRefusal(built.refusal); setCompose(null); return; }
+    setRefusal(null);
+    setCompose(built.draft);
+  };
+
   return (
     <div className="block-view">
       <div className="block-claim">{block.claim}</div>
@@ -7632,8 +7744,29 @@ const BlockView = ({ block, blockIndex, structured, jobId, question, activeProje
             {saving ? 'Saving…' : (activeProjectId ? 'Save to project' : 'Save to project…')}
           </button>
         )}
+        {captured ? (
+          <span className="block-saved-note">Candidate #{captured.opportunity_id} created — "{captured.title}".</span>
+        ) : (
+          <button className="btn ghost block-save-btn"
+            onClick={capture}
+            title="Propose this finding as a candidate in the Opportunity Bulletin">
+            Capture this finding
+          </button>
+        )}
         {error && <span className="block-save-error">{error}</span>}
       </div>
+      {/* The refusal is rendered where the button is, in the analyst's
+          words, rather than thrown or logged. A capture that quietly
+          does nothing teaches the analyst that the button is broken;
+          this one says which piece the register is missing. */}
+      {refusal && <div className="block-capture-refusal">{refusal}</div>}
+      {compose && (
+        <BulletinCompose
+          draft={compose}
+          onClose={() => setCompose(null)}
+          onCreated={(opp) => { setCompose(null); setCaptured(opp); }}
+        />
+      )}
     </div>
   );
 };
