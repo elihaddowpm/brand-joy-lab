@@ -185,18 +185,37 @@ section('Part 1b — windows map by the ruling');
 
 section('Part 1c — a flag appends to the detail rather than hiding in raw');
 {
+  // The shape the market scans actually emit: `flag` on every window,
+  // null when the window is unflagged.
   const flagged = clone(R1);
-  flagged.activation_windows = [{
-    window: 'Iowa State Fair America250 programming — Midwest travel moment',
-    timing: 'August 13 — 23, 2026',
-    flag: 'exact date unconfirmed, flagged not dropped',
-    source: 'https://example.invalid/x',
-  }];
+  flagged.activation_windows = [
+    {
+      window: 'Iowa State Fair America250 programming — Midwest travel moment',
+      timing: 'August 13 — 23, 2026',
+      flag: 'Exact date unconfirmed — flagged, not dropped',
+      source: 'https://example.invalid/x',
+    },
+    {
+      window: 'Great Hostel Give Back — group programming',
+      timing: 'Rolling',
+      flag: null,
+      owned_source: true,
+      source: null,
+    },
+  ];
   flagged.signals = [];
   const { rows, problems } = mapPayload(flagged);
   check('flagged window maps', problems.length === 0, problems.join(' | '));
   check('timing still leads the detail', rows[0].detail.startsWith('August 13 — 23, 2026'));
-  check('flag is readable in the detail', rows[0].detail.includes('exact date unconfirmed, flagged not dropped'));
+  check('flag is readable in the detail', rows[0].detail.includes('Exact date unconfirmed'));
+  // Truthiness, not presence. "flag": null is the common case, and
+  // testing for the key would append "null" to every unflagged window.
+  check('a null flag appends nothing', rows[1].detail === 'Rolling');
+  // A window can be an owned property. Defaulting to false would
+  // reclassify it as observed market.
+  check('owned_source true on a window reaches the column', rows[1].owned_source === true);
+  check('a window with no owned_source is false', rows[0].owned_source === false);
+  check('a null window source stays null', rows[1].source_url === null);
 }
 
 section('Part 1d — HAZARD 3: truncate FIRST, or the rule does nothing');

@@ -94,11 +94,16 @@ const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
  * unconfirmed, flagged not dropped" is the caveat an analyst must see
  * when citing the window, and putting it in raw defeats it.
  *
- * NOTE ON THE FLAG KEY: none of the windows in the payload on disk carry
- * one, so `flag`/`flags` is read from the shape the flagged payloads are
- * described as having and has not been checked against them. If they use
- * another key, this silently drops the caveat — worth confirming before
- * this goes near a client deck.
+ * THE KEY IS `flag`, SINGULAR, verified across five real payloads: the
+ * market scans carry it on every window and set it to null when the
+ * window is unflagged, and the broad intakes omit it. `flags` plural
+ * appears nowhere; it is read here only because reading it costs a line
+ * and missing a caveat costs an analyst.
+ *
+ * Truthiness, not presence, and that distinction is the whole guard: a
+ * window that carries "flag": null is the COMMON case, and testing for
+ * the key would append the string "null" to the detail of every
+ * unflagged window in a market scan.
  */
 function windowFlagLines(w) {
   const out = [];
@@ -221,7 +226,11 @@ function mapPayload(payload) {
       exact_quote:  null,
       urgency:      null,
       source_url:   str(w.source),
-      owned_source: false,
+      // Windows carry owned_source too — the broad intake sets it true on
+      // the Great Hostel Give Back entry. The table has the column, so it
+      // maps to the column. Defaulting windows to false would have
+      // silently reclassified an owned property as observed market.
+      owned_source: w.owned_source === true,
       captured_at:  payloadCapturedAt,
       // relevance and owned_property are interpretation, same class as
       // why_it_matters. They ride in raw and are never citable.
