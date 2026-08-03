@@ -179,13 +179,14 @@ REVOKE ALL ON FUNCTION bjl_signals_paste_apply(text, text, jsonb) FROM anon, aut
 REVOKE ALL ON FUNCTION bjl_signals_paste_apply(text, text, jsonb) FROM bjl_agent_readonly;
 GRANT EXECUTE ON FUNCTION bjl_signals_paste_apply(text, text, jsonb) TO service_role;
 
--- NOT RUN HERE — a standing change, deliberately left for its own
--- migration so it lands as a decision rather than as a side effect of
--- shipping the paste box:
+-- NOT RUN HERE — the standing version of this revoke was deliberately
+-- left for its own migration so it would land as a decision rather than
+-- as a side effect of shipping the paste box. It has since landed, in
+-- 2026-08-03_lock_definer_write_functions.sql:
 --
---   ALTER DEFAULT PRIVILEGES IN SCHEMA public
+--   ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
 --     REVOKE EXECUTE ON FUNCTIONS FROM bjl_agent_readonly;
 --
 -- After it, the read-only agent gets EXECUTE only where someone wrote a
--- GRANT on purpose, and the functions it legitimately calls need that
--- grant added explicitly.
+-- GRANT on purpose. It is not retroactive, so the line above is still
+-- doing real work for this function and is not redundant with it.
