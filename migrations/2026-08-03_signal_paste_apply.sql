@@ -161,6 +161,31 @@ COMMENT ON FUNCTION bjl_signals_paste_apply(text, text, jsonb) IS
 -- nothing: a grant to authenticated would open a write path into the
 -- signals table that does not go through the handler's validation, which
 -- is where the id rules and the collision guard live.
+--
+-- bjl_agent_readonly is on this list for a sharper reason, found during
+-- the ACL check on apply. Default privileges had already granted it
+-- EXECUTE, which means a SECURITY DEFINER function is a hole in a
+-- read-only role: the investigator's SQL agent cannot write to
+-- bjl_marketplace_signals, but it could have CALLED something that
+-- writes on its behalf, with the definer's rights. Revoking from PUBLIC
+-- does not touch a grant made directly to a role, so the read-only agent
+-- would have kept it silently.
+--
+-- Every future SECURITY DEFINER function inherits the same default
+-- grant. Remembering this line each time is the weak version; see the
+-- note below the GRANT.
 REVOKE ALL ON FUNCTION bjl_signals_paste_apply(text, text, jsonb) FROM PUBLIC;
 REVOKE ALL ON FUNCTION bjl_signals_paste_apply(text, text, jsonb) FROM anon, authenticated;
+REVOKE ALL ON FUNCTION bjl_signals_paste_apply(text, text, jsonb) FROM bjl_agent_readonly;
 GRANT EXECUTE ON FUNCTION bjl_signals_paste_apply(text, text, jsonb) TO service_role;
+
+-- NOT RUN HERE — a standing change, deliberately left for its own
+-- migration so it lands as a decision rather than as a side effect of
+-- shipping the paste box:
+--
+--   ALTER DEFAULT PRIVILEGES IN SCHEMA public
+--     REVOKE EXECUTE ON FUNCTIONS FROM bjl_agent_readonly;
+--
+-- After it, the read-only agent gets EXECUTE only where someone wrote a
+-- GRANT on purpose, and the functions it legitimately calls need that
+-- grant added explicitly.
