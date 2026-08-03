@@ -6160,6 +6160,105 @@ const JoyMapPredictionsTable = ({ state, onRefresh }) => {
 const BULLETIN_STATUSES = ['candidate', 'reviewed', 'selected', 'shipped', 'retired'];
 const SIGNAL_STALE_DAYS = 45;
 
+// -------------------------------------------------------------------------
+// SignalPasteBox — how marketplace signals get into the Bulletin.
+//
+// A Waldo signals payload is pasted whole. The server parses it, maps
+// field to column and writes; nothing here inspects the JSON, because a
+// half-validating client teaches the analyst to trust a check that isn't
+// the real one.
+//
+// Re-pasting is the normal case, not an error. Waldo re-runs and hands
+// back everything it still sees, so most of a second paste is identical
+// to the first. Rows whose content moved supersede; rows that didn't are
+// skipped. The response says which is which, because "21 signals
+// processed" would hide the only thing the analyst wanted to know.
+// -------------------------------------------------------------------------
+const SignalPasteBox = ({ onApplied }) => {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+  const [problems, setProblems] = useState(null);
+
+  const submit = async () => {
+    setBusy(true); setResult(null); setProblems(null);
+    try {
+      if (window.__bjlAuth && window.__bjlAuth.getSession) await window.__bjlAuth.getSession();
+      const r = await fetch('/.netlify/functions/bjl-signals-paste', authedFetchInit({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paste: text }),
+      }));
+      const j = await r.json();
+      if (!r.ok) {
+        setProblems({ error: (j && j.error) || `request failed (${r.status})`, list: (j && j.problems) || [] });
+        return;
+      }
+      setResult(j);
+      setText('');
+      if (onApplied) onApplied();
+    } catch (e) {
+      setProblems({ error: String(e.message || e), list: [] });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!open) {
+    return (
+      <div className="joy-map-input-group">
+        <button className="btn ghost" onClick={() => setOpen(true)}>Paste Waldo signals…</button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="joy-map-input-group">
+      <div className="joy-map-input-label">Paste Waldo signals</div>
+      <div style={{fontSize: 13, color: 'var(--iron-darker, #5a5a55)', maxWidth: '72ch', marginBottom: 8}}>
+        The whole signals payload, as Waldo emitted it. Activation windows come in with it. Pasting the same payload again supersedes the rows whose content changed and leaves the rest alone — a re-capture on a later date is not a revision.
+      </div>
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder='{ "engagement": "…", "theme": "…", "signals": [ … ] }'
+        spellCheck={false}
+        style={{width: '100%', minHeight: 160, fontFamily: 'ui-monospace, monospace', fontSize: 12}}
+      />
+      <div style={{display: 'flex', gap: 8, marginTop: 8}}>
+        <button className="btn" onClick={submit} disabled={busy || !text.trim()}>
+          {busy ? 'Writing…' : 'Paste'}
+        </button>
+        <button className="btn ghost" onClick={() => { setOpen(false); setProblems(null); setResult(null); }}>Close</button>
+      </div>
+
+      {result && (
+        <div style={{marginTop: 10, fontSize: 13}}>
+          {/* The split, always — including the zeroes. A paste that did
+              nothing is a real and useful outcome, and reporting it as a
+              success with no detail looks identical to one that worked. */}
+          <strong>{result.applied.inserted} new, {result.applied.revised} revised, {result.applied.unchanged} unchanged (skipped).</strong>
+          {' '}Filed under {result.engagement}.
+        </div>
+      )}
+
+      {problems && (
+        <div style={{marginTop: 10, fontSize: 13}}>
+          <div><strong>{problems.error}</strong></div>
+          {/* Every problem at once. An analyst repairs one paste, not one
+              fault per round trip. */}
+          {problems.list.length > 0 && (
+            <ul style={{marginTop: 6, paddingLeft: 18}}>
+              {problems.list.map((p, i) => <li key={i} style={{marginBottom: 4}}>{p}</li>)}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const OpportunityBulletin = ({ predictionState, onLoadPredictions }) => {
   const [state, setState] = useState({ loading: false, error: null, opportunities: null, engagements: [] });
   const [engagement, setEngagement] = useState('');
@@ -6286,6 +6385,8 @@ const OpportunityBulletin = ({ predictionState, onLoadPredictions }) => {
           <button className="btn ghost" onClick={load} disabled={state.loading}>Refresh</button>
         </div>
       </div>
+
+      <SignalPasteBox onApplied={load} />
 
       {state.loading && <div className="joy-map-loading">Loading the register…</div>}
       {state.error && <div className="joy-map-error">Error: {state.error}</div>}

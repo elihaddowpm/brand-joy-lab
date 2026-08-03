@@ -1,0 +1,28 @@
+{
+  "_note": "The round-2 re-paste of hi_cultural_currents_r1.json, as a delta rather than a whole file. r2 is assembled by smoke_signals_paste.js as r1 with captured_at bumped throughout and these two rows substituted. Assembling from r1 is the point: it GUARANTEES the thirteen unchanged signals and six unchanged windows are byte-identical, where a separately materialized r2 could drift a character and quietly turn a supersede test into a change-detection test that passes for the wrong reason.",
+  "captured_at_from": "2026-07-31",
+  "captured_at_to": "2026-08-01",
+  "signals_changed": [
+    {
+      "signal_id": "CC-006",
+      "signal_type": "cultural_current — hostel creator content",
+      "headline": "TikTok @alexpepperr hostel tour passes 21K views; second creator posts HI-adjacent NYC hostel first-night video (12K views) — genre accelerating week over week",
+      "detail": "REVISED r2: The @alexpepperr hostel tour ('If you needed another reason to stay in a hostel') has grown from 8K to 21K+ views since first capture. A new TikTok posted July 30 shows a first-night POV at a New York hostel (12K+ views in 48 hours), extending the conversion-content genre into HI's flagship market. Gaslamp Hostel's Comic-Con content continues. The genre is compounding, not static.",
+      "exact_quote": "If you needed another reason to stay in a hostel.",
+      "why_it_matters": "Unchanged from r1: the conversion content gap is being filled by travelers, not by HI USA. The r2 view-count growth strengthens the urgency: the genre is accelerating while the brand remains invisible in it.",
+      "urgency": "critical",
+      "source": "https://www.tiktok.com/@alexpepperr/video/7659926703405272351",
+      "owned_source": false,
+      "captured_at": "2026-08-01"
+    }
+  ],
+  "windows_changed": [
+    {
+      "window": "Loneliness and belonging discourse peak — editorial and cultural moment",
+      "timing": "MOVED r2: Active through August 2026 — follow-on coverage confirmed: two additional national outlets have commissioned belonging-economy features for early August, extending the window roughly three weeks beyond the r1 estimate",
+      "owned_property": "HI USA's entire property network — common rooms, events programming, social spaces",
+      "relevance": "Unchanged from r1: the belonging editorial wave with no lodging brand in it; HI USA's product is the original solution. The r2 timing extension widens the op-ed entry window.",
+      "source": "https://fortune.com/2026/07/28/gen-z-lonely-weekends-financial-economic-reason-inflation/"
+    }
+  ]
+}
