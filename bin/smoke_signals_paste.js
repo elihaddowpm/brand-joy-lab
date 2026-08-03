@@ -335,6 +335,28 @@ const post = async (body) => {
   return { status: res.statusCode, json: JSON.parse(res.body) };
 };
 
+/**
+ * Deletes every row this battery wrote, referencing rows first.
+ *
+ * NOT by nulling superseded_by. The obvious cleanup — unchain, then
+ * delete — fails, and the first version of this did: setting
+ * superseded_by to null makes the retired rows LIVE again, and each one
+ * immediately collides with the replacement that superseded it under
+ * bjl_signals_ext_engagement. The index is right to refuse.
+ *
+ * Deleting the superseded rows first removes the references instead of
+ * resurrecting them. It works at any chain depth: a statement that
+ * deletes A and B together satisfies A's reference to B, because the
+ * foreign key is checked when the statement finishes and by then neither
+ * exists.
+ */
+const clearSmokeRows = async () => {
+  let e = await db.from('bjl_marketplace_signals').delete().eq('engagement', SMOKE_ENGAGEMENT).not('superseded_by', 'is', null);
+  if (e.error) throw new Error(`cleanup (superseded): ${e.error.message}`);
+  e = await db.from('bjl_marketplace_signals').delete().eq('engagement', SMOKE_ENGAGEMENT);
+  if (e.error) throw new Error(`cleanup (live): ${e.error.message}`);
+};
+
 const liveRows = async () => {
   const { data, error } = await db
     .from('bjl_marketplace_signals')
@@ -363,9 +385,7 @@ const liveRows = async () => {
     const before = await liveRows();
     if (before.length > 0) {
       console.log(`  (clearing ${before.length} row(s) left by a previous run)`);
-      // Break the self-references first or the delete trips the FK.
-      await db.from('bjl_marketplace_signals').update({ superseded_by: null }).eq('engagement', SMOKE_ENGAGEMENT);
-      await db.from('bjl_marketplace_signals').delete().eq('engagement', SMOKE_ENGAGEMENT);
+      await clearSmokeRows();
     }
     check('no smoke rows to start', (await liveRows()).length === 0);
   }
@@ -434,9 +454,12 @@ const liveRows = async () => {
   }
 
   console.log(`\n${failures === 0 ? 'ALL ASSERTIONS PASS' : `${failures} FAILURE(S)`}`);
-  console.log(`\nCleanup — these rows are yours to delete:\n`
-    + `  UPDATE bjl_marketplace_signals SET superseded_by = NULL WHERE engagement = '${SMOKE_ENGAGEMENT.replace(/'/g, "''")}';\n`
-    + `  DELETE FROM bjl_marketplace_signals WHERE engagement = '${SMOKE_ENGAGEMENT.replace(/'/g, "''")}';`);
+  const eng = SMOKE_ENGAGEMENT.replace(/'/g, "''");
+  console.log(`\nCleanup — these rows are yours to delete. Superseded rows FIRST:\n`
+    + `nulling superseded_by instead would make the retired rows live again\n`
+    + `and each would collide with the row that replaced it.\n\n`
+    + `  DELETE FROM bjl_marketplace_signals WHERE engagement = '${eng}' AND superseded_by IS NOT NULL;\n`
+    + `  DELETE FROM bjl_marketplace_signals WHERE engagement = '${eng}';`);
   process.exit(failures === 0 ? 0 : 1);
 })().catch(e => {
   console.error('\nHarness error:', e.message);
