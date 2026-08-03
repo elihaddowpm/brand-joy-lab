@@ -152,6 +152,43 @@ Brand mentions: brand mentions in verbatims often appear in unexpected categorie
 
 PETERMAYER's accumulated findings, written as numbered laws with title, statement, evidence summary, implication, and applies_to_* arrays for categories / joy_modes / tensions / demographics. Synthesized layer, not raw data. Use them to frame interpretations during thorough investigations. Pull applicable laws by category overlap or topic match. The `retrieve_laws(...)` and `retrieve_laws_semantic(...)` RPCs are convenience wrappers.
 
+## Workbench tables — real, but not investigation surfaces
+
+These two back the Opportunity Bulletin. They are documented here because their DDL now lives in `migrations/` and a schema reference that omits them is how they went undocumented in the first place. They are not sources of evidence: nothing in them was measured, and no finding should ever be built by querying them.
+
+**Do not join `bjl_marketplace_signals` to any respondent table.** A signal is what the market said; a score is what respondents were measured saying. Kept separate, a card can cite both and a reader can tell which is which. Joined, the distinction is gone and cannot be recovered from the output.
+
+### `bjl_opportunities` — the register (one row per card)
+
+| Column | Notes |
+|---|---|
+| opportunity_id | PK |
+| engagement | groups cards by client engagement |
+| title, action | what the card is called, what to do about it |
+| claim_summary, claim_population, claim_items | the claim triple: what is true, who it holds for, which item_ids it rests on. All three NOT NULL — a claim without a population is not a claim |
+| evidence_tier | `measured` / `modeled` / `unmeasured` / `signal-only`, CHECK-constrained. Derived from the source rows, never chosen freehand |
+| signal_ids | int[] — marketplace signals cited, by reference only |
+| status | `machine_draft` → `candidate` → `reviewed` → `selected` → `shipped` → `retired`, CHECK-constrained |
+| origin | `analyst` or `harvest` |
+| source_run_id | `bjl_query_jobs.job_id` of the generating run. No FK: the card outlives the job |
+| generated_by | jsonb — model, prompt version, generated_at, for harvested drafts |
+| claim_hash | harvest idempotency key, unique per (source_run_id, claim_hash) |
+| promoted_by, promoted_at | the human act that turns a machine draft into a candidate |
+| register_number, prediction_id, window_label, window_date, owner, notes | lineage, timing and ownership |
+
+### `bjl_marketplace_signals` — marketplace observations
+
+| Column | Notes |
+|---|---|
+| signal_id | PK |
+| engagement, source, theme, signal_type | where it belongs and what kind of thing it is. `source` defaults to `waldo` |
+| headline, detail, exact_quote, source_url, urgency | the observation itself |
+| external_id | the source's own id. Unique per engagement among live rows, so re-ingesting supersedes rather than duplicates |
+| owned_source | true when the brand itself is the source |
+| captured_at | when the observation was made, and the basis of the staleness warning on any card citing it |
+| superseded_by | signal_id of the row that replaced this one. Non-null means historical |
+| raw | jsonb — the payload as pasted |
+
 ## Reference vocabularies
 
 The four BJL frameworks are tagged via reference tables. Each table has at minimum `_key` (snake_case identifier used in array filters) and `display_name`. Some include `short_definition` / `purchase_mapping` / `benchmark_finding` columns; query the table directly for the full definitions when needed.

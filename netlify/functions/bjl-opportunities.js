@@ -7,7 +7,8 @@
  * opportunity is authored in an analysis session, not here.
  *
  * Contract:
- *   POST { action: 'list', engagement?: text }
+ *   POST { action: 'list', engagement?: text,
+ *          include_machine_drafts?: bool }
  *     → { ok, engagements: [...], opportunities: [{ ..., signals: [...] }] }
  *   POST { action: 'set_status', opportunity_id: int,
  *          status: text, notes?: text }
@@ -16,10 +17,22 @@
  *          claim_population, evidence_tier, action_text,
  *          claim_items?, signal_ids?, window_label?, owner?, notes? }
  *     → { ok, opportunity }
+ *   POST { action: 'promote', opportunity_id: int, notes?: text }
+ *     → { ok, opportunity }   // machine_draft -> candidate, recorded
  *
- * Cards are authored from the map (the Send to Bulletin affordance on
- * a territory row or a profile finding), never invented here. Every
- * create lands at status='candidate'.
+ * Cards are authored from a run (the Capture this finding affordance on
+ * a map row, a profile finding, or an investigation result), never
+ * invented here. Every create lands at status='candidate'.
+ *
+ * Machine drafts are the exception, and they are kept apart structurally
+ * rather than by convention. The run-level harvest writes them directly
+ * at status='machine_draft' with origin='harvest'; this endpoint cannot
+ * set that status, does not return those rows from `list` unless they
+ * are asked for by name, and turns them into cards only through
+ * `promote`, which stamps the promoter from the verified token. The
+ * effect is that a paragraph no human has read cannot appear in the
+ * register looking authored — not because every view remembers to check
+ * a flag, but because it is not in the list the views are given.
  *
  * Signals never join respondent tables — they are marketplace
  * observations, kept visibly distinct from measured claims.
@@ -34,9 +47,16 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-// The status lifecycle from the spec. Enforced here because the column
-// carries no CHECK constraint and this is the only write path.
-const STATUSES = ['candidate', 'reviewed', 'selected', 'shipped', 'retired'];
+// The status lifecycle from the spec. Also a CHECK constraint on the
+// column as of 2026-07-31_bulletin_provenance.sql; kept here so a bad
+// status is a legible 400 rather than a Postgres constraint error.
+//
+// machine_draft sits at the front because it is UPSTREAM of candidate,
+// not a branch off it. It is where the run-level harvest writes, and it
+// is not a status anything can be set to through this endpoint: harvest
+// creates it, promotion leaves it, nothing returns to it.
+const STATUSES = ['machine_draft', 'candidate', 'reviewed', 'selected', 'shipped', 'retired'];
+const ANALYST_STATUSES = STATUSES.filter(s => s !== 'machine_draft');
 
 function sqlEscape(s) { return String(s).replace(/'/g, "''"); }
 
@@ -127,8 +147,13 @@ exports.handler = async (event) => {
       if (!Number.isFinite(opportunityId)) {
         return { statusCode: 400, body: JSON.stringify({ error: 'opportunity_id required' }) };
       }
-      if (!STATUSES.includes(status)) {
-        return { statusCode: 400, body: JSON.stringify({ error: `status must be one of ${STATUSES.join(', ')}` }) };
+      // machine_draft is deliberately not settable. Only the harvest
+      // writes it, and a card that has been through a human's hands must
+      // not be able to put that back on — an authored card wearing a
+      // machine_draft status would be excluded from the default list and
+      // quietly disappear from the register.
+      if (!ANALYST_STATUSES.includes(status)) {
+        return { statusCode: 400, body: JSON.stringify({ error: `status must be one of ${ANALYST_STATUSES.join(', ')}` }) };
       }
       const patch = { status, updated_at: new Date().toISOString() };
       if (typeof body.notes === 'string') patch.notes = body.notes;
@@ -148,21 +173,79 @@ exports.handler = async (event) => {
       };
     }
 
+    if (action === 'promote') {
+      // The one door out of machine_draft, and the only place a machine
+      // draft becomes a card in the register. It is a human act by
+      // definition, so it is recorded as one: promoted_by comes from the
+      // verified token, never from the request body, because a field the
+      // client can set is not a record of who did anything.
+      const opportunityId = Number(body.opportunity_id);
+      if (!Number.isFinite(opportunityId)) {
+        return { statusCode: 400, body: JSON.stringify({ error: 'opportunity_id required' }) };
+      }
+      const promotedBy = (auth.user && auth.user.email) || 'auth-bypass';
+      const patch = {
+        status: 'candidate',
+        promoted_by: promotedBy,
+        promoted_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      if (typeof body.notes === 'string') patch.notes = body.notes;
+
+      // Scoped to machine_draft. Promoting an already-promoted card would
+      // overwrite the first promoter's name with the second reader's,
+      // which is worse than doing nothing: it looks like a record and
+      // isn't one. No match means no rows, which is the 404 below.
+      const { data, error } = await supabase
+        .from('bjl_opportunities')
+        .update(patch)
+        .eq('opportunity_id', opportunityId)
+        .eq('status', 'machine_draft')
+        .select();
+      if (error) throw new Error(`promote failed: ${error.message}`);
+      if (!Array.isArray(data) || data.length === 0) {
+        return {
+          statusCode: 404,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ error: `opportunity ${opportunityId} is not a machine draft — nothing to promote` }),
+        };
+      }
+
+      return {
+        statusCode: 200,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ok: true, opportunity: data[0] }),
+      };
+    }
+
     if (action !== 'list') {
-      return { statusCode: 400, body: JSON.stringify({ error: `unknown action '${action}' — expected list, create, or set_status` }) };
+      return { statusCode: 400, body: JSON.stringify({ error: `unknown action '${action}' — expected list, create, set_status, or promote` }) };
     }
 
     const engagement = typeof body.engagement === 'string' ? body.engagement.trim() : '';
     const engagementFilter = engagement ? `WHERE engagement = '${sqlEscape(engagement)}'` : '';
+
+    // Machine drafts are out of the register unless they are asked for by
+    // name. This is the half of the guarantee that lives here; the other
+    // half is the status value itself, which no client can set. A card
+    // nobody has read cannot appear in a list of cards, and it cannot get
+    // there by a render-time flag check being forgotten in one view.
+    const includeDrafts = body.include_machine_drafts === true;
+    const oppConditions = [];
+    if (engagement) oppConditions.push(`engagement = '${sqlEscape(engagement)}'`);
+    if (!includeDrafts) oppConditions.push(`status <> 'machine_draft'`);
+    const oppWhere = oppConditions.length ? `WHERE ${oppConditions.join(' AND ')}` : '';
 
     const oppSql = `
       SELECT opportunity_id, engagement, register_number, title,
              claim_summary, claim_population, claim_items, evidence_tier,
              signal_ids, action, window_label,
              lower(window_date) AS window_start, upper(window_date) AS window_end,
-             owner, status, prediction_id, notes, created_at, updated_at
+             owner, status, prediction_id, notes, created_at, updated_at,
+             origin, source_run_id, generated_by, claim_hash,
+             promoted_by, promoted_at
       FROM bjl_opportunities
-      ${engagementFilter}
+      ${oppWhere}
       ORDER BY engagement, register_number NULLS LAST, opportunity_id
     `;
     const { data: oppData, error: oppErr } = await supabase.rpc('execute_read_sql', { query_text: oppSql });
@@ -234,6 +317,15 @@ exports.handler = async (event) => {
         notes:             r.notes || null,
         created_at:        r.created_at || null,
         updated_at:        r.updated_at || null,
+        // Provenance. `origin` is the one the UI reads: a harvested draft
+        // is labelled as one wherever it is rendered, so nobody mistakes
+        // a model's paragraph for a colleague's.
+        origin:            r.origin || 'analyst',
+        source_run_id:     r.source_run_id || null,
+        generated_by:      r.generated_by || null,
+        claim_hash:        r.claim_hash || null,
+        promoted_by:       r.promoted_by || null,
+        promoted_at:       r.promoted_at || null,
       };
     });
 
@@ -242,7 +334,7 @@ exports.handler = async (event) => {
     return {
       statusCode: 200,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ok: true, statuses: STATUSES, engagements, opportunities }),
+      body: JSON.stringify({ ok: true, statuses: ANALYST_STATUSES, engagements, opportunities }),
     };
   } catch (e) {
     console.error('[opportunities] handler error:', e.message);
