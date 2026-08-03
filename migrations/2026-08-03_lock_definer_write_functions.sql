@@ -88,16 +88,63 @@ GRANT EXECUTE ON FUNCTION public.refresh_public_safe_flags()             TO serv
 ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
   REVOKE EXECUTE ON FUNCTIONS FROM bjl_agent_readonly;
 
--- STILL OPEN, and the reason execute_write_sql was reachable by anon in
--- the first place: the postgres defaults for schema public continue to
--- grant EXECUTE on every new function to anon and authenticated. anon
--- is the frontend key. So each future SECURITY DEFINER function is
--- born reachable from the public internet, and stays that way unless
--- its migration carries an explicit revoke — which is exactly the
--- remember-every-time control this file just argued against.
+-- THE SAME CHANGE FOR THE FRONTEND KEY.
 --
--- Not flipped here because it is a wider blast radius than the audit
--- that surfaced it: revoking it would break any function the frontend
--- legitimately calls with the anon key that relies on the default
--- rather than an explicit grant, and that set has to be enumerated
--- first. Its own audit, its own migration, its own decision.
+-- The grant above closed the read-only agent and left the wider hole
+-- open: these defaults also granted EXECUTE on every new function to
+-- anon and authenticated. anon is the key in the public frontend. That
+-- is not how execute_write_sql was written — it is how it was reached.
+-- Nobody granted it to anon. It inherited it at creation.
+--
+-- Which made the fail-closed win above only half of one: closed against
+-- the read-only agent, still open to the internet. Every future
+-- SECURITY DEFINER function would be born callable by anyone who read
+-- the site's JavaScript, and would stay that way unless its migration
+-- carried an explicit revoke — the remember-every-time control this
+-- file has already argued is not a control. bjl_signals_paste_apply is
+-- safe only because that line was written by hand, which is the near
+-- miss still running rather than a defence.
+--
+-- Enumerated before flipping, though non-retroactivity meant the
+-- enumeration was documentation rather than a precondition — nothing
+-- existing loses a grant. Three buckets: extension internals (pgvector,
+-- ltree, trgm; inert), the four by-design public functions (segment
+-- read, both public searches, the thematic batteries — their grants
+-- materialized at creation, so they keep them and the public demo is
+-- untouched), and inherited EXECUTE on a few dozen invoker-rights bjl
+-- analysis functions. The third bucket prompted a check for a second
+-- hole behind the first and did not find one: RLS is enabled with
+-- default-deny on all ten core tables, the whole schema holds exactly
+-- two permissive policies (SELECT-only on bjl_articles and
+-- bjl_case_studies, both intentional), and invoker rights into
+-- RLS-denied tables return nothing.
+
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+  REVOKE EXECUTE ON FUNCTIONS FROM anon, authenticated;
+
+-- pg_default_acl for postgres/public/functions now reads
+-- `postgres=X | service_role=X` and nothing else. New functions are
+-- born callable by the server and by no one else, and every
+-- public-facing function needs a deliberate GRANT. That is the control.
+
+-- STILL OPEN, one layer down, flagged and deliberately not ruled: the
+-- TABLE and SEQUENCE defaults in this schema are untouched.
+--
+--   tables     postgres | anon | authenticated | service_role = arwdDxtm
+--              (plus bjl_agent_readonly = r)
+--   sequences  postgres | anon | authenticated | service_role = rwU
+--
+-- anon and authenticated inherit full table privileges on every new
+-- postgres-created table. RLS guards everything that exists today, so
+-- this is currently theory — but the failure mode is a future table
+-- created without RLS, born fully exposed to the frontend key. Same
+-- fail-open shape as the function defaults, one layer down, and it
+-- would not announce itself.
+--
+-- Not flipped, and unlike the functions this is not merely a
+-- sequencing choice. PostgREST's whole convention is table grants plus
+-- RLS doing the filtering, so revoking the table defaults is a change
+-- to how the frontend reaches data rather than a pure tightening. It
+-- needs a read on how the frontend actually uses table-level PostgREST
+-- before anyone moves. Its own audit, its own migration, its own
+-- decision.
