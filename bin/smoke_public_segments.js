@@ -468,6 +468,15 @@ async function casePartialSupport() {
     seg.item && `${seg.item.item_id} "${seg.item.item_name}"`);
   check('all five decision-role values travel', seg.available_values.length === 5,
     seg.available_values.join(', '));
+  // 'Do not use this product' clears the floor here (n=440) and is 48
+  // points below the item average — the largest gap in the table and the
+  // row an answer would reach for first. It is not a decision role; it is
+  // the questionnaire's escape hatch, and "people who don't take vacations
+  // enjoy vacations less" is a tautology wearing a finding's clothes.
+  check('the non-use bucket is filtered before the answer sees it',
+    !rowFor(seg, 'Do not use this product'),
+    seg.rows.map(r => r.segment).join(' | '));
+  check('the four real roles survive', seg.rows.length === 4, `${seg.rows.length} rows`);
   const share = rowFor(seg, 'Share equally in decision-making');
   const sole = rowFor(seg, 'Sole or primary decision-maker');
   const infl = rowFor(seg, 'Influence or participate in choosing');

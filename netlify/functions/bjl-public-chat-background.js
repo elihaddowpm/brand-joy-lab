@@ -1130,7 +1130,16 @@ async function retrieveSegments(question) {
   // the few labels it does not name ('N/A', 'None of the above', 'Other').
   // Dropping it would be safe today and would silently stop being safe if a
   // new field arrives with a differently-worded refusal bucket.
-  const NON_ANSWER = /^(prefer not to answer|not applicable|n\/a|none of the above|other)$/i;
+  //
+  // 'Do not use this product' belongs here for the same reason and is the
+  // strongest case for the pass. On the vacation decision-role read it
+  // clears the floor comfortably (n=440) and sits 48 points below the item
+  // average — by far the largest apparent gap in the table, and therefore
+  // the row an answer would naturally lead on. It is not a decision role.
+  // It is people telling the questionnaire the item does not apply to
+  // them, and "the people who don't take vacations get less joy from
+  // vacations" is a tautology dressed as a finding about agency.
+  const NON_ANSWER = /^(prefer not to answer|not applicable|n\/a|none of the above|other|do(es)? not (use|apply)( this product)?|don'?t use this product)$/i;
   const rows = (Array.isArray(data) ? data : []).filter(r => !NON_ANSWER.test(String(r.segment || '').trim()));
   // Zero rows is a real answer, not an empty result: either the item is
   // political and suppressed, or every cell fell under the floor of 60.
