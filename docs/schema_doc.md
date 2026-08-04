@@ -165,9 +165,17 @@ These two back the Opportunity Bulletin. They are documented here because their 
 | opportunity_id | PK |
 | engagement | groups cards by client engagement |
 | title, action | what the card is called, what to do about it |
-| claim_summary, claim_population, claim_items | the claim triple: what is true, who it holds for, which item_ids it rests on. All three NOT NULL — a claim without a population is not a claim |
+| claim_summary, claim_population, claim_items | the claim triple: what is true, who it holds for, which item_ids it rests on. A claim without a population is not a claim. `claim_items` is **not** blanket NOT NULL — see the evidence constraint below |
 | evidence_tier | `measured` / `modeled` / `unmeasured` / `signal-only`, CHECK-constrained. Derived from the source rows, never chosen freehand |
 | signal_ids | int[] — marketplace signals cited, by reference only |
+
+**The evidence constraint (`bjl_opportunities_evidence_chk`).** A card's tier and its audit trail must agree:
+
+- `measured` / `modeled` — `claim_items` must be non-empty.
+- `signal-only` — `signal_ids` must be non-empty. These cards rest on marketplace observations by definition, so requiring `claim_items` would outlaw them.
+- `unmeasured` — neither is required.
+
+Earlier revisions of this doc claimed `claim_items` was blanket NOT NULL. That was wrong and the database was right; the rule was corrected to the tier-aware form on 2026-08-04. Note also what the constraint cannot see: it tests only non-emptiness, so it cannot catch a `claim_summary` citing a figure whose row was excluded from `claim_items`. That case is closed upstream by the generator's row-level exclusion rule — a source row that cannot resolve to an `item_id` contributes nothing to a draft anywhere, not merely to `claim_items`.
 | status | `machine_draft` → `candidate` → `reviewed` → `selected` → `shipped` → `retired`, CHECK-constrained |
 | origin | `analyst` or `harvest` |
 | source_run_id | `bjl_query_jobs.job_id` of the generating run. No FK: the card outlives the job |
@@ -188,6 +196,22 @@ These two back the Opportunity Bulletin. They are documented here because their 
 | captured_at | when the observation was made, and the basis of the staleness warning on any card citing it |
 | superseded_by | signal_id of the row that replaced this one. Non-null means historical |
 | raw | jsonb — the payload as pasted |
+
+### `bjl_item_resolutions` — the item-name adjudication worklist
+
+`bjl_scores` has no `item_id`; it keys back to `bjl_items` by name, and 366 corpus names map to more than one item. This table is where that ambiguity gets decided once, by a person, and remembered.
+
+| Column | Notes |
+|---|---|
+| resolution_id | PK |
+| item_name | the ambiguous name. Unique — the question is asked once and answered once |
+| candidate_item_ids | int[] — every `bjl_items.item_id` sharing the name. Derived fact, not a judgment |
+| suggested_item_id, suggestion_basis | machine pre-ranking so the human act is confirmation rather than research. Never read by `bjl_corpus_search` |
+| status | `pending` / `resolved` / `unresolvable` |
+| resolved_item_id, resolved_by, resolved_at | the resolution triple. All three or none — a resolution is only a resolution when it is attributable. Constrained to a member of `candidate_item_ids` |
+| resolution_note | why a name is `unresolvable`. Allowed only on that status |
+
+`bjl_corpus_search` reads only `status = 'resolved'` rows, so a human adjudication immediately widens what the next generated draft can ground. The table is also the eventual backfill source for a real `item_id` column on `bjl_scores`.
 
 ## Reference vocabularies
 

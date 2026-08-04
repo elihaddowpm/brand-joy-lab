@@ -145,6 +145,12 @@ function buildAllowlist(scratch) {
         n:             toInt(row.n),
         primary_topic: typeof row.primary_topic === 'string' ? row.primary_topic : null,
         construct:     typeof row.construct === 'string' ? row.construct : null,
+        // Whether the row that authorized this item carried a tag at all.
+        // bjl_corpus_search (Shape B) returns items only — no tag, by
+        // design — so an item sourced from it can never satisfy a tag
+        // check. Recorded per row so mixed scratch, legacy bridges rows
+        // alongside search rows, is judged row by row rather than in bulk.
+        tagged:        !!(row.thread_tag || row.tag),
       });
       itemIndex.set(key, bucket);
       // bjl_corpus_bridges(_v2) emits `tag`; bjl_corpus_threads emitted
@@ -638,15 +644,21 @@ function runCrossDomainItemsGuard({ cross_domain_items, home_topic, scratch }) {
       failures.push({ claim: m, reason: 'malformed_cross_domain_item' });
       continue;
     }
-    // Tag check (from bridges rows).
-    if (typeof m.tag !== 'string' || !threadTags.has(m.tag)) {
-      failures.push({ claim: { item_name: m.item_name, tag: m.tag }, reason: 'cross_domain_tag_not_in_allowlist' });
-    }
     const key = normalizeItemName(m.item_name);
     const bucket = itemIndex.get(key);
     if (!bucket || bucket.length === 0) {
       failures.push({ claim: { item_name: m.item_name, tag: m.tag }, reason: 'cross_domain_item_not_in_allowlist' });
       continue;
+    }
+    // Tag check, but only for items whose authorizing row actually carried
+    // a tag. bjl_corpus_search returns no tag and both prompts forbid the
+    // model from emitting one, so demanding a tag here failed every
+    // Shape B item and silently dropped the whole sidecar. The arm is the
+    // authority on its own return shape; the guard follows it.
+    if (bucket.some(row => row.tagged)) {
+      if (typeof m.tag !== 'string' || !threadTags.has(m.tag)) {
+        failures.push({ claim: { item_name: m.item_name, tag: m.tag }, reason: 'cross_domain_tag_not_in_allowlist' });
+      }
     }
     // v2 claims use `score`; v1 claims use `joy_index`. Accept either.
     const claimScoreRaw = m.score != null ? m.score : m.joy_index;
@@ -1134,6 +1146,10 @@ function runCardsGuard({ cards, scratch }) {
  * threads (by thread_tag) with their members and exact numbers. Used only
  * on the one retry after a guard failure.
  */
+// Map key for rows that carry no tag. A NUL byte cannot appear in a real
+// tag, so this can never collide with one.
+const UNTAGGED_GROUP = '\u0000untagged';
+
 function buildRetryAllowlistDigest(scratch) {
   const byThread = new Map();
   const entries = Array.isArray(scratch) ? scratch : [];
@@ -1159,13 +1175,20 @@ function buildRetryAllowlistDigest(scratch) {
     for (const row of rows) {
       // bjl_corpus_bridges(_v2): row.tag + row.tag_rank
       // bjl_corpus_threads:     row.thread_tag + row.thread_rank
-      const tag = typeof row.thread_tag === 'string' ? row.thread_tag
-                : typeof row.tag === 'string' ? row.tag
+      // bjl_corpus_search:      no tag at all, by design.
+      //
+      // Untagged rows used to be skipped here, which meant a Shape B run
+      // produced an EMPTY digest — the one retry after a guard failure
+      // showed the model nothing and asked it to do better. They now group
+      // under a single untagged bucket so the retry carries real rows.
+      if (!row || typeof row !== 'object' || !row.item_name) continue;
+      const tag = typeof row.thread_tag === 'string' && row.thread_tag ? row.thread_tag
+                : typeof row.tag === 'string' && row.tag ? row.tag
                 : null;
-      if (!tag) continue;
+      const groupKey = tag === null ? UNTAGGED_GROUP : tag;
       const rank = row.thread_rank ?? row.tag_rank ?? null;
-      if (!byThread.has(tag)) {
-        byThread.set(tag, {
+      if (!byThread.has(groupKey)) {
+        byThread.set(groupKey, {
           thread_tag: tag,
           thread_rank: rank,
           members: [],
@@ -1173,7 +1196,7 @@ function buildRetryAllowlistDigest(scratch) {
       }
       // v2 rows use `score`; v1/legacy use `joy_index`. Prefer `score`.
       const scoreValue = row.score != null ? row.score : row.joy_index;
-      byThread.get(tag).members.push({
+      byThread.get(groupKey).members.push({
         item_name:     row.item_name,
         joy_index:     roundJoy(scoreValue),
         n:             toInt(row.n),

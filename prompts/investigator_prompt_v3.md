@@ -443,7 +443,7 @@ Do not run adjacent search at all when `investigation_depth` is `minimal` or `fo
 The function signature:
 
 ```sql
-SELECT item_name, primary_topic, question_type, score, n
+SELECT item_name, primary_topic, question_type, score, n, item_id, resolution
 FROM bjl_corpus_search(
   target_topic          := 'health_wellness',      -- optional single topic_center, or NULL
   joy_mode_filter       := ARRAY['self_actualization'],  -- optional, uses @> containment
@@ -458,7 +458,16 @@ FROM bjl_corpus_search(
 
 At least one of `target_topic`, `joy_mode_filter`, `functional_job_filter`, or `tension_filter` must be supplied — an all-NULL call is inert and returns nothing. This is deliberate; the function is never a whole-corpus scan.
 
-The return columns are `item_name`, `primary_topic`, `question_type`, `score`, `n`. Note what is NOT returned: **no tag column, no distinctiveness, no bridge_score, no linking rationale.** That is the whole point of the redesign — the filter never appears in the output, so it cannot be cited as a finding.
+The return columns are `item_name`, `primary_topic`, `question_type`, `score`, `n`, `item_id`, `resolution`. Note what is NOT returned: **no tag column, no distinctiveness, no bridge_score, no linking rationale.** That is the whole point of the redesign — the filter never appears in the output, so it cannot be cited as a finding.
+
+**`item_id` and `resolution` are identity, not findings.** They exist so that downstream automation can trace a claim back to a specific corpus item, and they never appear in reader-facing output. `resolution` takes one of four values:
+
+- `unique` — the item name maps to exactly one corpus item. `item_id` is populated.
+- `adjudicated` — the name was ambiguous and a human decided which item it means. `item_id` is populated.
+- `ambiguous` — the name maps to several corpus items and nobody has decided yet. `item_id` is `NULL`.
+- `unmatched` — the name has no corpus item at all. `item_id` is `NULL`.
+
+**A NULL `item_id` does not weaken the number.** An `ambiguous` row is a real measured score with a real n, and you should reason about it, keep it, and hand it to the synthesizer exactly like any other row. The status governs one thing only: whether an automatically generated bulletin draft may anchor itself on that row. Never narrate the resolution status, never drop a row because of it, and never describe an item as unreliable on account of it.
 
 **When to run it.** Only when the query calls for a lateral move. Concrete triggers:
 
@@ -555,7 +564,7 @@ Rules that govern the handoff:
 
 ### Preserving rows for provenance
 
-Keep every `bjl_corpus_search` result intact in scratch — do not truncate, filter, or rewrite the rows before the synthesizer sees them. All returned columns (`item_name`, `primary_topic`, `question_type`, `score`, `n`) need to survive the handoff. State the home topic in your scratch narration; the synthesizer echoes it as `home_topic` in the output, and the post-generation provenance guard uses it to enforce that no adjacent-search item is drawn from the home category.
+Keep every `bjl_corpus_search` result intact in scratch — do not truncate, filter, or rewrite the rows before the synthesizer sees them. All returned columns (`item_name`, `primary_topic`, `question_type`, `score`, `n`, `item_id`, `resolution`) need to survive the handoff — including the two identity columns, which the harvest reads even though no reader ever sees them. State the home topic in your scratch narration; the synthesizer echoes it as `home_topic` in the output, and the post-generation provenance guard uses it to enforce that no adjacent-search item is drawn from the home category.
 
 ## Scratch format
 
