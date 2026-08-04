@@ -19,19 +19,34 @@
 -- The note is forbidden on 'pending' and 'resolved' rows, so it stays dead
 -- weight nowhere and can never be mistaken for a rationale attached to a
 -- decision that was actually made.
+--
+-- RE-RUNNABLE, and this is the house standard going forward. A migration
+-- that aborts on a second run cannot be safely replayed against an
+-- environment whose state you are unsure of, which is every handshake in
+-- this build. Every statement below is therefore idempotent: the column
+-- uses ADD COLUMN IF NOT EXISTS, and the constraint is wrapped in a DO
+-- block that swallows duplicate_object. Running this file twice leaves the
+-- same schema and raises no error.
 
 BEGIN;
 
 ALTER TABLE public.bjl_item_resolutions
   ADD COLUMN IF NOT EXISTS resolution_note text;
 
-ALTER TABLE public.bjl_item_resolutions
-  ADD CONSTRAINT bjl_item_resolutions_note_chk
-  CHECK (
-    (status =  'unresolvable' AND resolution_note IS NOT NULL AND btrim(resolution_note) <> '')
-    OR
-    (status <> 'unresolvable' AND resolution_note IS NULL)
-  );
+DO $note_chk$
+BEGIN
+  ALTER TABLE public.bjl_item_resolutions
+    ADD CONSTRAINT bjl_item_resolutions_note_chk
+    CHECK (
+      (status =  'unresolvable' AND resolution_note IS NOT NULL AND btrim(resolution_note) <> '')
+      OR
+      (status <> 'unresolvable' AND resolution_note IS NULL)
+    );
+EXCEPTION
+  WHEN duplicate_object THEN
+    RAISE NOTICE 'bjl_item_resolutions_note_chk already exists, leaving it alone';
+END
+$note_chk$;
 
 COMMENT ON COLUMN public.bjl_item_resolutions.resolution_note IS
   'Why this name could not be resolved. Required on status=''unresolvable'', '
@@ -46,6 +61,11 @@ COMMIT;
 --    WHERE conrelid='bjl_item_resolutions'::regclass
 --      AND conname='bjl_item_resolutions_note_chk';
 --
+--   SELECT count(*) AS total,
+--          count(*) FILTER (WHERE status='pending')          AS pending,
+--          count(*) FILTER (WHERE resolution_note IS NOT NULL) AS with_note
+--     FROM bjl_item_resolutions;          -- expect 366 / 366 / 0
+--
 --   -- Both of these must fail:
 --   --   UPDATE bjl_item_resolutions SET status='unresolvable' WHERE resolution_id=1;
 --   --   UPDATE bjl_item_resolutions SET resolution_note='x'  WHERE resolution_id=1;
@@ -55,3 +75,5 @@ COMMIT;
 --   --      SET status='unresolvable', resolution_note='two distinct items share this string'
 --   --    WHERE resolution_id=1;
 --   -- (roll it back afterwards; the seed should stay all-pending)
+--
+--   -- And the whole file must run a second time without error.
