@@ -40,7 +40,9 @@ const Anthropic = require('@anthropic-ai/sdk').default;
 const { verifyAndAuthorize } = require('./bjl-auth-helper');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY;
+// Service key only — no anon fallback. A missing key must fail loudly at
+// createClient, not silently degrade this function to the frontend's role.
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 const anthropic = ANTHROPIC_API_KEY ? new Anthropic({ apiKey: ANTHROPIC_API_KEY }) : null;
