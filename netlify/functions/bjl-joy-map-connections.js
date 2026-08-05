@@ -25,6 +25,14 @@
  *   Body { query: string }           — front-door resolver path;
  *                                       brief.entities.items become
  *                                       the focals.
+ *   Body { session_history }         — optional prior turns, [{ role, content }].
+ *                                       Only meaningful alongside `query`, and
+ *                                       only when the pane is re-dispatching an
+ *                                       answer to a clarifying question this
+ *                                       endpoint asked. Without it the front
+ *                                       door reads the answer as a brand new
+ *                                       standalone query and asks the same
+ *                                       question again — the dead-end loop.
  *
  * Focal eligibility (hard gate). The front door serves every surface,
  * including ones that legitimately want open-ends, so it returns items
@@ -289,11 +297,23 @@ exports.handler = async (event) => {
   const idsFromBody = rawIds.map(n => Number(n)).filter(Number.isFinite).slice(0, MAX_FOCALS);
   const query = typeof body.query === 'string' ? body.query.trim() : '';
 
+  // Prior turns, normalised to the two fields the front door reads. The front
+  // door drops a malformed history rather than repairing it, so anything odd
+  // here degrades to the no-history behaviour instead of inventing a
+  // conversation.
+  const sessionHistory = (Array.isArray(body.session_history) ? body.session_history : [])
+    .filter(t => t && typeof t.role === 'string' && typeof t.content === 'string')
+    .map(t => ({ role: t.role, content: t.content }));
+
   if (idsFromBody.length > 0) {
     focalIds = idsFromBody;
   } else if (query) {
     try {
-      const brief = await bjlFrontDoor(query, { surface: 'joy_map_connections', user_email: userEmail });
+      const brief = await bjlFrontDoor(query, {
+        surface: 'joy_map_connections',
+        user_email: userEmail,
+        session_history: sessionHistory,
+      });
       frontDoorBrief = brief;
       if (brief.shape === 'needs_clarification' || brief.shape === 'out_of_scope') {
         return {

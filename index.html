@@ -4812,7 +4812,12 @@ const AudienceMapResults = ({ finding }) => {
 // Audience Map tab, the Dance Map tab, the Predictions tab, roster as
 // a destination — is gone. The renderers for the first two survive as
 // module-level components (AudienceMapResults, JoyMapDanceMapResults);
-// they have no entry point in this pane any more.
+// they have no entry point in this pane any more. The no-data card's
+// audience-angle chip calls the audience PARSER but does not mount
+// AudienceMapResults — it prints the raw parse behind a provisional
+// label, because a route out matters more than a finished surface and
+// an ungroomed result must not look authored. Designing that surface
+// for real is filed in docs/joy_map_design_spec_v0_2.md.
 //
 // A run is a saved artifact: its intake, context and cohort persist to
 // local storage and can be reloaded into the form. Results are not
@@ -4849,8 +4854,11 @@ const JoyMapMode = () => {
   // own label + input (query OR focal-id csv) + running/error/result
   // state. Query goes through the front-door resolver; ids go direct.
   const [cxColumns, setCxColumns] = useState([
-    { id: 'A', label: 'Door A', queryInput: '', focalIdsCsv: '', running: false, error: null, result: null },
-    { id: 'B', label: 'Door B', queryInput: '', focalIdsCsv: '', running: false, error: null, result: null },
+    // `history` is the clarifying lineage for this column: the prior turns that
+    // an answer has to be read against. `audience` holds the raw audience-parse
+    // escape hatch offered when the query resolves to nothing.
+    { id: 'A', label: 'Door A', queryInput: '', focalIdsCsv: '', running: false, error: null, result: null, history: [], audience: null },
+    { id: 'B', label: 'Door B', queryInput: '', focalIdsCsv: '', running: false, error: null, result: null, history: [], audience: null },
   ]);
   // Staff-only toggle. When true, modeled rows whose sign conflicts
   // with the measured territory mean lift (on 3+ pairs) are shown;
@@ -4928,23 +4936,38 @@ const JoyMapMode = () => {
   // forceRungB re-runs the same query but tells the resolver to skip
   // its own items and read the category around them instead. It is the
   // one-tap escape offered by the pre-run halt card.
-  const runConnectionsColumn = async (columnId, forceRungB) => {
+  //
+  // `override` is how a clarifying answer re-enters: { query, history }. It
+  // replaces the box contents and carries the prior turns, so the front door
+  // reads the answer as an answer. A plain Run passes no override and therefore
+  // starts a fresh lineage — retyping in the box is a new question, not a reply.
+  const runConnectionsColumn = async (columnId, forceRungB, override) => {
     const col = cxColumns.find(c => c.id === columnId);
     if (!col) return;
     const ids = col.focalIdsCsv
       .split(/[,\s]+/)
       .map(s => parseInt(s, 10))
       .filter(n => Number.isFinite(n) && n > 0);
-    const query = (col.queryInput || '').trim();
-    if (ids.length === 0 && !query) {
+    const query = override ? String(override.query || '').trim() : (col.queryInput || '').trim();
+    const history = (override && Array.isArray(override.history)) ? override.history : [];
+    // A re-dispatch is always the query path: the ids box belongs to the direct
+    // entry mode, which never produced a clarifying question in the first place.
+    const useIds = !override && ids.length > 0;
+    if (!useIds && !query) {
       setCxColumn(columnId, { error: 'Enter a query (front-door resolver) or focal item ids (comma-separated).', result: null });
       return;
     }
-    setCxColumn(columnId, { running: true, error: null, result: null });
+    setCxColumn(columnId, {
+      running: true, error: null, result: null, audience: null,
+      queryInput: useIds ? col.queryInput : query,
+      history,
+    });
     const invoke = async () => fetch('/.netlify/functions/bjl-joy-map-connections', authedFetchInit({
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(ids.length > 0 ? { focal_item_ids: ids } : { query, force_rung_b: !!forceRungB }),
+      body: JSON.stringify(useIds
+        ? { focal_item_ids: ids }
+        : { query, force_rung_b: !!forceRungB, session_history: history }),
     }));
     try {
       if (window.__bjlAuth && window.__bjlAuth.getSession) await window.__bjlAuth.getSession();
@@ -4966,6 +4989,60 @@ const JoyMapMode = () => {
       setCxColumn(columnId, { error: String(e.message || e) });
     } finally {
       setCxColumn(columnId, { running: false });
+    }
+  };
+
+  // The clarifying loop's return leg. The pane asked a question; this carries
+  // the answer back on the SAME lineage. Without the prior turns the front door
+  // sees a bare fragment ("the budget travel category"), classifies it as a new
+  // standalone query, and asks for clarification again — which is the dead end
+  // this whole change exists to close.
+  const answerClarification = (columnId, answerText) => {
+    const col = cxColumns.find(c => c.id === columnId);
+    if (!col) return;
+    const answer = String(answerText || '').trim();
+    if (!answer) return;
+    const brief = (col.result && col.result.brief) || {};
+    const asked = brief.clarifying_question || '';
+    const priorQuery = (col.queryInput || '').trim();
+    // Turns are appended in user/assistant pairs so the list stays alternating
+    // however far back it runs; the front door caps the depth and drops any
+    // history it cannot read cleanly.
+    const history = [
+      ...(Array.isArray(col.history) ? col.history : []),
+      ...(priorQuery && asked ? [{ role: 'user', content: priorQuery }, { role: 'assistant', content: asked }] : []),
+    ];
+    runConnectionsColumn(columnId, false, { query: answer, history });
+  };
+
+  // The alternate route out of "we don't have that brand". Rephrasing cannot
+  // help when the brand simply is not fielded, so the only honest next move is
+  // to build from the audience described instead of the brand named.
+  //
+  // This is a STUB destination: it renders the parser's raw output, explicitly
+  // labelled provisional. Designing a real Audience Map surface is separate
+  // work — but an unfinished route beats a dead end, and a raw result that is
+  // marked raw cannot be mistaken for a finished map.
+  const runAudienceAngle = async (columnId) => {
+    const col = cxColumns.find(c => c.id === columnId);
+    if (!col) return;
+    const description = (col.queryInput || '').trim();
+    if (!description) return;
+    setCxColumn(columnId, { audience: { running: true, error: null, finding: null, description } });
+    try {
+      if (window.__bjlAuth && window.__bjlAuth.getSession) await window.__bjlAuth.getSession();
+      const r = await fetch('/.netlify/functions/bjl-joy-map-audience-parse', authedFetchInit({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description }),
+      }));
+      const j = await r.json();
+      if (!r.ok || !j.job_id) throw new Error((j && j.error) || `request failed (${r.status})`);
+      const job = await _bjlPollJob(j.job_id, null, { hardCapMs: 4 * 60 * 1000 });
+      if (job.status === 'error') throw new Error(job.error || 'audience parse failed');
+      setCxColumn(columnId, { audience: { running: false, error: null, finding: job.finding || null, description } });
+    } catch (e) {
+      setCxColumn(columnId, { audience: { running: false, error: String(e.message || e), finding: null, description } });
     }
   };
 
@@ -5191,6 +5268,10 @@ const JoyMapMode = () => {
                         engagement={runEngagement}
                         onSendToBulletin={setCompose}
                         onRunRungB={col.queryInput.trim() ? () => runConnectionsColumn(col.id, true) : null}
+                        onAnswerClarification={(answer) => answerClarification(col.id, answer)}
+                        onAudienceAngle={() => runAudienceAngle(col.id)}
+                        audience={col.audience}
+                        running={col.running}
                       />
                     )}
                   </div>
@@ -5422,7 +5503,85 @@ const intelligenceDraft = ({ block, structured, question, engagement }) => {
 // get an entry point, their builders get written against the payloads
 // they actually emit.
 
-const JoyMapConnectionsSweep = ({ result, showConflicting, profileCache, onOpenProfile, rosterCache, onOpenRoster, predictions, cohortPreset, doorLabel, engagement, onSendToBulletin, onRunRungB }) => {
+// The clarifying card, and the pane's guarantee that no response is terminal.
+//
+// The bug this replaces: the pane emitted a clarifying question with no way to
+// answer it, so the conversation stopped dead and the only move left was to
+// retype the same brand into the same box. Any door that can ask must be able
+// to hear, so the input ships WITH the question.
+//
+// Two different failures used to look identical here and need different exits:
+//
+//   ambiguity      the subject is in the corpus, the query was too vague.
+//                  Rephrasing works. One input, no chips.
+//   not fielded    (brief.escalated_from is set) the query was perfectly clear
+//                  and the brand simply is not in the corpus. Asking someone to
+//                  rephrase a name that does not exist is a loop with no exit,
+//                  so this case additionally offers the audience-angle route.
+//
+// The audience result is rendered raw and labelled raw. It is a real route out,
+// not a finished surface, and it must never be mistaken for one.
+const JoyMapClarifyCard = ({ brief, audience, onAnswer, onAudienceAngle, running }) => {
+  const [answer, setAnswer] = useState('');
+  const notFielded = !!brief.escalated_from;
+  const submit = () => { if (answer.trim() && !running) { onAnswer(answer); setAnswer(''); } };
+
+  return (
+    <div className="conn-clarify" style={{marginTop: 12}}>
+      <div className="conn-clarify-eyebrow">
+        {notFielded ? 'Not in the corpus' : 'Clarification needed'}
+      </div>
+      <div className="conn-clarify-question">
+        {brief.clarifying_question || 'Could you rephrase — I need a specific experience, brand, or category to run this against.'}
+      </div>
+
+      <div className="conn-clarify-answer">
+        <input
+          type="text"
+          value={answer}
+          placeholder={notFielded ? 'Category, or the exact brand name…' : 'Your answer…'}
+          disabled={running}
+          onChange={(e) => setAnswer(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
+        />
+        <button onClick={submit} disabled={running || !answer.trim()}>
+          {running ? 'Running…' : 'Send'}
+        </button>
+      </div>
+
+      {notFielded && (
+        <div className="conn-clarify-chips">
+          <button
+            className="conn-clarify-chip"
+            disabled={running || (audience && audience.running)}
+            onClick={onAudienceAngle}
+          >
+            {audience && audience.running ? 'Building…' : 'Build from the audience angle instead'}
+          </button>
+        </div>
+      )}
+
+      {brief.shape_reasoning && (
+        <div className="conn-clarify-reason">{brief.reason_label || 'Front door'}: {brief.shape_reasoning}</div>
+      )}
+
+      {audience && !audience.running && (audience.error || audience.finding) && (
+        <div className="conn-provisional">
+          <div className="conn-provisional-label">
+            Raw audience read — provisional, not a finished map
+          </div>
+          {audience.error
+            ? <pre>Audience parse failed: {audience.error}</pre>
+            : <pre>{typeof audience.finding === 'string'
+                ? audience.finding
+                : JSON.stringify(audience.finding, null, 2)}</pre>}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const JoyMapConnectionsSweep = ({ result, showConflicting, profileCache, onOpenProfile, rosterCache, onOpenRoster, predictions, cohortPreset, doorLabel, engagement, onSendToBulletin, onRunRungB, onAnswerClarification, onAudienceAngle, audience, running }) => {
   if (!result || !Array.isArray(result.territories)) return null;
 
   // Front-door escalation surface. When the brief comes back as
@@ -5433,15 +5592,13 @@ const JoyMapConnectionsSweep = ({ result, showConflicting, profileCache, onOpenP
   const brief = result.brief || null;
   if (brief && brief.shape === 'needs_clarification') {
     return (
-      <div className="conn-clarify" style={{marginTop: 12}}>
-        <div className="conn-clarify-eyebrow">Clarification needed</div>
-        <div className="conn-clarify-question">
-          {brief.clarifying_question || 'Could you rephrase — I need a specific experience, brand, or category to run this against.'}
-        </div>
-        {brief.shape_reasoning && (
-          <div className="conn-clarify-reason">Front door: {brief.shape_reasoning}</div>
-        )}
-      </div>
+      <JoyMapClarifyCard
+        brief={brief}
+        audience={audience}
+        running={!!running}
+        onAnswer={onAnswerClarification}
+        onAudienceAngle={onAudienceAngle}
+      />
     );
   }
   if (brief && brief.shape === 'out_of_scope') {
@@ -5457,28 +5614,41 @@ const JoyMapConnectionsSweep = ({ result, showConflicting, profileCache, onOpenP
       </div>
     );
   }
+  // The two no-data terminals. Both mean "nothing in the corpus answers this",
+  // which is exactly the case where rephrasing may not help — so both get the
+  // same two exits as the not-fielded clarification above rather than stopping
+  // the conversation with a statement.
   if (result.note && Array.isArray(result.focals) && result.focals.length === 0) {
     return (
-      <div className="conn-clarify" style={{marginTop: 12}}>
-        <div className="conn-clarify-eyebrow">No focals</div>
-        <div className="conn-clarify-question">{result.note}</div>
-      </div>
+      <JoyMapClarifyCard
+        brief={{ clarifying_question: result.note, escalated_from: 'no_focals', shape_reasoning: null }}
+        audience={audience}
+        running={!!running}
+        onAnswer={onAnswerClarification}
+        onAudienceAngle={onAudienceAngle}
+      />
     );
   }
   // Ladder exhausted. Nothing the resolver found is in the scored
-  // ledger and the category behind it has nothing either. Saying so is
-  // the whole output — there is no map underneath this.
+  // ledger and the category behind it has nothing either. There is no map
+  // underneath this — but there is still somewhere to go.
   if (result.resolution && result.resolution.rung === 'none') {
+    const dropped = Array.isArray(result.resolution.dropped) ? result.resolution.dropped : [];
     return (
-      <div className="conn-clarify" style={{marginTop: 12}}>
-        <div className="conn-clarify-eyebrow">Resolution ladder exhausted</div>
-        <div className="conn-clarify-question">{result.resolution.line}</div>
-        {Array.isArray(result.resolution.dropped) && result.resolution.dropped.length > 0 && (
-          <div className="conn-clarify-reason">
-            Dropped: {result.resolution.dropped.map(d => `${d.item_name || `#${d.item_id}`} (id ${d.item_id})`).join('; ')}
-          </div>
-        )}
-      </div>
+      <JoyMapClarifyCard
+        brief={{
+          clarifying_question: result.resolution.line,
+          escalated_from: 'ladder_exhausted',
+          reason_label: 'Dropped',
+          shape_reasoning: dropped.length
+            ? dropped.map(d => `${d.item_name || `#${d.item_id}`} (id ${d.item_id})`).join('; ')
+            : null,
+        }}
+        audience={audience}
+        running={!!running}
+        onAnswer={onAnswerClarification}
+        onAudienceAngle={onAudienceAngle}
+      />
     );
   }
 

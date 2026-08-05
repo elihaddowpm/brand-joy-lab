@@ -4254,6 +4254,93 @@ textarea { font-family: var(--font-text); }
   margin-top: 10px;
 }
 
+/* The answer row. A clarifying question that cannot be answered where it is
+   asked is a dead end, so the input ships with the question, not behind it. */
+.conn-clarify-answer {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  max-width: 62ch;
+}
+.conn-clarify-answer input {
+  flex: 1;
+  font-family: inherit;
+  font-size: 14px;
+  padding: 7px 10px;
+  border: 1px solid var(--iron, #8a8a82);
+  border-radius: 2px;
+  background: var(--paper, #fbfaf5);
+  color: var(--ink, #1a1a17);
+}
+.conn-clarify-answer button {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 7px 14px;
+  border: 1px solid var(--ink, #1a1a17);
+  border-radius: 2px;
+  background: var(--ink, #1a1a17);
+  color: var(--paper, #fbfaf5);
+  cursor: pointer;
+}
+.conn-clarify-answer button:disabled { opacity: 0.4; cursor: default; }
+
+.conn-clarify-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.conn-clarify-chip {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  padding: 6px 12px;
+  border: 1px solid var(--iron, #8a8a82);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink, #1a1a17);
+  cursor: pointer;
+}
+.conn-clarify-chip:hover { border-color: var(--ink, #1a1a17); }
+.conn-clarify-chip:disabled { opacity: 0.4; cursor: default; }
+
+/* Raw audience parse. Deliberately does NOT inherit the finished-surface
+   styling: an ungroomed machine output must never look authored, or it gets
+   read and quoted as a map. Hatched border and a monospace dump, not cards. */
+.conn-provisional {
+  margin-top: 16px;
+  border: 1px dashed var(--iron, #8a8a82);
+  border-radius: 2px;
+  padding: 12px 14px;
+  background: repeating-linear-gradient(
+    45deg,
+    transparent, transparent 10px,
+    rgba(0, 0, 0, 0.02) 10px, rgba(0, 0, 0, 0.02) 20px
+  );
+}
+.conn-provisional-label {
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-weight: 700;
+  color: var(--iron-darker, #5a5a55);
+  margin-bottom: 8px;
+}
+.conn-provisional pre {
+  margin: 0;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--iron-darker, #5a5a55);
+  max-height: 420px;
+  overflow: auto;
+}
+
 .conn-section {
   margin-bottom: 24px;
 }

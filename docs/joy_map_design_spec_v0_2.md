@@ -310,3 +310,63 @@ Expected output:
 - Opportunity cards include a stretch angle sentence
 
 The brand text and audience filters in this test are illustrative. Real-world tests will use actual prospect Waldo JSON.
+
+---
+
+## Addendum, 2026-08-05 — the pane clarifying loop, and one piece it left open
+
+The Joy Map connections pane could ask a clarifying question but rendered no way
+to answer it. Every response that was not a finding was a terminal statement, so
+the only move left to a strategist was to retype the same brand into the same
+box — "Hotwire Communications" appears eight times in one day in
+`bjl_front_door_log`, which is the behavioural signature of the dead end.
+`needs_clarification` was 46% of that surface's front-door traffic and the only
+shape logged after July 29.
+
+Two things were structurally missing rather than merely unwired:
+
+1. **The front door ignored the context it documented.** `session_history` was
+   accepted and dropped, so a re-dispatched answer ("the budget travel
+   category") would have been classified as a brand new standalone query and
+   drawn the same clarifying question again. Prior turns are now threaded into
+   both Haiku stages. Absent history is a strict no-op by construction, which is
+   what keeps the connections-beta pane and the investigator — neither of which
+   passes history — provably unchanged. `bin/test_front_door_nonregression.js`
+   holds that property.
+
+2. **`no_data` and `ambiguous` were collapsed into one shape.** "Theme parks"
+   (in the corpus, query too vague) and "Hostelling International" (query
+   perfectly clear, brand not fielded) both arrived as `needs_clarification`,
+   and a surface cannot offer the right next move without telling them apart.
+   Asking someone to rephrase a brand name that does not exist is a loop with
+   no exit. The brief now carries `escalated_from`, additively; the shape is
+   unchanged so existing consumers are unaffected.
+
+### The open piece: AudienceMapResults as a real destination
+
+When the named brand is genuinely not fielded, the honest next move is to build
+from the audience described rather than the brand named. That route is now wired
+— the chip calls `bjl-joy-map-audience-parse` and renders what comes back — but
+**what it renders is the parser's raw output behind an explicit
+"raw audience read — provisional, not a finished map" label**, on a hatched,
+monospace panel that deliberately does not inherit finished-surface styling.
+
+This is the same rule as `machine_draft` in the bulletin register: an ungroomed
+machine output must never look authored, because if it does it gets quoted. The
+label is load-bearing, not decoration. Do not restyle that panel to match the
+sweep's cards without first doing the work below.
+
+`AudienceMapResults` exists in `index.html` and has had no entry point since the
+pane was restructured. Designing it as a real destination is its own piece, and
+it is not a render-time cleanup:
+
+- Its rows are `{ item_name, cohort_ji, corpus_ji, cohort_n }` — a different
+  payload from the focal/other pairs the connections sweep renders. It needs its
+  own builder written against what the parser actually emits, not an adaptation
+  of the sweep's.
+- The cohort needs the same eligibility and thinness treatment the sweep gives
+  focals, or it will render sixteen confident rows off a cohort of nine people.
+- It needs a stated relationship to the Dance Map, which shares the audience
+  side and is also unmounted.
+
+Until that lands, the provisional label is the whole guarantee.

@@ -27,6 +27,18 @@
  *                        extra_context?: object, user_email?: string }
  * Output: the brief JSON per the spec's schema.
  *
+ * session_history is CONSUMED, as of the Joy Map clarification-loop fix. It
+ * was documented here for months without being read: classifyShape and
+ * extractSearchTerms both sent the bare query, so a clarifying answer
+ * ("the QSR category") arrived divorced from the question it answered and
+ * got re-escalated. Both now thread prior turns as real conversation
+ * messages. An absent or empty history is a STRICT no-op — identical system
+ * prompt, identical message list, identical output — which is what keeps the
+ * consumers that pass no history provably unchanged. See priorTurnsToMessages.
+ *
+ * extra_context is still accepted and still not read. Left in the signature
+ * because callers pass it; do not infer from its presence that it works.
+ *
  * The module also exposes a Netlify HTTP handler at the bottom so a
  * frontend can call the front door directly (e.g. for the connections
  * pane's standalone entry path) — auth required. Non-HTTP callers
@@ -69,11 +81,62 @@ const SHAPES_REQUIRING_ENTITIES = new Set([
   'brand_lookup',
 ]);
 
+// Prior-turn threading limits. History exists so a clarifying answer reads
+// as an answer; it is not a transcript store.
+const MAX_PRIOR_TURNS = 6;
+const MAX_PRIOR_TURN_CHARS = 1200;
+
 // ---------------------------------------------------------------------
 // Decision 1: Shape
 // ---------------------------------------------------------------------
 
 function sqlEscape(s) { return String(s).replace(/'/g, "''"); }
+
+// Prior turns → Anthropic message list.
+//
+// STRICT NO-OP CONTRACT. When there is no usable history this returns [],
+// and every caller then builds exactly the single-user-message array it
+// built before this function existed. That is the property that keeps the
+// other two consumers of this module (the connections-beta pane and the
+// investigator) provably unchanged: neither passes session_history, so
+// neither can take a different path. It is a no-op by construction, not by
+// resemblance — do not add behaviour here that fires on an empty list.
+//
+// Accepts the turn shape the staff tool already assembles for
+// prior_conversation_context: [{ role, content }] or [{ query, response }].
+function priorTurnsToMessages(context) {
+  const raw = context && Array.isArray(context.session_history)
+    ? context.session_history
+    : null;
+  if (!raw || raw.length === 0) return [];
+
+  const msgs = [];
+  for (const turn of raw.slice(-MAX_PRIOR_TURNS)) {
+    if (!turn || typeof turn !== 'object') continue;
+    if (typeof turn.role === 'string' && typeof turn.content === 'string') {
+      if (turn.role !== 'user' && turn.role !== 'assistant') continue;
+      const text = turn.content.trim().slice(0, MAX_PRIOR_TURN_CHARS);
+      if (text) msgs.push({ role: turn.role, content: text });
+      continue;
+    }
+    const q = typeof turn.query === 'string' ? turn.query.trim() : '';
+    const a = typeof turn.response === 'string' ? turn.response.trim() : '';
+    if (q) msgs.push({ role: 'user', content: q.slice(0, MAX_PRIOR_TURN_CHARS) });
+    if (a) msgs.push({ role: 'assistant', content: a.slice(0, MAX_PRIOR_TURN_CHARS) });
+  }
+
+  // Anthropic requires the list to start with a user turn and to alternate.
+  // Rather than repair a malformed history, drop it — a wrong reconstruction
+  // of the conversation is worse than no conversation.
+  while (msgs.length && msgs[0].role !== 'user') msgs.shift();
+  for (let i = 1; i < msgs.length; i++) {
+    if (msgs[i].role === msgs[i - 1].role) return [];
+  }
+  // Callers append the live query as a user turn, so history must end on
+  // the assistant side.
+  if (msgs.length && msgs[msgs.length - 1].role === 'user') msgs.pop();
+  return msgs;
+}
 
 async function classifyShape(query, context) {
   const surface = (context && context.surface) || null;
@@ -120,12 +183,20 @@ Return ONLY this JSON, no preamble:
   "clarifying_question": "populated only when shape is needs_clarification — a specific question the tool should ask"
 }${surfaceHint}`;
 
+  // Prior turns, when the caller supplied them. The live query is always
+  // the final user message, so an empty history reproduces the original
+  // single-message call exactly.
+  const priorMsgs = priorTurnsToMessages(context);
+  const historyHint = priorMsgs.length
+    ? `\n\nCONVERSATION IN PROGRESS: the messages before the last one are earlier turns on this surface, including any clarifying question this tool already asked. The FINAL user message is what you are classifying, and it is very likely an ANSWER to that clarifying question rather than a new standalone query. Read it together with what came before: if the earlier turn established the subject and the final message supplies the missing detail, classify the COMBINED intent and do not return needs_clarification for a second time on the same subject.`
+    : '';
+
   try {
     const rsp = await anthropic.messages.create({
       model: HAIKU_MODEL,
       max_tokens: 300,
-      system: [{ type: 'text', text: system }],
-      messages: [{ role: 'user', content: query }],
+      system: [{ type: 'text', text: system + historyHint }],
+      messages: [...priorMsgs, { role: 'user', content: query }],
     });
     const text = (rsp.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
     const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
@@ -154,7 +225,7 @@ Return ONLY this JSON, no preamble:
 // corpus wording. Same shape as the connections-beta extractor, but
 // aware of the shape so it can lean the right way (brand lookup wants
 // brand phrases; territory read wants tension/mode names).
-async function extractSearchTerms(query, shape) {
+async function extractSearchTerms(query, shape, context) {
   const shapeHint = shape === 'brand_lookup'
     ? '\n\nThis is a brand_lookup query. Prefer brand-name phrases; the corpus stores named brands as their canonical name in the item_name and canonical_brand columns.'
     : shape === 'audience_comparison'
@@ -187,12 +258,18 @@ Rules:
 
 Return ONLY a JSON array of strings, no preamble.${shapeHint}`;
 
+  // Same strict no-op as the classifier: no history, identical call.
+  const priorMsgs = priorTurnsToMessages(context);
+  const historyHint = priorMsgs.length
+    ? '\n\nCONVERSATION IN PROGRESS: earlier turns precede the final user message. The final message may be a short answer to a clarifying question ("the QSR category", "it competes with hostels") rather than a self-contained query. Extract phrases for the SUBJECT UNDER DISCUSSION across the whole exchange, taking the detail the final message adds — not phrases for the final message read alone.'
+    : '';
+
   try {
     const rsp = await anthropic.messages.create({
       model: HAIKU_MODEL,
       max_tokens: 300,
-      system: [{ type: 'text', text: system }],
-      messages: [{ role: 'user', content: query }],
+      system: [{ type: 'text', text: system + historyHint }],
+      messages: [...priorMsgs, { role: 'user', content: query }],
     });
     const text = (rsp.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
     const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
@@ -395,7 +472,7 @@ async function resolveEntities(query, shape, context) {
 
   // Terms → shortlist → semantic picker. Same three-stage as the
   // connections-beta resolver's current shape.
-  const terms = await extractSearchTerms(query, shape);
+  const terms = await extractSearchTerms(query, shape, context);
   if (terms.length === 0) {
     return { ...empty, resolver_note: 'Concept extractor returned no search terms.' };
   }
@@ -792,6 +869,7 @@ async function bjlFrontDoor(query, context = {}) {
       capability: emptyCapability(),
       route: emptyRoute(),
       clarifying_question: 'What would you like to ask?',
+      escalated_from: null,
       resolver_note: null,
     };
   }
@@ -809,6 +887,7 @@ async function bjlFrontDoor(query, context = {}) {
       capability: emptyCapability(),
       route: emptyRoute(),
       clarifying_question: shape === 'needs_clarification' ? clarifying_question : null,
+      escalated_from: null,          // classifier asked; nothing was resolved against.
       resolver_note: null,
     };
     await logBrief(q, brief, context);
@@ -828,9 +907,20 @@ async function bjlFrontDoor(query, context = {}) {
   // guess — escalate to needs_clarification with a specific ask. This is
   // the spec's Regression Test 4: never a junk resolution when nothing
   // resolved.
+  //
+  // Two different failures used to arrive at consumers looking identical:
+  // "Theme parks" (present in the corpus, query too vague) and "Hostelling
+  // International" (query perfectly clear, brand simply not fielded). Both
+  // land on needs_clarification, and a surface cannot offer the right next
+  // move without telling them apart — asking someone to rephrase a brand
+  // name that does not exist is a loop with no exit. escalated_from records
+  // which one this is. The shape stays needs_clarification so existing
+  // consumers are unaffected; the discriminator is additive.
   const totalEntities = entities.items.length + entities.brands.length + entities.audiences.length;
+  let escalatedFrom = null;
   if (SHAPES_REQUIRING_ENTITIES.has(shape) && totalEntities === 0) {
     const originalShape = shape;
+    escalatedFrom = originalShape;
     shape = 'needs_clarification';
     shape_reasoning = `Original classification was ${originalShape}, but entity resolution returned zero. Escalating to needs_clarification per front-door guarantee.`;
     clarifying_question = originalShape === 'brand_lookup'
@@ -858,6 +948,11 @@ async function bjlFrontDoor(query, context = {}) {
     capability,
     route: emptyRoute(),             // Step 3 populates.
     clarifying_question: shape === 'needs_clarification' ? clarifying_question : null,
+    // null when the classifier itself asked for clarification (the query was
+    // ambiguous); the original shape name when the query was understood and
+    // the corpus simply had nothing. Consumers that do not read it are
+    // unaffected — behaviour is identical to before this field existed.
+    escalated_from: escalatedFrom,
     resolver_note: entitiesResult.resolver_note,
   };
 
