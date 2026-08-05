@@ -148,3 +148,10 @@ ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
 -- needs a read on how the frontend actually uses table-level PostgREST
 -- before anyone moves. Its own audit, its own migration, its own
 -- decision.
+--
+-- [SUPERSEDED, August 4 2026 → 2026-08-04_revoke_anon_write_schemawide.sql]
+-- The write half of that block is closed. The paragraph above calls it
+-- "currently theory"; a third-party audit the next day proved it live —
+-- anon and authenticated held INSERT/UPDATE/DELETE on ~70 tables. Read
+-- grants are still open by choice and the frontend read the paragraph
+-- asks for is now done, at the foot of that file.
