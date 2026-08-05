@@ -33,7 +33,11 @@
  *     the comparison covers a single path and reads as full coverage. The
  *     fixture table therefore carries its own shape and its own resolve/fail
  *     outcome, and the stubs return usable rows so the stages PAST entity
- *     resolution actually execute.
+ *     resolution actually execute. That property is ASSERTED, not merely
+ *     arranged: a run that walks one shape, or that never escalates, or that
+ *     always escalates, exits non-zero however clean the comparison was.
+ *     Branch diversity living only in the fixture table would be a check that
+ *     trusts its next editor, which is what a mechanical gate exists to avoid.
  *   - require's cache is keyed on the realpath. Deleting the wrong key returns
  *     the previous fixture's module, whose stubs still write into the previous
  *     fixture's capture array, and every fixture after the first reads as
@@ -46,7 +50,8 @@
  *       compares two explicit files.
  *
  * No node_modules and no database — the dependencies are stubbed, so this runs
- * anywhere node runs. Exit 0 means no drift AND the feature is reachable.
+ * anywhere node runs. Exit 0 means no drift AND the feature is reachable AND
+ * the degenerate histories no-op AND the run was branch-diverse.
  */
 const Module = require('module');
 const path = require('path');
@@ -197,6 +202,19 @@ function loadIsolated(file, capture, fx) {
 
   let mismatches = 0;
 
+  // Branch coverage, tallied from what the run actually DID — not from what
+  // FIXTURES declares. Reading the declarations back would certify the table
+  // against itself and pass a run whose stubs collapsed every row onto one
+  // path while the `shape` column still looked varied.
+  //
+  // `escalated_from` is the discriminator that makes the shape switch
+  // observable from outside: on escalation the brief's own shape is rewritten
+  // to needs_clarification, so the branch actually walked is the pre-escalation
+  // shape when there is one and the final shape otherwise.
+  const shapesWalked = new Map();
+  const escalationOutcomes = new Map();
+  const bump = (m, k) => m.set(k, (m.get(k) || 0) + 1);
+
   for (const fx of FIXTURES) {
     const oldCap = [];
     const newCap = [];
@@ -208,6 +226,9 @@ function loadIsolated(file, capture, fx) {
     const ctx = { surface: fx.surface, user_email: 'regress@bjl' };
     const oldBrief = await oldMod.bjlFrontDoor(fx.query, { ...ctx });
     const newBrief = await newMod.bjlFrontDoor(fx.query, { ...ctx });
+
+    bump(shapesWalked, newBrief.escalated_from || newBrief.shape);
+    bump(escalationOutcomes, newBrief.escalated_from ? 'escalated' : 'resolved');
 
     const oldCalls = oldCap.filter(c => c.kind === 'anthropic').map(c => c.payload);
     const newCalls = newCap.filter(c => c.kind === 'anthropic').map(c => c.payload);
@@ -245,6 +266,24 @@ function loadIsolated(file, capture, fx) {
   }
 
   console.log(`\n${FIXTURES.length} fixtures compared, ${mismatches} drift(s).`);
+
+  // The check on the check. Printed in full on pass, not merely consumed by the
+  // exit code: a silent pass that also happens to be diverse is one refactor
+  // away from a silent pass that is not, and nobody would see the difference.
+  // Shown, the way a near-zero floor_r is shown rather than asserted.
+  const shapeList = [...shapesWalked.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  const diverse = shapeList.length > 1
+    && escalationOutcomes.has('escalated')
+    && escalationOutcomes.has('resolved');
+  console.log(
+    `branch coverage: ${shapeList.length} shape(s) walked — ` +
+    shapeList.map(([s, n]) => `${s}×${n}`).join(', ')
+  );
+  console.log(
+    `escalation outcomes: ` +
+    ['resolved', 'escalated'].map(k => `${k}=${escalationOutcomes.get(k) || 0}`).join(' ') +
+    (diverse ? '' : '   <-- COLLAPSED: this run proves one path, not the switch')
+  );
 
   // Reachability. If threading never fires, every assertion above passes
   // trivially and this file certifies nothing.
@@ -284,5 +323,5 @@ function loadIsolated(file, capture, fx) {
     console.log(`  degenerate history "${name}" -> ${isNoop ? 'no-op' : 'NOT A NO-OP'}`);
   }
 
-  process.exit(mismatches === 0 && threaded && degenerateOk ? 0 : 1);
+  process.exit(mismatches === 0 && threaded && degenerateOk && diverse ? 0 : 1);
 })();
