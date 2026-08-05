@@ -112,17 +112,34 @@
 --
 -- Recovery confirmed: the legacy definition, rebuilt over pre-dedup
 -- responses (bjl_responses UNION the dedup snapshot), reproduces the
--- anchor pair 1393 x 4856 at n_pair 826, r 0.3291 exactly. Two things
--- the recovery corrected along the way:
+-- anchor pair 1393 x 4856 at n_pair 826, r 0.3291 exactly, and rebuilds
+-- the centered table to 1,452,730 cells against live's 1,452,730.
 --
---   - the anchor is one pair, not an aggregate, and both ledgers hold
---     0.3291 for it. STATE.md's "v1 826 / 0.3279" was wrong; 0.3279
---     belongs to pair 4647 x 4655 at n 672.
+-- The centering group is the respondent x FINE scale_family
+-- (bjl_item_spread.scale_family). A first pass used the coarse question
+-- family (bjl_question_family.family) and returned 0.3279 — close enough
+-- to look right, wrong enough to fail the assertion. The gate caught it.
+-- That is the argument for having written the anchor into the script as
+-- an assertion rather than as a comment.
 --
---   - there are not two ledgers. All 60,401 rows of
---     bjl_connectivity_ledger appear in bjl_connectivity_ledger_v2 with
---     identical n_pair and identical r, and every one is joy x joy. v1
---     is v2's joy-only slice, exactly.
+-- V1 HAS BEEN OVERWRITTEN. STATE.md carries two anchors for the same
+-- pair at the same n: v1 826 / 0.3279 and v2 826 / 0.3291. Only one
+-- still exists. Live:
+--
+--   - bjl_conn_centered.cj is byte-identical to
+--     bjl_conn_centered_v2.cz where scale_family = 'joy' — all
+--     1,053,961 cells, max abs diff 0.0000;
+--   - all 60,401 rows of bjl_connectivity_ledger appear in
+--     bjl_connectivity_ledger_v2 with identical n_pair and identical r,
+--     every one joy x joy;
+--   - both return 0.3291 for the anchor.
+--
+-- So v1 does not reproduce its own documented number, and STATE.md is
+-- the only surviving record that it ever differed. Presumably the
+-- 2026-07-25 rebuild wrote v2's joy slice over it. v1 has no consumer,
+-- so this is not being reconstructed; it is recorded because the lesson
+-- is the same one Tier A taught: a table agreeing with itself is not
+-- evidence that it is what its documentation says it is.
 --
 -- ON THE "1,364 NEGATIVE TRADE-OFF PAIRS". That figure does not
 -- reproduce. bjl_connectivity_ledger_v2 holds 648 rows at r <= -0.35,

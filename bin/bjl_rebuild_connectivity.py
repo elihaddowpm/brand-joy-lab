@@ -44,11 +44,12 @@ Centering.  cz = value - the respondent's mean over the centering group.
   Mean-centered, NOT z-scored: the point scale is retained, only the mean is
   removed.
 
-  The legacy centering group is the respondent x COARSE question family
-  (bjl_question_family.family), not the fine per-item scale_family. The two
-  taxonomies differ: coarse 'likelihood' contains fine likelihood, trust and
-  familiarity. Centering on the fine family is wrong and shows it — see
-  KNOWN RESIDUAL below.
+  The legacy centering group is the respondent x scale_family, where
+  scale_family is bjl_item_spread's — the FINE, per-item taxonomy. There is
+  a second, coarser one (bjl_question_family.family) whose 'likelihood'
+  contains fine likelihood, trust and familiarity. Centering on the coarse
+  one is wrong: it misses the anchor by 0.0012 (gives 0.3279, not 0.3291).
+  See KNOWN RESIDUAL, which is where the coarse taxonomy earns its mention.
 
 Ledger.  r = corr(a.cz, b.cz) over shared respondents, plain Pearson, nothing
   else. Undirected, stored once as item_a < item_b, kept where n_pair >= 31.
@@ -61,39 +62,60 @@ STATE.md's anchor is one pair, not an aggregate: items 1393 x 4856, n_pair 826,
 r 0.3291. The legacy definition above reproduces it exactly from pre-dedup
 data. `verify` asserts it and exits non-zero if it drifts.
 
-Two corrections to STATE.md while we are here, both verified against live:
+V1 HAS BEEN OVERWRITTEN — this is a finding, not a footnote
+-----------------------------------------------------------
 
-  1. STATE.md records the v1 anchor as 826 / 0.3279 and v2 as 826 / 0.3291.
-     Live says both ledgers hold 0.3291 for that pair. 0.3279 exists, but on
-     a different pair (4647 x 4655, n 672). The v1/v2 anchor distinction is
-     not real.
+STATE.md records two anchors for the same pair at the same n: v1 826 / 0.3279
+and v2 826 / 0.3291. Both are real numbers. Only one of them still exists.
 
-  2. There are not two ledgers. All 60,401 rows of bjl_connectivity_ledger
-     appear in bjl_connectivity_ledger_v2 with identical n_pair and identical
-     r, and every one of them is scale joy x joy. v1 IS v2's joy/joy slice,
-     exactly. It is a view that got materialised. This script builds one
-     ledger and derives the joy-only one from it.
+Live, every v1 artifact is an exact slice of v2:
+
+  - bjl_conn_centered.cj is byte-identical to bjl_conn_centered_v2.cz
+    restricted to scale_family = 'joy'. All 1,053,961 cells, max abs diff
+    0.0000.
+  - all 60,401 rows of bjl_connectivity_ledger appear in
+    bjl_connectivity_ledger_v2 with identical n_pair and identical r, and
+    every one is joy x joy.
+  - both give 0.3291 for the anchor pair.
+
+So v1 no longer reproduces its own documented anchor. Whatever computation
+produced 0.3279 was overwritten — most likely by the 2026-07-25 rebuild
+writing v2's joy slice over it — and STATE.md is the only surviving record
+that it ever differed.
+
+Circumstantial evidence for what v1 was: centering on the COARSE question
+family instead of the fine one gives this pair exactly 826 / 0.3279. That is
+suggestive, not proof, and it is not worth chasing — v1 has no consumer. What
+matters is the integrity lesson, which is the same one Tier A taught today:
+a stored table agreeing with itself is not evidence that it is what its
+documentation says it is.
 
 
 KNOWN RESIDUAL, stated rather than buried
 -----------------------------------------
 
-The joy path reproduces exactly (826 / 0.3291) and joy is 73% of centered
+The joy path reproduces exactly — 826 / 0.3291 — and joy is 73% of centered
 cells and 52% of ledger pairs. The non-joy path reproduces n_pair exactly but
-r to about +/-0.003, not to the digit:
+r only to about +/-0.012:
 
-    pair          live r    coarse-family    fine-family
-    3941 x 3942   0.2029    0.2061           0.1919
-    3936 x 3942   0.4804    0.4784           0.4680
-    3936 x 3941   0.1931    0.1912           0.1793
+    pair          live r    fine-family (used)   coarse-family
+    3941 x 3942   0.2029    0.1919               0.2061
+    3936 x 3942   0.4804    0.4680               0.4784
+    3936 x 3941   0.1931    0.1793               0.1912
 
-Coarse-family centering is an order of magnitude closer than fine-family,
-which is why it is the recovered rule. The last 0.003 is an unclosed question
-about exactly which rows entered the non-joy centering group. It does not
-affect the ruling or the rebuild — under option (ii) the centering group is
-the whole instrument and the coarse/fine distinction disappears entirely.
-It does mean: do not treat a non-joy row of the OLD ledger as reproducible to
-four decimals.
+Coarse-family centering is closer on these three. It is nonetheless rejected,
+because it misses the anchor, and the anchor is the one target STATE.md
+actually commits to. Fitting the residual at the cost of the anchor would be
+choosing the unverified target over the verified one.
+
+What this means is that the non-joy centering group is somewhat WIDER than
+the fine family but not as wide as the coarse one — probably it includes
+responses to items that never made it into bjl_item_spread. That is unclosed.
+
+It does not affect the ruling or the rebuild: under option (ii) the centering
+group is the whole instrument and the fine/coarse question dissolves. It does
+mean one thing for readers of the OLD ledger — a joy x joy row is
+reproducible to four decimals, a non-joy row is not.
 
 
 WHY _v3, AND NOT AN OVERWRITE
@@ -172,28 +194,27 @@ CURRENT = """
 
 
 def legacy_centered_sql(source):
-    """Legacy cz: mean-centred within respondent x COARSE question family,
-    in each family's native units. This is the definition that produced the
-    live v2, and it is the one being replaced."""
+    """Legacy cz: mean-centred within respondent x scale_family, where
+    scale_family is bjl_item_spread's (the fine, per-item taxonomy), in each
+    family's native units. This is the definition that produced the live v2,
+    and it is the one being replaced."""
     return f"""
     WITH src AS ({source}),
     val AS (
       SELECT s.respondent_id,
              s.item_id,
              sp.scale_family,
-             qf.family AS coarse_family,
              CASE WHEN sp.scale_family = 'joy'
                   THEN s.joy_index::double precision
                   ELSE s.numeric_value::double precision END AS v
         FROM src s
-        JOIN bjl_item_spread     sp ON sp.item_id     = s.item_id
-        JOIN bjl_question_family qf ON qf.question_id = s.question_id
+        JOIN bjl_item_spread sp ON sp.item_id = s.item_id
        WHERE CASE WHEN sp.scale_family = 'joy'
                   THEN s.joy_index ELSE s.numeric_value END IS NOT NULL
     ),
     centered AS (
       SELECT respondent_id, item_id, scale_family,
-             v - avg(v) OVER (PARTITION BY respondent_id, coarse_family) AS cz
+             v - avg(v) OVER (PARTITION BY respondent_id, scale_family) AS cz
         FROM val
     )
     SELECT respondent_id, item_id, scale_family, avg(cz) AS cz

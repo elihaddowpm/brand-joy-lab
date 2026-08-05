@@ -14,14 +14,24 @@
 > in version control as `bin/bjl_rebuild_connectivity.py` — run
 > `verify` (asserts the anchor, writes nothing) before `build`.
 
-**Two corrections to the anchor line below, verified against live on
-August 5.** The anchor is one pair, not an aggregate: items 1393 x 4856,
-n_pair 826, r 0.3291. Both ledgers hold 0.3291 for it — the "v1 0.3279"
-below is wrong; 0.3279 belongs to a different pair (4647 x 4655, n 672).
-And there are not two ledgers: all 60,401 rows of
-`bjl_connectivity_ledger` appear in `bjl_connectivity_ledger_v2` with
-identical `n_pair` and identical `r`, and every one is joy x joy. v1 is
-v2's joy-only slice, exactly.
+**The anchor line below is one pair, not an aggregate** — items
+1393 x 4856, n_pair 826. Verified August 5: the recovered definition in
+`bin/bjl_rebuild_connectivity.py` reproduces **826 / 0.3291** exactly from
+pre-dedup responses, and rebuilds the centered table to 1,452,730 cells
+against live's 1,452,730.
+
+**v1 has been overwritten, and the 0.3279 below is the only surviving
+trace of it.** Live, every v1 artifact is an exact slice of v2:
+`bjl_conn_centered.cj` is byte-identical to `bjl_conn_centered_v2.cz`
+where `scale_family = 'joy'` (all 1,053,961 cells, max abs diff 0.0000),
+and all 60,401 rows of `bjl_connectivity_ledger` appear in
+`bjl_connectivity_ledger_v2` with identical `n_pair` and `r`, every one
+joy x joy. Both now return 0.3291 for the anchor. So v1 no longer
+reproduces its own documented number. Do not read the two anchors below
+as a live v1/v2 distinction — it is a record of a computation that is
+gone. (Centering on the coarse question family instead of the fine one
+returns exactly 826 / 0.3279 for this pair, which is suggestive of what
+v1 was, but v1 has no consumer and is not worth reconstructing.)
 
 The full rebuild routine last ran on **2026-07-25**, immediately after the
 `sp_2025_01_rivalry` load — both centered tables (`bjl_conn_centered`,
