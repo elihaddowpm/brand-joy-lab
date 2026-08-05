@@ -1,0 +1,131 @@
+-- Migration: bjl_conn_centered_v3 + bjl_connectivity_ledger_v3, built under
+-- the August 5 ruling — (ii) whole-instrument centering as the generator,
+-- (i) excess over the mechanical floor as the reported metric.
+--
+-- APPLIED, August 5 2026, via MCP. Additive. v2 was not touched and is not
+-- to be touched: it is the only surviving record of the numbers the trade-off
+-- map and bulletin v1 were built on, including the two hand-corrected rows.
+-- Promoting v3 over v2 is a separate, deliberate human step and this file
+-- does not take it.
+--
+-- The routine is bin/bjl_rebuild_connectivity.py, which carries the recovered
+-- legacy definition, the anchor assertion, and the build. This file is the
+-- record of what the run produced.
+--
+--
+-- WHAT WAS BUILT
+--
+--   bjl_conn_centered_v3     1,452,629 cells, 14,063 respondents, 1,229 items
+--                            (v2: 1,452,730 — the difference is the August 4
+--                            dedup, which is the whole reason for rebuilding)
+--   bjl_connectivity_ledger_v3   115,144 pairs — exactly v2's 115,144. Same
+--                            pair universe, different values.
+--
+-- Both designed sanity checks landed as the ruling predicts:
+--
+--   mean of per-respondent means          0.00000000
+--     — the instrument mean is removed by construction.
+--   sd of per-respondent-FAMILY means     0.7410
+--     — un-pinned. Under v2 these sat at mean 0.004, sd 0.17, i.e. pinned to
+--       zero, which is exactly the -1/(k-1) dependency. Un-pinning them IS
+--       the fix.
+--
+-- TRIPWIRE: 0 hits at |r| >= 0.98 on n >= 100. Nothing dropped, clamped or
+-- filtered — there was nothing to halt on.
+--
+--
+-- THE FLOOR COLUMNS, AND A TRAP WORTH NAMING
+--
+-- The floor must be computed against the group that was actually centered.
+-- Under (ii) that is the respondent's whole instrument, not their
+-- scale_family. The first pass of this build populated floor_r from the
+-- per-family k, which reports v2's floor against v3's numbers. Corrected
+-- before any consumer saw it. The ledger now carries:
+--
+--   k_instr                 avg instrument size of the shared respondents
+--   floor_r                 -1/(k_instr - 1). Applies to EVERY pair, cross-
+--                           family included, because under (ii) every pair
+--                           sits inside one centering group.
+--   excess_r                r - floor_r. The consumer-facing metric.
+--   k_mean_family_legacy    avg per-family k. Not a property of v3.
+--   floor_r_family_legacy   -1/(k_fam - 1), null cross-family. The floor these
+--                           pairs sat on under v2. Kept as the record of what
+--                           each pair escaped. DO NOT RANK ON IT.
+--
+-- floor_r, shown rather than assumed:
+--
+--   k_instr    min 35.8    avg 135.0   max 202.2
+--   floor_r    min -0.0288  avg -0.0083  max -0.0050
+--
+-- So excess_r is raw r shifted by under three hundredths, everywhere. That is
+-- the evidence that (ii) removed the dependency rather than the assertion
+-- that it did.
+--
+--
+-- BEFORE / AFTER ON THE 648 (v2 raw r <= -0.35 vs v3 excess_r)
+--
+--   band          n     survives   weakened but   flipped   avg v2 r   avg v3
+--                       <= -0.35   still neg      positive              excess
+--   same-family   587      290          280          17     -0.4014   -0.3236
+--   cross-family   61       24           37           0     -0.3838   -0.3084
+--   ALL           648      314          317          17     -0.3998   -0.3221
+--
+-- 48% survive at the same threshold, 97% stay negative in some form, 2.6%
+-- flip. The set is not an artifact.
+--
+-- The over-selection the correction predicted is gone. v3's own negative set
+-- (excess_r <= -0.35) is 580 pairs, 61.4% same-family, against v2's 648 at
+-- 90.6% same-family. 314 carry over from the 648; 266 are newly surfaced —
+-- pairs v2's centering was pushing toward zero.
+--
+-- And the 20 pairs flagged in 2026-08-04_ledger_negative_one_correction.sql
+-- as "close enough to their floors to be suspect individually" resolve
+-- completely, which is the sharpest single result here:
+--
+--   legacy k band   n     v2 avg r   v2 floor   v3 avg excess   survives   flips+
+--   k < 3.5          5     -0.5346    -0.500       +0.2945          0        4
+--   k 3.5-6         15     -0.4766    -0.294       +0.1281          0       10
+--   k >= 6         567     -0.3983    -0.022       -0.3410        290        3
+--
+-- Every one of the 20 low-k pairs fails to survive and 14 of 20 invert
+-- outright. They were floor artifacts, as suspected. Meanwhile at k >= 6,
+-- where the observed average already sat well below the mechanical floor,
+-- half the set survives. The bias was real, it was bounded, and measuring it
+-- rather than excluding it (the (iii) that was rejected) is what let those
+-- two populations separate.
+--
+--
+-- THE TWO HAND-CORRECTED ROWS
+--
+-- Resolved by the rebuild without a manual edit, as the ruling anticipated:
+--
+--   pair         family            n     v2 (hand)   legacy floor   v3 r    v3 excess
+--   185 / 186    emotional_state  1222    0.8454       -1.0000     0.8042    0.8209
+--   6043 / 6044  behavior         1000    0.7211       -1.0000     0.6426    0.6633
+--
+-- v2's values were raw Pearson on raw values — a different statistic from the
+-- other 115,142 rows. v3's are computed under (ii) uniformly with every other
+-- row. The silent heterogeneity noted in the August 4 file is closed in v3.
+-- It remains open in v2, which is one more reason not to ship from v2.
+--
+--
+-- STILL OPEN
+--
+-- - Promotion of v3 over v2. Human call. The trade-off map and bulletin v1
+--   both still read v2.
+-- - Ship gate condition #2 on the trade-off map: nobody quotes 1,364 until
+--   someone can source it. Unchanged by this build.
+-- - The newly fielded hostel/hotel/rental joy items still have near-twin
+--   structure. Under (ii) they can no longer produce r = -1 by construction,
+--   but the tripwire stays.
+--
+--
+-- No DDL below. Everything above was applied via MCP by
+-- bin/bjl_rebuild_connectivity.py's build path; the script is the artifact,
+-- not this file. Reproduce with:
+--
+--   DATABASE_URL=... python3 bin/bjl_rebuild_connectivity.py verify
+--   DATABASE_URL=... python3 bin/bjl_rebuild_connectivity.py build
+--
+-- verify asserts pair 1393 x 4856 at n_pair 826, r 0.3291 and writes nothing.
+-- build refuses to run unless verify passes.

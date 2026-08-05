@@ -146,17 +146,32 @@ invariant, so this does not change any within-family r relative to (ii)
 without the rescale; it makes the cross-family means meaningful instead of
 arbitrary.
 
-(i) as the reported metric. The ledger gains three columns:
+(i) as the reported metric. The floor has to be computed against the group
+that was ACTUALLY centred, and under (ii) that group is the respondent's whole
+instrument, not their scale_family. Computing -1/(k-1) from the per-family k
+would describe the floor that applied under v2 and would be wrong here — a
+first pass did exactly that and had to be corrected. The ledger gains five
+columns, two of them explicitly legacy diagnostics:
 
-    k_mean       the average number of items the shared respondents have in
-                 that scale_family (same-family pairs only)
-    floor_r      the mechanical floor -1/(k_mean - 1), NULL cross-family
-    excess_r     r - floor_r, NULL cross-family
+    k_instr                 average instrument size (cells) of the shared
+                            respondents. This is the (ii) centring group.
+    floor_r                 the mechanical floor -1/(k_instr - 1). Applies to
+                            every pair, same- and cross-family alike, because
+                            under (ii) every pair is inside one centring group.
+    excess_r                r - floor_r. THIS is the consumer-facing metric.
 
-Consumers rank and threshold on excess_r, not r. Under (ii) the floor should
-be near zero for everything, which is the point; the column stays because it
-is the evidence that it is near zero, and it is the tripwire if a future
-fielding reintroduces a k = 2 family.
+    k_mean_family_legacy    average per-family k of the shared respondents.
+    floor_r_family_legacy   -1/(k_mean_family_legacy - 1), NULL cross-family.
+                            Not a property of v3 at all. It is the floor these
+                            pairs sat on under v2's per-family centring, kept
+                            so a reader can see what each pair escaped and
+                            which v2 rows were floor artefacts. Do not rank on
+                            it.
+
+Consumers rank and threshold on excess_r, not r. Under (ii) floor_r should be
+near zero for everything, which is the point; the column stays because it is
+the evidence that it is near zero rather than the assumption, and because it
+is what catches a future fielding that reintroduces a small centring group.
 
 The |r| >= 0.98 guard is kept as a TRIPWIRE, not as the fix. It halts the
 build and names the offending pairs. It does not silently drop or clamp them.
@@ -175,6 +190,15 @@ ANCHOR_TOL = 0.0001
 MIN_N_PAIR = 31
 TRIPWIRE_ABS_R = 0.98
 TRIPWIRE_MIN_N = 100
+
+# Staging for the two steps that exceed the statement timeout as single
+# statements: the ledger self-join and the per-pair k means. Chunks are ntile
+# bands over items ordered by cell count descending, so chunk 1 is the heaviest
+# ~4% of items and chunk 24 the lightest. The batch boundaries below are the
+# ones that actually completed on 2026-08-05; widen them at your own risk.
+LEDGER_CHUNKS = 24
+LEDGER_BATCHES = [(1, 1), (2, 4), (5, 10), (11, 24)]
+KMEAN_BATCHES = [(1, 1), (2, 2), (3, 3), (4, 6), (7, 12), (13, 24)]
 
 
 # Pre-dedup responses: what is in the table now, plus what the August 4 dedup
@@ -261,10 +285,21 @@ def ruled_centered_sql(source):
     """
 
 
-def ledger_sql(centered_table):
+def ledger_sql(centered_table, chunk_range=None):
     """Plain Pearson over shared respondents. Never an algebraic function of
     a 'twin' item — that was the suspected mechanism and it was not the
-    mechanism, but the rule is still correct and cheap to keep."""
+    mechanism, but the rule is still correct and cheap to keep.
+
+    chunk_range restricts item_a to a band of bjl_v3_build_chunks so the
+    self-join can be run in batches under the statement timeout. Partitioning
+    on item_a alone is safe: item_b > item_a is evaluated inside each batch
+    against the full table, so every pair is emitted exactly once, by whichever
+    batch owns its item_a."""
+    where = ''
+    if chunk_range is not None:
+        lo, hi = chunk_range
+        where = (f'JOIN bjl_v3_build_chunks ch ON ch.item_id = a.item_id '
+                 f'AND ch.chunk BETWEEN {lo} AND {hi}')
     return f"""
     SELECT a.item_id AS item_a,
            b.item_id AS item_b,
@@ -273,6 +308,7 @@ def ledger_sql(centered_table):
            count(*)::numeric AS n_pair,
            corr(a.cz, b.cz)::numeric AS r
       FROM {centered_table} a
+      {where}
       JOIN {centered_table} b
         ON b.respondent_id = a.respondent_id
        AND b.item_id > a.item_id
@@ -385,10 +421,30 @@ def build(cur):
     print(f'  mean of per-respondent-family means {fam_mean}   '
           '(expect NOT pinned to 0 — that is the fix)')
 
-    print('build: ledger...')
+    # The ledger is a 1.45M-cell self-join. Doing it in one statement exceeds
+    # the statement timeout on this instance; it has to be staged. Chunking on
+    # ntile ORDER BY cell_count DESC puts the heaviest items in the earliest
+    # chunks, so those get run in small batches and the long tail runs in
+    # large ones. This is what actually completed: 1, 2-4, 5-10, 11-24.
+    print('build: ledger (staged self-join)...')
+    cur.execute('DROP TABLE IF EXISTS bjl_v3_build_chunks')
+    cur.execute(f"""
+        CREATE TABLE bjl_v3_build_chunks AS
+        SELECT item_id, ntile({LEDGER_CHUNKS}) OVER (ORDER BY n DESC, item_id) AS chunk
+          FROM (SELECT item_id, count(*) AS n
+                  FROM bjl_conn_centered_v3 GROUP BY 1) t
+    """)
+    cur.execute('CREATE INDEX ON bjl_v3_build_chunks (chunk)')
+    cur.execute('CREATE INDEX ON bjl_v3_build_chunks (item_id)')
+
     cur.execute('DROP TABLE IF EXISTS bjl_connectivity_ledger_v3')
     cur.execute('CREATE TABLE bjl_connectivity_ledger_v3 AS '
-                + ledger_sql('bjl_conn_centered_v3'))
+                + ledger_sql('bjl_conn_centered_v3') + ' LIMIT 0')
+    for lo, hi in LEDGER_BATCHES:
+        cur.execute('INSERT INTO bjl_connectivity_ledger_v3 '
+                    + ledger_sql('bjl_conn_centered_v3',
+                                 chunk_range=(lo, hi)))
+        print(f'  chunks {lo}-{hi} done')
     cur.execute('ALTER TABLE bjl_connectivity_ledger_v3 ENABLE ROW LEVEL SECURITY')
     cur.execute('REVOKE ALL ON TABLE bjl_connectivity_ledger_v3 FROM anon, authenticated')
 
@@ -411,42 +467,80 @@ def build(cur):
               'Investigate before promoting v3.')
         return False
 
-    # (i) the reported metric. k_mean is the average number of items the shared
-    # respondents actually have in that scale_family; the mechanical floor for
-    # a mean-centred group of k values is -1/(k-1). Under (ii) this should sit
-    # near zero. The column stays because near-zero has to be shown, not
-    # assumed, and because it catches the next k = 2 family.
+    # (i) the reported metric. The floor must be computed against the group
+    # that was ACTUALLY centred. Under (ii) that is the respondent's whole
+    # instrument, so k is the instrument size and the floor -1/(k_instr - 1)
+    # applies to every pair, cross-family included. Using the per-family k here
+    # would report v2's floor against v3's numbers; that is a real trap and the
+    # first pass fell into it. The per-family k is still computed, under
+    # explicitly legacy names, as the record of what each pair escaped.
     for ddl in (
-        'ALTER TABLE bjl_connectivity_ledger_v3 ADD COLUMN IF NOT EXISTS k_mean numeric',
+        'ALTER TABLE bjl_connectivity_ledger_v3 ADD COLUMN IF NOT EXISTS k_instr numeric',
         'ALTER TABLE bjl_connectivity_ledger_v3 ADD COLUMN IF NOT EXISTS floor_r numeric',
         'ALTER TABLE bjl_connectivity_ledger_v3 ADD COLUMN IF NOT EXISTS excess_r numeric',
+        'ALTER TABLE bjl_connectivity_ledger_v3 '
+        'ADD COLUMN IF NOT EXISTS k_mean_family_legacy numeric',
+        'ALTER TABLE bjl_connectivity_ledger_v3 '
+        'ADD COLUMN IF NOT EXISTS floor_r_family_legacy numeric',
     ):
         cur.execute(ddl)
 
+    # Materialise cells-with-their-k once. Re-deriving k inside the pair join
+    # makes the UPDATE time out; this does not.
+    for scope, col in (('respondent_id', 'k_instr'),
+                       ('respondent_id, scale_family', 'k_fam')):
+        cur.execute(f'DROP TABLE IF EXISTS bjl_v3_cz_{col}')
+        cur.execute(f"""
+            CREATE TABLE bjl_v3_cz_{col} AS
+            WITH k AS (SELECT {scope}, count(*)::numeric AS k
+                         FROM bjl_conn_centered_v3 GROUP BY {scope})
+            SELECT c.item_id, c.respondent_id, c.scale_family, k.k
+              FROM bjl_conn_centered_v3 c JOIN k USING ({scope})
+        """)
+        cur.execute(f'CREATE INDEX ON bjl_v3_cz_{col} (item_id)')
+
+    for col in ('k_instr', 'k_fam'):
+        cur.execute(f'DROP TABLE IF EXISTS bjl_v3_pair_{col}')
+        cur.execute(f'CREATE TABLE bjl_v3_pair_{col} '
+                    '(item_a int, item_b int, k numeric)')
+        same_fam = 'AND a.scale_family = b.scale_family' if col == 'k_fam' else ''
+        for lo, hi in KMEAN_BATCHES:
+            cur.execute(f"""
+                INSERT INTO bjl_v3_pair_{col} (item_a, item_b, k)
+                SELECT l.item_a, l.item_b, avg(a.k)
+                  FROM bjl_connectivity_ledger_v3 l
+                  JOIN bjl_v3_build_chunks ch
+                    ON ch.item_id = l.item_a AND ch.chunk BETWEEN {lo} AND {hi}
+                  JOIN bjl_v3_cz_{col} a ON a.item_id = l.item_a
+                  JOIN bjl_v3_cz_{col} b ON b.item_id = l.item_b
+                                        AND b.respondent_id = a.respondent_id
+                                        {same_fam}
+                 GROUP BY 1, 2
+            """)
+        cur.execute(f'CREATE INDEX ON bjl_v3_pair_{col} (item_a, item_b)')
+
     cur.execute("""
-        WITH k AS (
-          SELECT respondent_id, scale_family, count(*)::numeric AS k
-            FROM bjl_conn_centered_v3 GROUP BY 1, 2
-        ),
-        pair_k AS (
-          SELECT l.item_a, l.item_b, avg(k.k) AS k_mean
-            FROM bjl_connectivity_ledger_v3 l
-            JOIN bjl_conn_centered_v3 a ON a.item_id = l.item_a
-            JOIN bjl_conn_centered_v3 b ON b.item_id = l.item_b
-                                       AND b.respondent_id = a.respondent_id
-            JOIN k ON k.respondent_id = a.respondent_id
-                  AND k.scale_family  = l.scale_a
-           WHERE l.scale_a = l.scale_b
-           GROUP BY 1, 2
-        )
         UPDATE bjl_connectivity_ledger_v3 l
-           SET k_mean  = p.k_mean,
-               floor_r = CASE WHEN p.k_mean > 1 THEN -1.0 / (p.k_mean - 1) END,
-               excess_r = l.r - CASE WHEN p.k_mean > 1
-                                     THEN -1.0 / (p.k_mean - 1) END
-          FROM pair_k p
+           SET k_instr  = p.k,
+               floor_r  = -1.0 / (p.k - 1.0),
+               excess_r = l.r - (-1.0 / (p.k - 1.0))
+          FROM bjl_v3_pair_k_instr p
          WHERE l.item_a = p.item_a AND l.item_b = p.item_b
     """)
+    cur.execute("""
+        UPDATE bjl_connectivity_ledger_v3 l
+           SET k_mean_family_legacy  = p.k,
+               floor_r_family_legacy = CASE WHEN p.k > 1
+                                            THEN -1.0 / (p.k - 1.0) END
+          FROM bjl_v3_pair_k_fam p
+         WHERE l.item_a = p.item_a AND l.item_b = p.item_b
+           AND l.scale_a = l.scale_b
+    """)
+
+    for scratch in ('bjl_v3_cz_k_instr', 'bjl_v3_cz_k_fam',
+                    'bjl_v3_pair_k_instr', 'bjl_v3_pair_k_fam',
+                    'bjl_v3_build_chunks'):
+        cur.execute(f'DROP TABLE IF EXISTS {scratch}')
 
     cur.execute('CREATE INDEX ON bjl_connectivity_ledger_v3 (item_a, item_b)')
     cur.execute('CREATE INDEX ON bjl_connectivity_ledger_v3 (excess_r)')
@@ -467,7 +561,14 @@ def build(cur):
                round(100.0 * count(*) FILTER (WHERE scale_a = scale_b)
                      / NULLIF(count(*), 0), 1)::text || '%'
           FROM bjl_connectivity_ledger_v3 WHERE r <= -0.35
-        UNION ALL SELECT 'v3 worst mechanical floor', round(min(floor_r), 4)::text
+        UNION ALL SELECT 'v3 excess_r <= -0.35', count(*)::text
+          FROM bjl_connectivity_ledger_v3 WHERE excess_r <= -0.35
+        UNION ALL SELECT 'v3 worst (ii) floor', round(min(floor_r), 4)::text
+          FROM bjl_connectivity_ledger_v3
+        UNION ALL SELECT 'v3 mean (ii) floor', round(avg(floor_r), 4)::text
+          FROM bjl_connectivity_ledger_v3
+        UNION ALL SELECT 'v3 worst LEGACY per-family floor (escaped)',
+               round(min(floor_r_family_legacy), 4)::text
           FROM bjl_connectivity_ledger_v3
         UNION ALL SELECT 'v3 pairs', count(*)::text FROM bjl_connectivity_ledger_v3
         UNION ALL SELECT 'v2 pairs', count(*)::text FROM bjl_connectivity_ledger_v2
@@ -478,10 +579,10 @@ def build(cur):
     print('\nTOP 20 TRADE-OFFS BY EXCESS OVER FLOOR (the reported metric):')
     cur.execute("""
         SELECT item_a, item_b, scale_a, scale_b, n_pair,
-               round(r, 4), round(k_mean, 2), round(floor_r, 4), round(excess_r, 4)
+               round(r, 4), round(k_instr, 1), round(floor_r, 4), round(excess_r, 4)
           FROM bjl_connectivity_ledger_v3
-         WHERE r < 0
-         ORDER BY COALESCE(excess_r, r) ASC
+         WHERE excess_r < 0
+         ORDER BY excess_r ASC
          LIMIT 20
     """)
     print('  item_a  item_b  scale_a          scale_b          n     r        k     floor    excess')

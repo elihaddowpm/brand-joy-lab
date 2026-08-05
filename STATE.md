@@ -13,6 +13,16 @@
 > the mechanical floor as the reported metric.** The rebuild routine is now
 > in version control as `bin/bjl_rebuild_connectivity.py` — run
 > `verify` (asserts the anchor, writes nothing) before `build`.
+>
+> **v3 IS BUILT (2026-08-05) and v2 is untouched.** `bjl_conn_centered_v3`
+> (1,452,629 cells) and `bjl_connectivity_ledger_v3` (115,144 pairs, matching
+> v2's 115,144) exist under (ii)+(i). Tripwire clean. See
+> `2026-08-05_connectivity_v3_build.sql` for the before/after. **Promotion of
+> v3 over v2 has NOT happened and is a deliberate human step** — the trade-off
+> map and bulletin v1 both still read v2, and ship gate condition #2 (source
+> the 1,364, or retire it) is still open. Consumers of v3 rank on `excess_r`,
+> not `r`; `k_mean_family_legacy` / `floor_r_family_legacy` are v2 diagnostics
+> and must not be ranked on.
 
 **The anchor line below is one pair, not an aggregate** — items
 1393 x 4856, n_pair 826. Verified August 5: the recovered definition in
