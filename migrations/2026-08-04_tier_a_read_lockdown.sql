@@ -1,19 +1,26 @@
 -- Migration: Tier A — take the sensitive tables to service-role only.
 --
--- PARTIALLY APPLIED, August 4 2026. Six of the eight below are live, and
--- RLS was enabled on those six at the same time (this file did not ask
--- for that; it is an improvement and is recorded here as fact).
+-- APPLIED. All eight tables below are live: anon/authenticated SELECT
+-- false, RLS on, service_role SELECT true, verified against live.
 --
---   APPLIED   bjl_authorized_users, bjl_approved_emails, bjl_respondents,
---             bjl_front_door_log, bjl_projects, bjl_project_cards
---             — anon/authenticated SELECT false, RLS on, service_role
---               SELECT true. Verified against live.
+-- It landed in two passes, which is worth keeping rather than tidying
+-- away:
 --
---   NOT YET   bjl_profile_targets, bjl_profile_weights
---             — still anon-readable, RLS off, verified against live on
---               August 5. 13,051 rows of strategist weighting between
---               them. The two REVOKEs below are the outstanding work;
---               running the whole file again is safe and completes it.
+--   August 4   bjl_authorized_users, bjl_approved_emails, bjl_respondents,
+--              bjl_front_door_log, bjl_projects, bjl_project_cards.
+--              RLS was enabled on these six at the same time — this file
+--              did not ask for that; it is an improvement and is recorded
+--              here as fact.
+--
+--   August 5   bjl_profile_targets, bjl_profile_weights. These two were
+--              named in this file but missed in the first apply and sat
+--              anon-readable with RLS off for a day, 13,051 rows of
+--              strategist weighting between them. Caught by verifying the
+--              file against live rather than trusting the apply report.
+--              REVOKE plus ENABLE ROW LEVEL SECURITY on both, verified.
+--
+-- The lesson is the check, not the miss: a migration is applied when live
+-- says so, not when the apply says so.
 --
 -- Re-runnable by construction: REVOKE on a grant that is already gone is
 -- a no-op, so this file can be replayed against any state.
@@ -83,9 +90,9 @@ COMMIT;
 --
 -- RLS was deliberately not enabled by this file, on the argument that it
 -- is Tier B's job and a policy decision per table. The apply enabled it
--- on the six anyway, with no policy, which is the correct end state for
--- all six and is now live. The two outstanding tables should get the
--- same treatment when they land:
+-- anyway, with no policy, which is the correct end state for all eight
+-- and is now live on all eight. The two that landed on August 5 got the
+-- same treatment, applied as:
 --
 --   ALTER TABLE public.bjl_profile_targets ENABLE ROW LEVEL SECURITY;
 --   ALTER TABLE public.bjl_profile_weights ENABLE ROW LEVEL SECURITY;

@@ -8,8 +8,20 @@
 > `bjl_connectivity_ledger_v2`; neither is safe until the rebuild lands.
 > Rebuilding is necessary but not sufficient — see
 > `2026-08-04_ledger_negative_one_correction.sql`, which shows the
-> centering itself biases same-family pairs negative and needs a ruling
-> before a rebuild is worth running.
+> centering itself biases same-family pairs negative. **Ruled August 5:
+> option (ii) whole-instrument centering as the generator, (i) excess over
+> the mechanical floor as the reported metric.** The rebuild routine is now
+> in version control as `bin/bjl_rebuild_connectivity.py` — run
+> `verify` (asserts the anchor, writes nothing) before `build`.
+
+**Two corrections to the anchor line below, verified against live on
+August 5.** The anchor is one pair, not an aggregate: items 1393 x 4856,
+n_pair 826, r 0.3291. Both ledgers hold 0.3291 for it — the "v1 0.3279"
+below is wrong; 0.3279 belongs to a different pair (4647 x 4655, n 672).
+And there are not two ledgers: all 60,401 rows of
+`bjl_connectivity_ledger` appear in `bjl_connectivity_ledger_v2` with
+identical `n_pair` and identical `r`, and every one is joy x joy. v1 is
+v2's joy-only slice, exactly.
 
 The full rebuild routine last ran on **2026-07-25**, immediately after the
 `sp_2025_01_rivalry` load — both centered tables (`bjl_conn_centered`,

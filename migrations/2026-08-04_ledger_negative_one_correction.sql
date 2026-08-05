@@ -94,12 +94,47 @@
 -- ledger stale — but rebuilding alone does not make the trade-off map
 -- safe to ship.
 --
--- NOTE ON REPRODUCIBILITY: no script in this repo builds
--- bjl_conn_centered_v2 or either ledger. STATE.md refers to a "full
+-- RULED, August 5 2026: (ii) + (i). Whole-instrument centering as the
+-- generator, excess over the mechanical floor -1/(k-1) as the reported
+-- metric. (iii) rejected — it discards 91% of the set to avoid a bias
+-- that can instead be measured. The two hand-corrected rows above are
+-- left in place deliberately: the rebuild recomputes every row under (ii)
+-- uniformly, so reverting them is one more manual edit to a column about
+-- to be fully replaced.
+--
+-- NOTE ON REPRODUCIBILITY: no script in this repo built
+-- bjl_conn_centered_v2 or either ledger. STATE.md referred to a "full
 -- rebuild routine" that last ran 2026-07-25; bin/bjl_factorize_v1.py
--- only consumes the centered table. The definitions above were recovered
--- from the data and verified against it, which is why they are written
--- down here.
+-- only consumes the centered table. The definition was recovered from
+-- the data and is now IN VERSION CONTROL as
+-- bin/bjl_rebuild_connectivity.py, which carries the full recovery
+-- writeup and asserts the anchor before it will build.
+--
+-- Recovery confirmed: the legacy definition, rebuilt over pre-dedup
+-- responses (bjl_responses UNION the dedup snapshot), reproduces the
+-- anchor pair 1393 x 4856 at n_pair 826, r 0.3291 exactly. Two things
+-- the recovery corrected along the way:
+--
+--   - the anchor is one pair, not an aggregate, and both ledgers hold
+--     0.3291 for it. STATE.md's "v1 826 / 0.3279" was wrong; 0.3279
+--     belongs to pair 4647 x 4655 at n 672.
+--
+--   - there are not two ledgers. All 60,401 rows of
+--     bjl_connectivity_ledger appear in bjl_connectivity_ledger_v2 with
+--     identical n_pair and identical r, and every one is joy x joy. v1
+--     is v2's joy-only slice, exactly.
+--
+-- ON THE "1,364 NEGATIVE TRADE-OFF PAIRS". That figure does not
+-- reproduce. bjl_connectivity_ledger_v2 holds 648 rows at r <= -0.35,
+-- not 1,364, and all 648 join cleanly to the centered table — there is
+-- no set of 716 unjoined pairs. Nor is 1,364 reachable at any clean cut:
+-- v2 gives 3932 / 1667 / 648 / 236 at -0.25 / -0.30 / -0.35 / -0.40, v1
+-- gives 2678 / 1115 / 438 / 155, and abs(r) >= 0.35 on v2 gives 4048. A
+-- grid over thresholds -0.28..-0.35 crossed with n_pair floors 0 / 30 /
+-- 100 / 200 / 300 on both ledgers produced nothing equal to 1,364; the
+-- nearest was 1,383. The 648 are real and worth the rebuild. The 1,364
+-- is a number of unknown provenance and should not be quoted again until
+-- someone can say where it came from.
 
 -- Applied statements, for the record:
 --
