@@ -1,0 +1,109 @@
+-- Migration: the two r = -1.000 ledger rows, and what they turned out to
+-- be a symptom of.
+--
+-- PARTIALLY APPLIED. The two row corrections are live (applied via MCP,
+-- August 4 2026). The root cause below is NOT fixed, and the corrections
+-- should not be read as closing it. This file is the record of both.
+--
+-- WHAT WAS APPLIED
+--
+-- bjl_connectivity_ledger_v2 held r = -1.000 on two pairs:
+--   185 / 186    optimism, future x 2026
+--   6043 / 6044  dwell, win x loss
+-- Both were overwritten with raw Pearson computed over shared
+-- respondents on raw values: +0.8454 and +0.7211. Only these two of
+-- 115,144 rows exceeded |0.90|.
+--
+-- WHAT THE ROOT-CAUSE PASS FOUND, August 5
+--
+-- 1. The ledger step is not where the bug is. Stored r reproduces
+--    exactly as plain Pearson over bjl_conn_centered_v2.cz on shared
+--    respondents — eight sampled pairs, all matching to four decimals
+--    with identical n:
+--
+--      SELECT corr(a.cz, b.cz) FROM bjl_conn_centered_v2 a
+--        JOIN bjl_conn_centered_v2 b USING (respondent_id)
+--       WHERE a.item_id = :a AND b.item_id = :b;
+--
+--    There is no algebraic twin-item derivation at this step. The
+--    suspected mechanism was not the mechanism.
+--
+-- 2. cz is respondent x scale_family MEAN-CENTERED, not z-scored.
+--    Per respondent-family, mean of cz is 0.004 (sd of those means
+--    0.17); per item it is -0.38 (sd 13.5). Within-group sd averages
+--    ~19, so the point scale is retained and only the respondent's
+--    family mean is removed.
+--
+-- 3. Those two facts fully explain -1.000, and it is arithmetic, not a
+--    defect. Mean-centering k values forces the average pairwise
+--    correlation among them to -1/(k-1). At k = 2 that is exactly -1.
+--    For both bugged pairs, EVERY shared respondent had exactly two
+--    items in that scale_family — 1222 of 1222, and 1000 of 1000 — and
+--    in every one of those rows cz_a = -cz_b to within 0.001. The
+--    correlation could not have come out as anything else.
+--
+-- CONSEQUENCES, none of which the two corrections address
+--
+-- a. An |r| >= 0.98 guard suppresses the symptom and leaves cz wrong. It
+--    is still worth having as a tripwire, but it is not the fix, and
+--    shipping it as the fix would hide the next instance rather than
+--    prevent it. The newly fielded hostel/hotel/rental joy items are
+--    flagged as the same near-twin structure; if they land in a family
+--    that most respondents see two of, they will reproduce this exactly.
+--
+-- b. The two corrected values are now a different statistic from the
+--    other 115,142 rows. They are raw Pearson over raw values; every
+--    other row is Pearson over respondent-centered cz. That is silent
+--    heterogeneity inside one column, which is worse per row than the
+--    artifact it replaced. They should be recomputed under whatever
+--    definition the rebuild settles on, or the column needs a flag.
+--
+-- c. The negative "trade-off" set inherits a systematic bias toward
+--    within-family pairs, because centering pushes same-family pairs
+--    negative by construction. Of the r <= -0.35 pairs that could be
+--    joined to the centered table (648 of the reported 1,364 — the
+--    remainder did not join and are themselves worth a look), 587 (91%)
+--    are same-family:
+--
+--      k < 3.5     5 pairs, avg r -0.535   mechanical floor ~ -0.40
+--      k 3.5-6    15 pairs, avg r -0.477   mechanical floor ~ -0.29
+--      k >= 6    567 pairs, avg r -0.398   mechanical floor ~ -0.20
+--      cross-family 61 pairs, avg r -0.384  no mechanical floor
+--
+--    This does not say the 1,364 are fake. At k >= 6 the observed
+--    average sits well below the mechanical floor, so real signal is
+--    present. It says the threshold is systematically easier to cross
+--    for same-family pairs, so ranking or thresholding on raw r
+--    over-selects them — and the 20 pairs at k < 6 are close enough to
+--    their floors to be suspect individually.
+--
+-- WHAT THE REBUILD HAS TO DECIDE (Eli's call, not the rebuild's)
+--
+-- Three coherent options, roughly increasing in work:
+--   (i)   keep cz as is, and report each pair's excess over its
+--         mechanical floor -1/(k-1) rather than raw r;
+--   (ii)  center on the respondent's whole-instrument mean instead of
+--         per scale_family, which removes response style without
+--         manufacturing the negative dependency;
+--   (iii) exclude same-family pairs from the trade-off set entirely and
+--         let the map rest on the 61 cross-family pairs plus whatever
+--         (ii) surfaces.
+--
+-- Until one is chosen, the rebuild would faithfully reproduce the bias
+-- with fresh numbers. Rebuilding is necessary — the dedup made the
+-- ledger stale — but rebuilding alone does not make the trade-off map
+-- safe to ship.
+--
+-- NOTE ON REPRODUCIBILITY: no script in this repo builds
+-- bjl_conn_centered_v2 or either ledger. STATE.md refers to a "full
+-- rebuild routine" that last ran 2026-07-25; bin/bjl_factorize_v1.py
+-- only consumes the centered table. The definitions above were recovered
+-- from the data and verified against it, which is why they are written
+-- down here.
+
+-- Applied statements, for the record:
+--
+--   UPDATE bjl_connectivity_ledger_v2 SET r =  0.8454
+--    WHERE item_a = 185  AND item_b = 186;
+--   UPDATE bjl_connectivity_ledger_v2 SET r =  0.7211
+--    WHERE item_a = 6043 AND item_b = 6044;

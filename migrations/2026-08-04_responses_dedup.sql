@@ -1,0 +1,54 @@
+-- Migration: dedup bjl_responses, keep-latest, and stop it recurring.
+--
+-- ALREADY APPLIED, via MCP, August 4 2026. This file is the repo's record
+-- so the tree matches the database.
+--
+-- THE RULE WAS EARNED, NOT ASSUMED.
+--
+-- The open question was whether created_at ordered respondent behaviour
+-- or ETL execution. If the duplicates were batch artifacts, "keep the
+-- newest" would mean "keep whichever load ran second," which is
+-- arbitrary with respect to truth — deterministic-looking, a coin flip
+-- underneath.
+--
+-- The data answered it: all 5,325 duplicate groups are under 5 minutes
+-- apart, median 0.0, none over an hour. That is respondent reload
+-- behaviour, uniformly, with no batch-shaped residue — so keep-latest is
+-- the settled answer and the hybrid was unnecessary. 7,080 rows removed;
+-- 1,296 conflict_num, 1,386 exact_num, 3,007 conflict_text, 1,391
+-- exact_text. bjl_responses is now 2,246,845 rows. ANALYZE run after.
+--
+-- REVERSIBLE. Every removed row is in
+-- bjl_responses_dedup_snapshot_20260804 (7,080 rows, each tagged with
+-- dedup_group_kind). Restore is: re-insert minus the two dedup_* columns,
+-- then drop the unique index below.
+--
+-- THE RECURRENCE GUARD carries fielding_id on purpose. A unique index on
+-- (respondent_id, question_id, item_name) alone would outlaw legitimate
+-- longitudinal re-measurement — the same person answering the same item
+-- in a later wave is the design, not a duplicate, which is why
+-- bjl_fieldings exists.
+
+-- CREATE UNIQUE INDEX bjl_responses_uniq_person_item_wave
+--   ON public.bjl_responses (respondent_id, question_id, item_name, fielding_id)
+--   WHERE respondent_id IS NOT NULL
+--     AND question_id   IS NOT NULL
+--     AND item_name     IS NOT NULL;
+
+-- Statements are commented because they are already live and the DELETE
+-- is not idempotent in any meaningful sense — re-running it against the
+-- current table is a no-op that scans 2.2M rows. The index definition is
+-- kept verbatim as the record of what constraint now holds.
+
+-- DOWNSTREAM CONSEQUENCE, unresolved at the time of writing:
+--
+-- bjl_conn_centered_v2 (~1.45M rows) and bjl_connectivity_ledger_v2
+-- (~115k rows, including the 1,364 negative "trade-off" pairs) are
+-- derived from bjl_responses and were computed before this delete. They
+-- no longer match source. Treat both as do-not-ship until rebuilt. The
+-- trade-off map and bulletin generation v1 both read the ledger and
+-- neither is safe against it in this state.
+--
+-- See 2026-08-04_ledger_negative_one_correction.sql for what the rebuild
+-- has to get right, which turned out to be a larger question than the
+-- two corrected rows suggested.

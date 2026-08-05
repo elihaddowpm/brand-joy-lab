@@ -1,5 +1,16 @@
 # Corpus state
 
+> **STALE AS OF 2026-08-04 — do not ship from the ledger.** The dedup
+> removed 7,080 rows from `bjl_responses`
+> (`2026-08-04_responses_dedup.sql`). `bjl_conn_centered_v2` and both
+> connectivity ledgers were computed before that delete and no longer
+> match source. The trade-off map and bulletin generation v1 both read
+> `bjl_connectivity_ledger_v2`; neither is safe until the rebuild lands.
+> Rebuilding is necessary but not sufficient — see
+> `2026-08-04_ledger_negative_one_correction.sql`, which shows the
+> centering itself biases same-family pairs negative and needs a ruling
+> before a rebuild is worth running.
+
 The full rebuild routine last ran on **2026-07-25**, immediately after the
 `sp_2025_01_rivalry` load — both centered tables (`bjl_conn_centered`,
 `bjl_conn_centered_v2`) and both connectivity ledgers were rebuilt from

@@ -1,8 +1,22 @@
 -- Migration: Tier A — take the sensitive tables to service-role only.
 --
--- NOT YET APPLIED. Paste-and-apply, then verify with the block at the
--- foot. Re-runnable by construction: REVOKE on a grant that is already
--- gone is a no-op, so this file can be replayed against any state.
+-- PARTIALLY APPLIED, August 4 2026. Six of the eight below are live, and
+-- RLS was enabled on those six at the same time (this file did not ask
+-- for that; it is an improvement and is recorded here as fact).
+--
+--   APPLIED   bjl_authorized_users, bjl_approved_emails, bjl_respondents,
+--             bjl_front_door_log, bjl_projects, bjl_project_cards
+--             — anon/authenticated SELECT false, RLS on, service_role
+--               SELECT true. Verified against live.
+--
+--   NOT YET   bjl_profile_targets, bjl_profile_weights
+--             — still anon-readable, RLS off, verified against live on
+--               August 5. 13,051 rows of strategist weighting between
+--               them. The two REVOKEs below are the outstanding work;
+--               running the whole file again is safe and completes it.
+--
+-- Re-runnable by construction: REVOKE on a grant that is already gone is
+-- a no-op, so this file can be replayed against any state.
 --
 -- WHAT THIS IS.
 --
@@ -67,11 +81,14 @@ COMMIT;
 -- intent — these tables are service-role only — rather than describing
 -- one privilege that happened to be left.
 --
--- RLS is deliberately not enabled here even though five of the eight
--- have it off (projects, project_cards, profile_targets,
--- profile_weights, front_door_log). That is Tier B's job and it is a
--- policy decision per table, not a mechanical flip. Revoking the grant
--- closes the hole now; RLS becomes defence in depth behind it.
+-- RLS was deliberately not enabled by this file, on the argument that it
+-- is Tier B's job and a policy decision per table. The apply enabled it
+-- on the six anyway, with no policy, which is the correct end state for
+-- all six and is now live. The two outstanding tables should get the
+-- same treatment when they land:
+--
+--   ALTER TABLE public.bjl_profile_targets ENABLE ROW LEVEL SECURITY;
+--   ALTER TABLE public.bjl_profile_weights ENABLE ROW LEVEL SECURITY;
 
 -- VERIFY, after applying:
 --
