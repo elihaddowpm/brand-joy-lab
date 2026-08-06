@@ -360,12 +360,25 @@ sweep's cards without first doing the work below.
 pane was restructured. Designing it as a real destination is its own piece, and
 it is not a render-time cleanup:
 
-- Its rows are `{ item_name, cohort_ji, corpus_ji, cohort_n }` — a different
-  payload from the focal/other pairs the connections sweep renders. It needs its
-  own builder written against what the parser actually emits, not an adaptation
-  of the sweep's.
+- Its rows are
+  `{ item_id, item_name, question_text, cohort_ji, cohort_n, corpus_ji, corpus_n, delta }`
+  — a different payload from the focal/other pairs the connections sweep
+  renders. It needs its own builder written against what the parser actually
+  emits, not an adaptation of the sweep's.
+
+  An earlier revision of this document described the row as
+  `{ item_name, cohort_ji, corpus_ji, cohort_n }`. That was an
+  under-description, and not a cosmetic one: it omitted `delta`, the
+  precomputed `cohort_ji − corpus_ji` that the rows are already sorted by
+  (`bjl-audience-map-background.js:474-477`) and the field any tension read
+  would key on. A builder written from the old shape would have recomputed a
+  number it was already being handed, and it would have had no idea the
+  ordering was doing work.
 - The cohort needs the same eligibility and thinness treatment the sweep gives
   focals, or it will render sixteen confident rows off a cohort of nine people.
+  Note that the query already applies `cohort_n >= 10`, which is a *different*
+  floor from the sweep's `COHORT_FLOOR = 50`; whichever one this surface
+  inherits should be chosen and named rather than picked up by accident.
 - It needs a stated relationship to the Dance Map, which shares the audience
   side and is also unmounted.
 

@@ -5495,7 +5495,10 @@ const intelligenceDraft = ({ block, structured, question, engagement }) => {
 // as the note at the top of JoyMapMode says. A builder for a surface
 // nobody can reach is untestable by construction, and the fields it
 // would have to name are not the fields those payloads carry: the
-// Audience Map's rows are { item_name, cohort_ji, corpus_ji, cohort_n }
+// Audience Map's rows are { item_id, item_name, question_text,
+// cohort_ji, cohort_n, corpus_ji, corpus_n, delta } — see
+// bjl-audience-map-background.js:474-477, and note delta, the
+// precomputed cohort_ji - corpus_ji the rows are already sorted by —
 // and the Dance Map's cards are audience-map dimensions with a
 // cohort_n, not the focal/other pairs with shared answerers that the
 // per-surface table describes. That description fits the Connections
