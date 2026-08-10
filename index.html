@@ -950,6 +950,56 @@ const authedFetchInit = (extraInit = {}) => {
   return { ...extraInit, headers };
 };
 
+// Read a function response as JSON without ever letting a non-JSON body
+// reach the screen.
+//
+// THE HOLE THIS CLOSES. `await r.json()` on a response that is not JSON
+// throws a SyntaxError whose message quotes the first bytes of the body.
+// Every caller wraps its fetch in try/catch and renders
+// String(e.message), so that quoted fragment lands in the UI where a
+// verdict belongs:
+//
+//   Unexpected token '<', "<!doctype "... is not valid JSON
+//
+// Confirmed against live on 2026-08-10, not reconstructed. The body that
+// triggers it in practice is the gateway's own HTML — returned when the
+// function exceeds the gateway limit, which the joy map does on a first
+// request after idle. The user sees a parse-error fragment instead of
+// being told to try again.
+//
+// KEYS OFF THE PARSE, NOT THE STATUS, because the probe returned HTTP
+// 200 with an HTML body and still threw. Checking r.ok first would have
+// walked straight past it.
+//
+// Returns { parsed, json, message }. Callers must check `parsed` BEFORE
+// r.ok: a non-JSON body means there is no j.error to read, so the
+// function's own error contract does not apply and the generic
+// try-again message is the only honest thing to say.
+const WARMING_UP_MESSAGE =
+  'The tool is warming up. Give it a few seconds and run it again.';
+
+const readJsonResponse = async (r) => {
+  let raw = '';
+  try {
+    raw = await r.text();
+  } catch (e) {
+    // Body never arrived (connection dropped mid-read). Same user-facing
+    // situation as a timeout, so the same message.
+    return { parsed: false, json: null, message: `${WARMING_UP_MESSAGE} (no response body, HTTP ${r.status})` };
+  }
+  if (!raw.trim()) {
+    return { parsed: false, json: null, message: `${WARMING_UP_MESSAGE} (empty response, HTTP ${r.status})` };
+  }
+  try {
+    return { parsed: true, json: JSON.parse(raw), message: null };
+  } catch (e) {
+    // The raw body is deliberately NOT included. Quoting it is the bug.
+    // The status is enough to tell a gateway timeout from anything else,
+    // and the full body is in the network panel for whoever needs it.
+    return { parsed: false, json: null, message: `${WARMING_UP_MESSAGE} (HTTP ${r.status}, response was not JSON)` };
+  }
+};
+
 /* -------------------------------------------------------------------------
  * Strategist workbench — project collections
  * -------------------------------------------------------------------------
@@ -4972,11 +5022,20 @@ const JoyMapMode = () => {
     try {
       if (window.__bjlAuth && window.__bjlAuth.getSession) await window.__bjlAuth.getSession();
       let r = await invoke();
-      let j = await r.json();
+      let read = await readJsonResponse(r);
+      let j = read.json;
       if (r.status === 401 && j && j.auth_failed) {
         if (window.__bjlAuth && window.__bjlAuth.getSession) await window.__bjlAuth.getSession();
         r = await invoke();
-        j = await r.json();
+        read = await readJsonResponse(r);
+        j = read.json;
+      }
+      // Before !r.ok, deliberately. A non-JSON body carries no j.error, so
+      // the checks below would report "request failed (502)" — technically
+      // true and useless. This is the first run after idle, and the honest
+      // message is that it is warming up.
+      if (!read.parsed) {
+        throw new Error(read.message);
       }
       if (!r.ok) {
         const detail = (j && (j.auth_failed
