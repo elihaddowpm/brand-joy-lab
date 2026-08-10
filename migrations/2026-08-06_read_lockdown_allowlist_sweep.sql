@@ -381,3 +381,119 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
 -- object this migration had to be corrected for.
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
   REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
+
+
+-- ===================================================================
+-- STANDING RULE — added 2026-08-10. READ THIS BEFORE YOU CHANGE A
+-- FUNCTION SIGNATURE IN THIS SCHEMA.
+--
+--   Every CREATE FUNCTION in public is born executable by anon.
+--   The line directly above does NOT prevent it. Only an explicit
+--   REVOKE does. CREATE OR REPLACE is safe; DROP + CREATE is not.
+--
+-- Written because it has now bitten twice — the connectivity v3
+-- promotion's security regression, and again on 2026-08-10 when the
+-- obvious way to expose the cohort floor to the JS was to add a column
+-- to bjl_joy_map_sweep_v2's returned TABLE. Postgres cannot change a
+-- function's return type with CREATE OR REPLACE, so that fix requires
+-- DROP + CREATE, which silently reopens the function to anon. The floor
+-- shipped as a separate scalar function instead, specifically to avoid
+-- this. See migrations/2026-08-10_name_and_single_source_cohort_floors.sql.
+--
+-- -------------------------------------------------------------------
+-- THE MEASUREMENT, because the first draft of this rule asserted the
+-- mechanism and the assertion was wrong in an important direction.
+--
+-- I doubted the rule before writing it, on the reasoning that step 4
+-- above already revokes EXECUTE from PUBLIC by default, which ought to
+-- make DROP + CREATE harmless. So I tested it rather than assert it.
+-- Scratch function zz_acl_probe2(), created as postgres in public, no
+-- REVOKE, nothing else:
+--
+--   current_user = postgres, owner = postgres
+--   proacl       = {=X/postgres,postgres=X/postgres,service_role=X/postgres}
+--   has_function_privilege('anon', ..., 'EXECUTE')          -> TRUE
+--   has_function_privilege('authenticated', ..., 'EXECUTE') -> TRUE
+--
+-- The leading "=X/postgres" is the grant to PUBLIC. It is there on a
+-- function created by the same role that owns the default-privileges
+-- entry, in the same schema that entry names, after step 4 ran.
+--
+-- Step 4 DID run and IS recorded correctly:
+--
+--   pg_default_acl, defaclrole=postgres, nspname=public, objtype='f'
+--     -> {postgres=X/postgres,service_role=X/postgres}     (no PUBLIC)
+--
+-- So the rule is worse than "DROP + CREATE loses the ACL". It is:
+--
+-- -------------------------------------------------------------------
+-- WHY IT HAPPENS. Default-privilege entries MERGE OVER the hardwired
+-- default; they do not replace it. The merge can add, not subtract.
+-- The born ACL above proves it in one string:
+--
+--   service_role=X   can ONLY come from the pg_default_acl entry
+--   =X (PUBLIC)      can ONLY come from the hardwired acldefault
+--
+-- Both present => union, not substitution. The entry's ADDITION
+-- (service_role) landed. Its REMOVAL (PUBLIC) did nothing.
+--
+-- AND THIS IS WHY STEP 4 WORKS FOR TABLES BUT NOT FUNCTIONS. It is not
+-- that one line is right and the other wrong — they meet different
+-- hardwired defaults:
+--
+--   TABLES:    hardwired default grants nothing to PUBLIC. Nothing to
+--              fight. anon's SELECT came from a Supabase GRANT-based
+--              default, and REVOKE SELECT genuinely stripped the r:
+--              pg_default_acl 'r' -> anon=xtm/postgres (no r). Born
+--              closed is REAL for tables.
+--   FUNCTIONS: hardwired default grants EXECUTE to PUBLIC. The revoke
+--              is recorded and then overridden every single time. Born
+--              closed is FALSE for functions.
+--
+-- The "born closed" claim in step 4's header is therefore half true and
+-- should be read as covering tables and views only.
+--
+-- -------------------------------------------------------------------
+-- WHAT IS ACTUALLY HOLDING THE LINE TODAY. Not the default. The
+-- explicit per-function REVOKE sweep in step 2, and nothing else.
+-- Measured 2026-08-10:
+--
+--   public functions where anon has EXECUTE:  316 / 399
+--   of those, named bjl%:                       0
+--
+-- The 316 are extension and system functions that ship into public
+-- (pgcrypto, uuid-ossp, and friends) and were never in Track B's
+-- scope. The number that matters is the zero. The project surface is
+-- shut because step 2 shut each function by name — every one of them
+-- would be open again the moment it were recreated.
+--
+-- -------------------------------------------------------------------
+-- THE RULE, operationally:
+--
+--   1. Prefer CREATE OR REPLACE. It preserves proacl, so the REVOKE
+--      that step 2 already applied survives. This is the ONLY reason
+--      replacing a function is safe — not because Postgres is careful,
+--      but because it leaves the old ACL alone.
+--   2. If the change forces DROP + CREATE — any return-type change,
+--      including adding one column to a RETURNS TABLE — then the
+--      REVOKE is mandatory and belongs in the same transaction:
+--
+--        DROP FUNCTION public.f(...);
+--        CREATE FUNCTION public.f(...) ...;
+--        REVOKE EXECUTE ON FUNCTION public.f(...) FROM PUBLIC, anon, authenticated;
+--        GRANT  EXECUTE ON FUNCTION public.f(...) TO service_role;   -- if needed
+--
+--   3. Then CHECK it, in the same migration. Do not trust step 4 and
+--      do not trust step 2 to have covered an object that did not
+--      exist when step 2 ran:
+--
+--        SELECT has_function_privilege('anon','public.f(...)','EXECUTE');
+--        -- must be false
+--
+--   4. If you can avoid the signature change, avoid it. A new scalar
+--      function alongside the old one costs one more object and zero
+--      ACL risk. That is the trade the cohort-floor work took.
+--
+-- bin/verify_anon_read_lockdown.sql is the backstop for all of the
+-- above and is the reason this is survivable rather than silent.
+-- ===================================================================

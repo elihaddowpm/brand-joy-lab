@@ -377,8 +377,23 @@ it is not a render-time cleanup:
 - The cohort needs the same eligibility and thinness treatment the sweep gives
   focals, or it will render sixteen confident rows off a cohort of nine people.
   Note that the query already applies `cohort_n >= 10`, which is a *different*
-  floor from the sweep's `COHORT_FLOOR = 50`; whichever one this surface
-  inherits should be chosen and named rather than picked up by accident.
+  floor from the sweep's; whichever one this surface inherits should be chosen
+  and named rather than picked up by accident.
+
+  As of 2026-08-10 the sweep's floors are named and single-sourced in the DB,
+  so this choice is now explicit rather than a literal to copy:
+
+  - `bjl_measured_halt_floor()` — 50/side. Withholds **all sixteen territory
+    rows**. This is the "sixteen confident rows off nine people" guard, and it
+    is the one this bullet is really asking about.
+  - `bjl_modeled_abstain_floor()` — 50/side. Withholds **only the modeled
+    column**; measured rows still render.
+
+  They are separate functions on purpose: same value today, different failure
+  modes, each free to move without dragging the other. The audience path should
+  inherit one of them **by calling it**, not by declaring a third literal — that
+  is precisely how the sweep ended up with a copy that could drift.
+  See `migrations/2026-08-10_name_and_single_source_cohort_floors.sql`.
 - It needs a stated relationship to the Dance Map, which shares the audience
   side and is also unmounted.
 

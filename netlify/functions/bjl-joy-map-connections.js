@@ -72,10 +72,15 @@
  *   front-door logs showing a brand query whose answer-value n actually
  *   clears 60. Hotwire's n=1 suggests (b) may be rare in this corpus.
  *
- * Pre-run halt. Even an eligible focal can isolate a cohort too small
- * to read. Below COHORT_FLOOR per side the territories array comes back
- * empty and `halt` explains why — the client renders the focal card in
- * an error state instead of sixteen rows of noise.
+ * Post-sweep halt. Even an eligible focal can isolate a cohort too small
+ * to read. Below bjl_measured_halt_floor() per side the territories array
+ * comes back empty and `halt` explains why — the client renders the focal
+ * card in an error state instead of sixteen rows of noise.
+ *
+ * That floor lives in the DB and is read off the sweep row, not declared
+ * here. It is a DIFFERENT gate from bjl_modeled_abstain_floor(), which
+ * withholds only the modeled column while measured rows still render.
+ * Both return 50 today and are free to diverge; do not collapse them.
  *
  * REGRESSION FIXTURE for the gate. Use this phrasing, not a bare brand
  * name — see the forensic note below for why:
@@ -164,9 +169,10 @@ const MAX_FOCALS = 4;
 const DEFAULT_MODEL_VERSION = 'mf_v1_k24';
 // THIN badge and sign-conflict rule both key off this.
 const PAIRS_BEHIND_MIN = 3;
-// Minimum respondents per side of the cohort split. Below this the
-// sweep is arithmetic on noise; we halt rather than render it.
-const COHORT_FLOOR = 50;
+// The minimum-respondents-per-side floor used to live here as
+// COHORT_FLOOR = 50, a bare copy of a SQL literal with nothing tying
+// the two together. It is now bjl_measured_halt_floor() in the DB and
+// arrives as a column on the sweep query. See the halt at gate 3.
 
 // Membership in bjl_conn_centered_v3 is the definition of a scored
 // item. Anything absent cannot carry a cohort and must never be a focal.
@@ -522,11 +528,18 @@ exports.handler = async (event) => {
     const focalIdsSql = `ARRAY[${focalIds.join(',')}]::int[]`;
     const modelSql = `'${String(modelVersion).replace(/'/g, "''")}'`;
 
+    // bjl_measured_halt_floor() rides along on the query we are already
+    // sending. It is NOT a second copy of the modeled floor: it gates
+    // the measured side (withhold all sixteen rows) where
+    // bjl_modeled_abstain_floor() gates only the modeled column. Same
+    // value today, deliberately separate so either can move alone.
+    // See migrations/2026-08-10_name_and_single_source_cohort_floors.sql.
     const joinedQuery = `
       SELECT s.*,
              m.modeled_verdict, m.modeled_lift_points, m.measured_territory_mean_lift,
              m.model_holdout_r, m.coherence, m.centroid_items,
              m.cohort_hot, m.cohort_cool,
+             bjl_measured_halt_floor() AS measured_halt_floor,
              t.territory_key, t.emotional_job
       FROM bjl_joy_map_sweep_v2(${focalIdsSql}) s
       JOIN bjl_joy_map_modeled(${focalIdsSql}, ${modelSql}) m USING (ord, territory)
@@ -582,12 +595,27 @@ exports.handler = async (event) => {
     const firstModeled = modeledByKey.size > 0 ? modeledByKey.values().next().value : null;
     const cohortHot  = firstModeled && firstModeled.cohort_hot  != null ? Number(firstModeled.cohort_hot)  : null;
     const cohortCool = firstModeled && firstModeled.cohort_cool != null ? Number(firstModeled.cohort_cool) : null;
+    // The floor is the DB's, read off the row rather than declared here.
+    // Null only when there is no row at all, in which case there is no
+    // cohort to measure either and the halt fires on the null checks
+    // below — we just cannot name a number in the copy.
+    const haltFloor = firstModeled && firstModeled.measured_halt_floor != null
+      ? Number(firstModeled.measured_halt_floor)
+      : null;
 
-    // ---- Gate 3: pre-run halt ----
+    // ---- Gate 3: post-sweep halt ----
     // An eligible focal can still isolate a cohort too thin to read.
     // Sixteen rows computed off 12 people look identical to sixteen
     // rows computed off 12,000, so the rows do not render at all.
-    if (cohortHot == null || cohortCool == null || cohortHot < COHORT_FLOOR || cohortCool < COHORT_FLOOR) {
+    //
+    // Named "post-sweep", not "pre-run": cohort_hot / cohort_cool are
+    // read off a row the sweep returned, so this fires AFTER the round
+    // trip, on data that round trip produced. All sixteen territories
+    // are already computed and paid for. It was called a pre-run halt
+    // for a while, which made the JS floor look like a latency-saving
+    // pre-screen it never was.
+    if (cohortHot == null || cohortCool == null || haltFloor == null
+        || cohortHot < haltFloor || cohortCool < haltFloor) {
       const focalsForHalt = focalIds.map(id => ({ item_id: id, item_name: nameById.get(id) || null }));
       return {
         statusCode: 200,
@@ -603,10 +631,10 @@ exports.handler = async (event) => {
           territories: [],
           halt: {
             reason: 'cohort_below_floor',
-            floor: COHORT_FLOOR,
+            floor: haltFloor,
             cohort_hot: cohortHot,
             cohort_cool: cohortCool,
-            line: `The cohort split is ${cohortHot == null ? '—' : cohortHot} hot / ${cohortCool == null ? '—' : cohortCool} cool, under the ${COHORT_FLOOR}-per-side floor. Territory rows are withheld — at this size the sixteen leads are noise, not signal.`,
+            line: `The cohort split is ${cohortHot == null ? '—' : cohortHot} hot / ${cohortCool == null ? '—' : cohortCool} cool, under the ${haltFloor == null ? 'per-side' : haltFloor + '-per-side'} floor. Territory rows are withheld — at this size the sixteen leads are noise, not signal.`,
           },
         }),
       };
