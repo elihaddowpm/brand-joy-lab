@@ -14,6 +14,19 @@
 [functions.bjl-query-status]
   timeout = 26
 
+# 2026-08-10: measured, not assumed. Fully-warm back-to-back joy map runs
+# were 12.0s and 9.1s wall clock, of which ~8.5s is the DB (sweep_v2 3.7s +
+# modeled 4.9s, honest timings — count(s.*) not count(*), or the planner
+# prunes the expensive columns and reports a fake 19ms). That leaves real
+# headroom under 26s today, but the margin is thin enough that a slow DB
+# day pushes it over the platform default. Without this block the function
+# inherits the default and the client sees a gateway HTML page instead of
+# JSON; the readJsonResponse guard added in 8c3c9d3 renders that as
+# "warming up" rather than a raw parse error, but a rendered stall is still
+# a stall. Cheap insurance, not a fix — the fix is the query.
+[functions.bjl-joy-map-connections]
+  timeout = 26
+
 # Background function — Netlify gives any function whose filename ends with
 # -background.js a 15-minute timeout automatically. No included_files
 # declaration: the prompt and schema content is bundled via require() of
