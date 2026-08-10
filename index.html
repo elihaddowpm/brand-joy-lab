@@ -5239,7 +5239,7 @@ const JoyMapMode = () => {
           <section className="run-step">
             <div className="run-step-head"><span className="run-step-n">3</span> Run — the sixteen life territories</div>
             <div className="run-step-note">
-              Sixteen territories, one row each. Every row carries an alignment state — ALIGNED, MISALIGNED, GROWTH, UNCLAIMED, FLAT — plus the lead pair, a magnitude chip, a THIN badge when fewer than three pairs sit behind the lead, and the modeled diamond against the measured territory mean (staff). Tap a row for the territory profile; tap again inside it for the roster. This is the analysis — there is nowhere else to go. r_internal never renders.
+              Sixteen territories, one row each. Every row carries an alignment state — ALIGNED, MISALIGNED, GROWTH, UNCLAIMED, FLAT — plus the lead pair, a magnitude chip, a THIN badge when fewer than three pairs sit behind the lead, and the modeled diamond against the measured territory mean (staff). Tap a row for the territory profile; tap again inside it for the roster. This is the analysis — there is nowhere else to go. excess_r_internal never renders.
             </div>
             <div className="joy-map-actions">
               <button className="btn primary" disabled={anyRunning || !anyInput} onClick={runAllDoors}>
@@ -5749,7 +5749,7 @@ const JoyMapConnectionsSweep = ({ result, showConflicting, profileCache, onOpenP
         <span className="joy-map-cx-modeled-diamond">
           {hasMeasuredMean
             ? <>◆ <strong>{signedNum(m.lift_points)}</strong> vs territory mean <strong>{signedNum(m.measured_territory_mean_lift)}</strong></>
-            : <>◆ <strong>{signedNum(m.lift_points)}</strong> pts (no measured territory mean — model fills the gap)</>
+            : <>◆ <strong>{signedNum(m.lift_points)}</strong> SD (no measured territory mean — model fills the gap)</>
           }
         </span>
         {m.sign_conflict && (
@@ -5802,7 +5802,7 @@ const JoyMapConnectionsSweep = ({ result, showConflicting, profileCache, onOpenP
   const territoryDraft = (t, state) => {
     const lead = t.lead;
     const leadSentence = lead
-      ? `Lead pair: ${lead.focal_item || '—'} ${lead.direction || '·'} ${lead.other_item || '—'}, lift ${signedNum(lead.lift_points)} points across ${lead.shared_answerers != null ? lead.shared_answerers.toLocaleString() : '—'} shared answerers.`
+      ? `Lead pair: ${lead.focal_item || '—'} ${lead.direction || '·'} ${lead.other_item || '—'}, lift ${signedNum(lead.lift_points)} SD across ${lead.shared_answerers != null ? lead.shared_answerers.toLocaleString() : '—'} shared answerers.`
       : 'No measured lead pair covers this territory for this focal set.';
     return {
       origin: `Territory row — ${t.territory} (${state})`,
@@ -5902,7 +5902,16 @@ const JoyMapConnectionsSweep = ({ result, showConflicting, profileCache, onOpenP
                 <span className={`joy-map-cx-state state-${state}`} title={ALIGNMENT_COPY[state] || `Alignment state: ${state}`}>{state}</span>
                 <span className={`joy-map-cx-row-verdict ${verdictClass}`}>{t.verdict || 'unknown'}</span>
                 {pending.length > 0 && (
-                  <span className="joy-map-cx-chip prediction" title={pending.map(p => `#${p.prediction_id} predicted ${p.predicted_lift} pts`).join(' · ')}>
+                  // "pts" IS CORRECT HERE AND MUST NOT BE CHANGED TO SD.
+                  // Every other lift on this pane moved to standardised
+                  // units with the v3 promotion. predicted_lift did not:
+                  // the two pre-registered rows were registered against
+                  // the v2 grid and are literally in Joy Index points.
+                  // Relabelling this to SD, or scoring it against a v3
+                  // measured_lift, compares ~46.7x-apart numbers and
+                  // returns a FALSE falsification on the prediction
+                  // ledger. See Part H.
+                  <span className="joy-map-cx-chip prediction" title={pending.map(p => `#${p.prediction_id} predicted ${p.predicted_lift} pts (v2 Joy Index points — not SD)`).join(' · ')}>
                     prediction registered — receipt due {pending[0].fielding_id || 'next fielding'}
                   </span>
                 )}
@@ -6038,8 +6047,8 @@ const JoyMapTerritoryProfile = ({ profile, territoryKey, territoryName, rosterEn
     engagement: ctx.engagement || '',
     title: `${territoryName} — ${i.item_wording}`,
     claim_summary: measuredRow
-      ? `${i.item_wording}: measured lift ${signedNum(i.measured_lift)} points between the hot and cool halves of the focal cohort (n ${i.n_hot ?? '—'} hot / ${i.n_cool ?? '—'} cool).`
-      : `${i.item_wording}: model estimate ${signedNum(i.modeled_lift_raw)} points for this cohort. Not measured — inferred from ${ctx.model_version || 'the live model'}.`,
+      ? `${i.item_wording}: measured lift ${signedNum(i.measured_lift)} SD between the hot and cool halves of the focal cohort (n ${i.n_hot ?? '—'} hot / ${i.n_cool ?? '—'} cool).`
+      : `${i.item_wording}: model estimate ${signedNum(i.modeled_lift_raw)} SD for this cohort. Not measured — inferred from ${ctx.model_version || 'the live model'}.`,
     claim_population: ctx.population || '',
     evidence_tier: measuredRow ? 'measured' : 'modeled',
     claim_items: [...(ctx.focal_ids || []), i.item_id].filter(n => Number.isFinite(Number(n))),
@@ -7128,12 +7137,15 @@ const PublicCorpusMode = () => {
 // PublicCorpusAnalytics in the same pane shell the other modes use so
 // scroll, header, and layout work consistently.
 // ConnectionsBetaMode — the beta pane for the within-person connectivity
-// ledger (bjl_connectivity_ledger). Strategist types a query; endpoint
+// ledger (bjl_connectivity_ledger_v3). Strategist types a query; endpoint
 // resolves focal items, pulls edges, groups inside/beyond the focal
 // category, and translates each edge into a client-safe card via
-// bjl_pair_plain. Correlation coefficients (r) never render — every
-// connection speaks in shared answerers, pct moving together, and
-// Joy Index point lift.
+// bjl_pair_plain_v2. Correlation coefficients (excess_r) never render — every
+// connection speaks in shared answerers, pct moving together, and lift.
+// Lift is a STANDARDISED DIFFERENCE (SD), not Joy Index points. v3
+// standardises the joy family, which v2 left in raw points, so the same
+// pair reads ~46.7x smaller than it used to. Rendered at 2dp: at 1dp a
+// quarter of well-powered pairs collapsed to a flat 0.0.
 const ConnectionsBetaMode = () => {
   const [query, setQuery] = useState('');
   const [jobIdInput, setJobIdInput] = useState('');
@@ -7214,7 +7226,7 @@ const ConnectionsBetaMode = () => {
         </div>
         <div className="conn-card-body">
           {card.lift_points != null && (
-            <>People running hot on the first rate the second <strong>{card.lift_points > 0 ? '+' : ''}{card.lift_points.toFixed(1)} points</strong> against their own baseline. </>
+            <>People running hot on the first rate the second <strong>{card.lift_points > 0 ? '+' : ''}{card.lift_points.toFixed(2)} SD</strong> against their own baseline. </>
           )}
           {card.shared_answerers != null && (
             <>Based on <strong>{card.shared_answerers.toLocaleString()}</strong> people who rated both. </>

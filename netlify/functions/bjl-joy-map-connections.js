@@ -37,7 +37,7 @@
  * Focal eligibility (hard gate). The front door serves every surface,
  * including ones that legitimately want open-ends, so it returns items
  * this sweep cannot use. A focal is only valid if its item_id exists in
- * bjl_conn_centered_v2 — that table IS the definition of "scored". An
+ * bjl_conn_centered_v3 — that table IS the definition of "scored". An
  * ineligible focal produces an empty cohort and sixteen dead rows, so
  * it is filtered out BEFORE selection rather than discovered after.
  *
@@ -82,13 +82,29 @@
  *   query "people who have problems with their internet provider"
  *   -> Haiku picks 5008 and 5009 (it reasons, verbatim, that "item 5009
  *      specifically addresses internet provider issues")
- *   -> the eligibility gate drops both; neither is in bjl_conn_centered_v2
+ *   -> the eligibility gate drops both; neither is in bjl_conn_centered_v3
  *   -> rung b substitutes 4589 "Having access to HIGH-SPEED INTERNET in
  *      your home"
- *   -> cohort 6,510 hot / 1,324 cool, sixteen live rows, leads:
- *      treats +17.6 (n=1,665), value-groceries +20.8 (n=7,452),
- *      bath +20.7, gift +16.9 at 81%
+ *   -> cohort 6,040 hot / 1,794 cool, sixteen rows (15 measured, 1
+ *      unmeasured: Mastery & Making), leads:
+ *      treats +0.43 SD (n=1,665, 77%), value-groceries +0.52 SD
+ *      (n=7,452, 77%), bath +0.43 SD (n=375, 73%), gift +0.44 SD
+ *      (n=2,136, 79%)
  *   Item 5009 must never appear in focals at any rung.
+ *
+ *   UNITS. The lift figures above are STANDARD DEVIATIONS, not Joy Index
+ *   points, and the cohort sizes are not the ones this fixture carried
+ *   before 2026-08-07. Both moved for the same reason and neither is a
+ *   regression:
+ *     - bjl_conn_centered_v2 left the joy family in raw Joy Index points
+ *       (sd 40.10) and z-scored the other nine. v3 standardises all ten.
+ *       So the same measured quantity restated: treats was +17.6 points,
+ *       is +0.43 SD. A ~46.7x rescale, not a change in finding.
+ *     - the hot/cool split sits on that same centering, so correcting it
+ *       reassigned 488 of 7,834 respondents. 6,510/1,324 -> 6,040/1,794.
+ *   If a future edit makes these read as points again, the promotion has
+ *   been partially reverted. Check bjl_pair_plain_v2 and Part F before
+ *   changing the numbers to match whatever the code now returns.
  *
  * Forensic note, kept because it corrects the obvious assumption. The
  * bare string "Hotwire Communications" does NOT reproduce the bug and
@@ -112,11 +128,23 @@
  *                floor; content, not empty state
  *   unmeasured — no ledger pair for the territory (dashed row)
  * Verdicts on the modeled side (from bjl_joy_map_modeled):
- *   modeled                — factor prediction meets accuracy gate
- *   model_abstains         — holdout_r below the model registry floor
- *   model_abstains_cohort  — cohort too small to trust the modeled read
+ *   modeled                  — factor prediction meets accuracy gate
+ *   model_abstains           — the territory row in bjl_model_accuracy is
+ *                              not eligible
+ *   model_abstains_cohort    — cohort too small to trust the modeled read
+ *   model_abstains_items     — territory centroid under 10 items
+ *   model_abstains_coherence — centroid coherence under 0.35
  *
- * r_internal never leaves the server. holdout_r renders on
+ * AS OF 2026-08-07 EVERY TERRITORY RETURNS model_abstains. That is
+ * deliberate, not a fault. All 17 territory rows in bjl_model_accuracy
+ * were set eligible=false with the v3 promotion: holdout_r and
+ * calibration_slope were fitted against the v2 centering, so they are
+ * stale rather than wrong, and an unverified modeled number must not sit
+ * beside a verified measured one. The tier turns back on only after a
+ * recalibration pass against v3. Do not flip eligible back to restore the
+ * diamond.
+ *
+ * excess_r_internal never leaves the server. holdout_r renders on
  * model_abstains rows only.
  *
  * Auth: workbench-authenticated only. Auth failures write a
@@ -140,14 +168,19 @@ const PAIRS_BEHIND_MIN = 3;
 // sweep is arithmetic on noise; we halt rather than render it.
 const COHORT_FLOOR = 50;
 
-// Membership in bjl_conn_centered_v2 is the definition of a scored
+// Membership in bjl_conn_centered_v3 is the definition of a scored
 // item. Anything absent cannot carry a cohort and must never be a focal.
+//
+// v3 rather than v2 is a no-op on membership and was verified as one
+// before the swap: both grids cover an identical 1,229 items, 0 in one
+// and not the other. It is here so that no app-code path is still
+// reading a v2 object once the promotion lands.
 async function filterEligibleFocals(ids) {
   const inList = ids.filter(Number.isFinite).join(',');
   if (!inList) return [];
   const sql = `
     SELECT DISTINCT item_id
-    FROM bjl_conn_centered_v2
+    FROM bjl_conn_centered_v3
     WHERE item_id IN (${inList})
   `;
   const { data, error } = await supabase.rpc('execute_read_sql', { query_text: sql });
@@ -177,7 +210,7 @@ async function rungBAnchors(droppedIds) {
              (EXISTS (SELECT 1 FROM tags g WHERE g.tag = ANY(COALESCE(i.subtags, '{}')))) AS tag_match,
              count(*)::int AS n_centered
       FROM bjl_items i
-      JOIN bjl_conn_centered_v2 c ON c.item_id = i.item_id
+      JOIN bjl_conn_centered_v3 c ON c.item_id = i.item_id
       WHERE i.item_id NOT IN (${inList})
         AND COALESCE(i.is_brand, false) = false
         AND (i.primary_topic IN (SELECT t FROM topics)
@@ -232,6 +265,14 @@ function round1(x) {
   return x == null ? null : Math.round(Number(x) * 10) / 10;
 }
 
+// round2 is for the standardised-difference values (lift). After the v3
+// promotion these are ~0.13 typical, ~0.56 max, so 1 decimal collapsed a
+// quarter of well-powered pairs to a flat 0.0. round1 is retained for
+// territory_magnitude, which is an average Joy Index and still in points.
+function round2(x) {
+  return x == null ? null : Math.round(Number(x) * 100) / 100;
+}
+
 function roundInt(x) {
   return x == null ? null : Math.round(Number(x));
 }
@@ -245,7 +286,7 @@ function shapePairRow(r) {
     direction:         r.direction || null,
     shared_answerers:  r.shared_answerers == null ? null : Number(r.shared_answerers),
     pct_move_together: r.pct_move_together == null ? null : roundInt(r.pct_move_together),
-    lift_points:       round1(r.lift_points),
+    lift_points:       round2(r.lift_points),
   };
 }
 
@@ -575,8 +616,8 @@ exports.handler = async (event) => {
       .sort((a, b) => a.ord - b.ord)
       .map(t => {
         const m = modeledByKey.get(`${t.ord}::${t.territory}`);
-        const modeledLift  = m ? round1(m.modeled_lift_points) : null;
-        const measuredMean = m ? round1(m.measured_territory_mean_lift) : null;
+        const modeledLift  = m ? round2(m.modeled_lift_points) : null;
+        const measuredMean = m ? round2(m.measured_territory_mean_lift) : null;
         const holdoutR     = m && m.model_holdout_r != null
           ? Math.round(Number(m.model_holdout_r) * 1000) / 1000
           : null;

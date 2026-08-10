@@ -94,8 +94,11 @@ exports.handler = async (event) => {
       item_verdict:     r.item_verdict || null,
       n_hot:            r.n_hot == null ? null : Number(r.n_hot),
       n_cool:           r.n_cool == null ? null : Number(r.n_cool),
-      measured_lift:    r.measured_lift == null ? null : Math.round(Number(r.measured_lift) * 10) / 10,
-      modeled_lift_raw: r.modeled_lift_raw == null ? null : Math.round(Number(r.modeled_lift_raw) * 10) / 10,
+      // 2 decimals on both: these are standardised differences off
+      // bjl_conn_centered_v3, not Joy Index point differences. The SQL
+      // already rounds to 2; rounding to 1 here threw that away.
+      measured_lift:    r.measured_lift == null ? null : Math.round(Number(r.measured_lift) * 100) / 100,
+      modeled_lift_raw: r.modeled_lift_raw == null ? null : Math.round(Number(r.modeled_lift_raw) * 100) / 100,
     }));
 
     return {

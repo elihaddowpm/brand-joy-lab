@@ -16,15 +16,15 @@
  *      otherwise convert brief.entities into focal items via
  *      focalItemsFromBrief().
  *   3. Per focal: bjl_item_edges(item_id) for every connection, sorted
- *      by |r| desc (r stays server-side).
- *   4. Batch item-skew lookup against bjl_conn_centered. When an
+ *      by |excess_r| desc (excess_r stays server-side).
+ *   4. Batch item-skew lookup against bjl_conn_centered_v3. When an
  *      item's centered values are heavily one-sided (< 25% or > 75%
  *      on one side of zero), suppress pct_move_together on cards
  *      involving that item — the metric is unreliable under a skewed
  *      distribution.
- *   5. Translate each surfaced edge via bjl_pair_plain(a, b), applying
- *      skew suppression. Correlation coefficients (r) never appear in
- *      the response payload.
+ *   5. Translate each surfaced edge via bjl_pair_plain_v2(a, b), applying
+ *      skew suppression. Correlation coefficients (excess_r) never
+ *      appear in the response payload.
  *   6. Two variants of unmeasured copy: (a) item outside ledger (under
  *      50 respondents), (b) no qualifying pair (under 30 shared).
  *   7. Optional scratch log to bjl_query_jobs under key
@@ -69,6 +69,34 @@ const PAIR_SHARED_FLOOR     = 30;
 // there's little variance to co-move with.
 const SKEW_LOW  = 25;
 const SKEW_HIGH = 75;
+
+// GATE DELIBERATELY OFF. skewed is computed and reported; it does not
+// suppress anything.
+//
+// The fetchItemSkew query below had never executed — it selected a column
+// that does not exist, so every call threw. 25/75 was therefore written
+// blind and has never been validated against a real distribution. Now that
+// the query runs, here is what it actually says, measured against live
+// bjl_conn_centered_v3:
+//
+//   items tripping 25/75:   328 / 1,229  (26.7%)
+//   pairs losing their pct: 45,781 / 115,144  (39.8%)
+//   pct_positive spread:    median 54.0, mean 53.0
+//     <10: 26 | 10-25: 113 | 25-40: 219 | 40-60: 392
+//     60-75: 290 | 75-90: 151 | >90: 38
+//
+// The genuinely pathological tail — <10 or >90 — is 64 items, not 328.
+// 25/75 is roughly five times wider than the problem it was written for,
+// and turning it on in the same deploy as the v3 promotion would silently
+// remove the pct line from two of every five cards while four other
+// user-visible things were also changing. There would be no way to tell a
+// skew suppression from a v3 artefact.
+//
+// So this deploy fixes the query and leaves the gate open. The threshold
+// gets ruled on separately, with the distribution above in hand and a
+// measured before/after. Flipping this to true is a user-visible change on
+// its own and needs its own comms line.
+const SKEW_GATE_ENFORCED = false;
 
 // ---------------------------------------------------------------------
 // Query understanding — delegated to the front door (bjl-front-door.js).
@@ -156,12 +184,17 @@ async function fetchEdges(focalItemId) {
   const { data, error } = await supabase.rpc('bjl_item_edges', { p_item: focalItemId });
   if (error) throw new Error(`bjl_item_edges failed for item ${focalItemId}: ${error.message}`);
   const rows = Array.isArray(data) ? data : [];
+  // excess_r, not r: bjl_item_edges reads bjl_connectivity_ledger_v3 and
+  // returns the correlation net of the mechanical floor -1/(k-1). The
+  // sign tests below (rises with / runs against) are decided on it, and
+  // 2,516 of the 115,144 pairs answer differently than they did on raw r
+  // — always in the same direction, since floor_r is negative everywhere.
   return rows
     .map(r => ({
       other_item: Number(r.other_item),
       n_pair:     Number(r.n_pair),
-      r:          Number(r.r),
-      abs_r:      Math.abs(Number(r.r)),
+      r:          Number(r.excess_r),
+      abs_r:      Math.abs(Number(r.excess_r)),
     }))
     .sort((a, b) => (b.abs_r - a.abs_r) || (b.n_pair - a.n_pair));
 }
@@ -185,10 +218,18 @@ async function fetchItemMeta(itemIds) {
 }
 
 // ---------------------------------------------------------------------
-// Item skew — one batch SQL round trip against bjl_conn_centered.
-// Returns Map<item_id, pct_positive>. If pct_positive < 25 or > 75,
-// pct_move_together on any pair involving that item is suppressed
-// because the metric loses meaning under a skewed distribution.
+// Item skew — one batch SQL round trip against bjl_conn_centered_v3.
+// Returns Map<item_id, {pct_positive, skewed, n}>. `skewed` is the
+// 25/75 observation only — it does NOT currently suppress anything.
+// See SKEW_GATE_ENFORCED above for why the gate is open.
+//
+// THIS QUERY HAS NEVER RUN. It selected `c` from bjl_conn_centered,
+// whose value column is `cj` — so Postgres returned 42703 (column "c"
+// does not exist) on every call, fetchItemSkew threw, and the throw is
+// uncaught here and lands in the handler's catch. Skew suppression has
+// therefore never suppressed anything. Found while repointing the
+// centered-grid reads to v3; the version swap and the column fix are the
+// same edit, so both are here rather than split across two changes.
 // ---------------------------------------------------------------------
 async function fetchItemSkew(itemIds) {
   if (!itemIds || itemIds.length === 0) return new Map();
@@ -197,9 +238,9 @@ async function fetchItemSkew(itemIds) {
   if (!idList) return new Map();
   const sql = `
     SELECT item_id,
-           ROUND(100.0 * SUM(CASE WHEN c > 0 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 1)::numeric AS pct_positive,
+           ROUND(100.0 * SUM(CASE WHEN cz > 0 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 1)::numeric AS pct_positive,
            COUNT(*) AS n
-    FROM bjl_conn_centered
+    FROM bjl_conn_centered_v3
     WHERE item_id IN (${idList})
     GROUP BY item_id
   `;
@@ -221,13 +262,24 @@ async function translateEdge(focal, edge, otherMeta, skewByItem) {
   const [a, b] = focal.item_id < edge.other_item
     ? [focal.item_id, edge.other_item]
     : [edge.other_item, focal.item_id];
-  const { data, error } = await supabase.rpc('bjl_pair_plain', { p_item_a: a, p_item_b: b });
-  if (error) throw new Error(`bjl_pair_plain failed for (${a}, ${b}): ${error.message}`);
+  // _v2, not bjl_pair_plain: the v1 function reads bjl_conn_centered,
+  // which covers 880 items, while the edges above now come from the v3
+  // ledger's 1,229. On the 349 items in v3 and not v1 the v1 function
+  // returns 0 shared answerers, which trips the 30-shared floor and
+  // routes every one of their pairs into "unmeasured" — a worse answer
+  // than before the repoint. bjl_pair_plain_v2 takes the same arguments
+  // and returns the same three columns, and the migration points it at
+  // bjl_conn_centered_v3.
+  const { data, error } = await supabase.rpc('bjl_pair_plain_v2', { p_item_a: a, p_item_b: b });
+  if (error) throw new Error(`bjl_pair_plain_v2 failed for (${a}, ${b}): ${error.message}`);
   const row = Array.isArray(data) && data.length > 0 ? data[0] : null;
   if (!row) return null;
   const focalSkew = skewByItem.get(focal.item_id) || { skewed: false };
   const otherSkew = skewByItem.get(edge.other_item) || { skewed: false };
-  const suppressPct = focalSkew.skewed || otherSkew.skewed;
+  // Computed either way so the card carries the observation; only applied
+  // when the gate is on. See SKEW_GATE_ENFORCED.
+  const wouldSuppressPct = focalSkew.skewed || otherSkew.skewed;
+  const suppressPct = SKEW_GATE_ENFORCED && wouldSuppressPct;
   const sharedAnswerers = Number(row.shared_answerers);
   // Pair-level 30-shared floor. Card carries the flag; handler
   // decides whether it enters the ledger cards or the rendered
@@ -246,10 +298,17 @@ async function translateEdge(focal, edge, otherMeta, skewByItem) {
       ? null
       : (row.pct_move_together == null ? null : Math.round(Number(row.pct_move_together))),
     pct_move_together_suppressed: suppressPct,
+    // The observation, independent of whether it was acted on. This is the
+    // "after" side of the before/after the threshold ruling needs: with the
+    // gate off, count these against the pairs that rendered a pct anyway.
+    pct_move_together_skew_flagged: wouldSuppressPct,
     pct_move_together_suppress_reason: suppressPct
       ? 'One side of this pair has a heavily one-sided distribution (>75% or <25% on one side of zero). Percent moving together loses meaning when there is little variance to co-move with.'
       : null,
-    lift_points: row.lift_points == null ? null : Math.round(Number(row.lift_points) * 10) / 10,
+    // 2 decimals: lift_points is a standardised difference off
+    // bjl_conn_centered_v3, not a Joy Index point difference. At 1 decimal
+    // a quarter of well-powered pairs rendered as a flat 0.0.
+    lift_points: row.lift_points == null ? null : Math.round(Number(row.lift_points) * 100) / 100,
     below_pair_floor: belowPairFloor,
   };
 }
@@ -571,11 +630,12 @@ exports.handler = async (event) => {
             rInternalLog.push({
               focal_item_id: focal.item_id,
               other_item_id: edge.other_item,
-              r:             edge.r,
+              excess_r:      edge.r,
               n_pair:        edge.n_pair,
               same_topic:    meta && meta.primary_topic === focal.primary_topic,
               direction:     edge.r >= 0 ? 'positive' : 'negative',
               pct_suppressed: card.pct_move_together_suppressed || false,
+              pct_skew_flagged: card.pct_move_together_skew_flagged || false,
               below_pair_floor: true,
             });
             continue;
@@ -584,11 +644,12 @@ exports.handler = async (event) => {
           rInternalLog.push({
             focal_item_id: focal.item_id,
             other_item_id: edge.other_item,
-            r:             edge.r,
+            excess_r:      edge.r,
             n_pair:        edge.n_pair,
             same_topic:    meta && meta.primary_topic === focal.primary_topic,
             direction:     edge.r >= 0 ? 'positive' : 'negative',
             pct_suppressed: card.pct_move_together_suppressed || false,
+            pct_skew_flagged: card.pct_move_together_skew_flagged || false,
             below_pair_floor: false,
           });
         }
@@ -598,6 +659,14 @@ exports.handler = async (event) => {
       await translateBatch(parts.positiveBeyond, beyondCategory);
       await translateBatch(parts.negativeBeyond, negativeRimBeyond);
     }
+
+    // Skew gate measurement. With SKEW_GATE_ENFORCED off, this is the
+    // count of cards that WOULD have lost their pct line — the live
+    // "before" the threshold ruling needs, per real query rather than per
+    // whole-ledger sweep. If the gate is later turned on, this same line
+    // becomes the "after" and the two are directly comparable.
+    const skewFlagged = rInternalLog.filter(r => r.pct_skew_flagged).length;
+    console.log(`[connections-beta] skew gate ${SKEW_GATE_ENFORCED ? 'ENFORCED' : 'off'} (${SKEW_LOW}/${SKEW_HIGH}): ${skewFlagged}/${rInternalLog.length} cards flagged`);
 
     const responsePayload = {
       ok: true,
@@ -644,7 +713,7 @@ exports.handler = async (event) => {
       negative_rim_beyond: negativeRimBeyond,
       unmeasured,
       caveats,
-      r_internal:      rInternalLog,
+      excess_r_internal: rInternalLog,
     });
 
     return {

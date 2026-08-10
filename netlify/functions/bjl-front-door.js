@@ -292,7 +292,9 @@ Return ONLY a JSON array of strings, no preamble.${shapeHint}`;
 // ones are item-shaped ("Having access to HIGH-SPEED INTERNET in your
 // home"). On any open-end-heavy topic every candidate Haiku saw was an
 // unscored verbatim item. So the tiebreak is inverted, and membership
-// in bjl_conn_centered_v2 — the scored ledger — leads the sort.
+// in bjl_conn_centered_v3 — the centered response grid, NOT the
+// connectivity ledger, whatever this comment used to call it — leads
+// the sort.
 //
 // Open-ends are ranked down, never dropped. Verbatim surfaces
 // legitimately want them; they just should not crowd out scored items
@@ -318,7 +320,7 @@ async function buildCandidateShortlist(terms) {
     )
     SELECT m.item_id, m.item_name, m.primary_topic, m.canonical_brand,
            m.is_brand, m.is_location, m.hit_count,
-           EXISTS (SELECT 1 FROM bjl_conn_centered_v2 c WHERE c.item_id = m.item_id) AS in_centered
+           EXISTS (SELECT 1 FROM bjl_conn_centered_v3 c WHERE c.item_id = m.item_id) AS in_centered
     FROM matches m
     ORDER BY in_centered DESC, hit_count DESC, name_len ASC
     LIMIT 60
@@ -595,19 +597,24 @@ async function fetchAnchorFallback(resolvedItems) {
   const topicJoinCond = topicLiterals.length > 0
     ? `MAX(CASE WHEN i.primary_topic IN (${topicLiterals}) THEN 1 ELSE 0 END) = 1`
     : `FALSE`;
-  // Filter to in-ledger items via bjl_connectivity_ledger before
+  // Filter to in-ledger items via bjl_connectivity_ledger_v3 before
   // trigram-ranking, so the shortlist can never come back empty just
   // because the top name matches happen to all be out-of-ledger
   // variants of the resolved items (which was log id 12's failure
   // mode: three fan-question phrasings dominate name similarity but
   // none entered the ledger).
+  //
+  // v3, not v1: the v1 ledger covers 880 items and v3 covers 1,229, and
+  // v1 is a strict subset. Substituting anchors out of the smaller one
+  // was picking a worse-matching name while a better one sat in the
+  // ledger this pane claims to be filtering on.
   const sql = `
     WITH resolved(name) AS (SELECT UNNEST(ARRAY[${nameLiterals}]::text[])),
     in_ledger_ids AS (
       SELECT DISTINCT item_id FROM (
-        SELECT item_a AS item_id FROM bjl_connectivity_ledger
+        SELECT item_a AS item_id FROM bjl_connectivity_ledger_v3
         UNION
-        SELECT item_b FROM bjl_connectivity_ledger
+        SELECT item_b FROM bjl_connectivity_ledger_v3
       ) u
     ),
     scored AS (
