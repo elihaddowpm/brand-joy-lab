@@ -1365,7 +1365,14 @@ const COMPARATIVE_TERMS = [
 ];
 const COMPARATIVE_RE = new RegExp('\\b(' + COMPARATIVE_TERMS.join('|') + ')\\b', 'i');
 
-const COMPARISON_DIRECTIONS = new Set(['max', 'min', 'greater', 'less', 'equal']);
+// `rank` and `top` exist because "the largest" is not the only ordering a real
+// read makes. The first live run under this check produced two true claims --
+// "ranked second in both distributions" and "the one job that lands in the top
+// three for both" -- that max/min could not express, so the model forced them
+// into a shape that did not fit and the guard rejected them for the wrong
+// reason. A guard that leaves a true claim no legal form is the over-strict
+// half of the defect this whole line of work exists to end.
+const COMPARISON_DIRECTIONS = new Set(['max', 'min', 'rank', 'top', 'greater', 'less', 'equal']);
 
 // Every returned SELECT, with each row's numeric surface precomputed. A
 // comparison's set has to live inside ONE of these results: that is what makes
@@ -1450,7 +1457,14 @@ function checkComparison(cmp, results, readText, ci) {
   const direction = typeof cmp.direction === 'string' ? cmp.direction.toLowerCase() : null;
   if (!COMPARISON_DIRECTIONS.has(direction)) {
     return fail('malformed_comparison',
-      'direction must be one of max, min, greater, less, equal. Got: ' + JSON.stringify(cmp.direction));
+      'direction must be one of max, min, rank, top, greater, less, equal. Got: '
+      + JSON.stringify(cmp.direction));
+  }
+  const needsK = direction === 'rank' || direction === 'top';
+  const k = needsK ? toInt(cmp.k) : null;
+  if (needsK && (k === null || k < 1)) {
+    return fail('malformed_comparison',
+      'direction ' + direction + ' requires `k`: the place for rank (2 = second), the cutoff for top (3 = top three).');
   }
   if (typeof cmp.subject !== 'string' || !cmp.subject.trim()) {
     return fail('malformed_comparison', 'subject must name the member the claim is about.');
@@ -1516,7 +1530,8 @@ function checkComparison(cmp, results, readText, ci) {
   // the other twenty-one rows of whatever query it touched would be a tax on
   // exactly the cross-query pairing this pass exists to make -- and the two
   // members are usually in DIFFERENT results anyway.
-  const ranksASet = direction === 'max' || direction === 'min';
+  const ranksASet = direction === 'max' || direction === 'min'
+                 || direction === 'rank' || direction === 'top';
 
   if (ranksASet) {
     let home = null;
@@ -1585,6 +1600,22 @@ function checkComparison(cmp, results, readText, ci) {
   if (direction === 'min' && others.some(m => m.value <= subject.value)) {
     const low = ranked[ranked.length - 1];
     return orderingFail({ actual_extreme: low.label + '=' + low.value });
+  }
+  // A tie makes a place claim unanswerable rather than false: two members at
+  // the same value have no second place between them. Rejected as such, so a
+  // retry knows to say something else rather than to pick one.
+  if (needsK) {
+    if (k > members.length) {
+      return orderingFail({ k, note: 'k is larger than the set: ' + members.length + ' members.' });
+    }
+    const above = others.filter(m => m.value > subject.value).length;
+    const tied  = others.filter(m => m.value === subject.value).length;
+    if (tied) {
+      return orderingFail({ k, note: 'Tied on value with ' + tied + ' other member(s); no place claim is answerable.' });
+    }
+    const place = above + 1;
+    const holds = direction === 'rank' ? place === k : place <= k;
+    if (!holds) return orderingFail({ k, actual_place: place });
   }
   if (needsAgainst) {
     const against = byKey.get(againstKey);

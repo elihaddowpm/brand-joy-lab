@@ -61,7 +61,9 @@ A comparison is any claim about a relationship between quantities, not just an e
 
 For each one, add an entry to `comparisons`.
 
-**A superlative — `max` or `min` — must carry every member of the set it ranks over.** Not the two or three that make the point; all of them. If the query returned 14 rows, the set has 14 entries, and they must all come from that one result. A ranking over a hand-picked slice is not a ranking, and it is exactly how a true number ends up carrying a false claim.
+**A claim about a place in a set — `max`, `min`, `rank`, `top` — must carry every member of that set.** Not the two or three that make the point; all of them. If the query returned 14 rows, the set has 14 entries, and they must all come from that one result. A ranking over a hand-picked slice is not a ranking, and it is exactly how a true number ends up carrying a false claim.
+
+Use `rank` with `k` for a specific place — *"relational is second"* is `direction: "rank", k: 2`. Use `top` with `k` for membership in a leading group — *"it lands in the top three"* is `direction: "top", k: 3`. `max` is just rank 1. Do not force a place claim into `max` because `max` is the one you remember; if the claim is "second", say `rank` and 2.
 
 **A pairwise claim — `greater`, `less`, `equal` — carries only its two members**, and they may come from different queries. Comparing a number from one query against a number from another is the whole point of this pass; it is not asked to drag in every other row those queries returned.
 
@@ -100,9 +102,10 @@ Return a single JSON object. No prose outside it, no code fences.
   ],
   "comparisons": [
     { "claim": "quote the exact clause of the read this backs",
-      "direction": "max | min | greater | less | equal",
+      "direction": "max | min | rank | top | greater | less | equal",
       "subject": "the member the claim is about",
-      "against": "the other member — required for greater, less and equal; omit for max and min",
+      "k": 2,
+      "against": "the other member — required for greater, less and equal; omit otherwise",
       "set": [
         { "label": "playful", "value": 34.0, "from": [52, 18] },
         { "label": "hedonic", "value": 39.8, "from": [69.8, 30] }
@@ -113,7 +116,9 @@ Return a single JSON object. No prose outside it, no code fences.
 }
 ```
 
-`set` holds **every** member, and `from` holds the one or two numbers on the row that produce `value`. Omit `from` when the value is the row's number itself.
+`set` holds **every** member, and `from` holds the one or two numbers on the row that produce `value`. Omit `from` when the value is the row's number itself. `k` is required for `rank` and `top` and omitted otherwise.
+
+A place claim needs an unambiguous place: if two members tie on the value, "second" has no answer, and the check will say so. Say something else rather than pick one.
 
 Field rules, all enforced by a post-generation check that reads the actual rows:
 

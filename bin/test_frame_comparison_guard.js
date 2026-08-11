@@ -195,6 +195,75 @@ check('pairwise: a true cross-query comparison verifies without full coverage',
   }]).ok);
 
 // ---------------------------------------------------------------------------
+// Places other than first. The first live run under this check made two true
+// claims -- "ranked second in both distributions" and "lands in the top three
+// for both" -- that max/min could not express, so the model forced them into a
+// shape that did not fit and the guard rejected them for the wrong reason. A
+// guard that leaves a true claim no legal form is the over-strict half of the
+// defect this whole line of work exists to end, so it is pinned here.
+//
+// By home-cooking share: hedonic 69.8, relational 58.3, playful 18. Relational
+// is second, and it is in the top three.
+// ---------------------------------------------------------------------------
+const HC_SET = MODES.map(m => ({ label: m.mode, value: m.hc_pct }))
+  .filter(m => m.value !== null);
+const HC_READ = 'Relational is the second most common mode in home cooking at 58.3%, '
+  + 'and it lands in the top three, across 139 verbatims.';
+
+check('rank: a true second place verifies',
+  frame(HC_READ, [{
+    claim: 'Relational is the second most common mode in home cooking',
+    direction: 'rank', k: 2, subject: 'relational', set: HC_SET, basis_n: [139],
+  }]).ok);
+
+check('rank: a false second place is rejected and names the real one',
+  (() => {
+    const r = frame(HC_READ.replace('Relational is the second', 'Playful is the second'), [{
+      claim: 'Playful is the second most common mode in home cooking',
+      direction: 'rank', k: 2, subject: 'playful', set: HC_SET, basis_n: [139],
+    }]);
+    return reasons(r).includes('comparison_ordering_false')
+        && JSON.stringify(r.failures).includes('"actual_place":3');
+  })());
+
+check('top: membership in the leading three verifies',
+  frame(HC_READ, [{
+    claim: 'it lands in the top three',
+    direction: 'top', k: 3, subject: 'relational', set: HC_SET, basis_n: [139],
+  }]).ok);
+
+check('top: a member outside the cutoff is rejected',
+  reasons(frame(HC_READ, [{
+    claim: 'it lands in the top three',
+    direction: 'top', k: 3, subject: 'awe', set: HC_SET, basis_n: [139],
+  }])).includes('comparison_ordering_false'));
+
+// spiritual, triumph and awe all sit at 1.4: no place claim among them is
+// answerable, and saying so is different from calling it false.
+check('a tie makes a place claim unanswerable, not merely wrong',
+  (() => {
+    const r = frame('Awe ranks twelfth among home cooking modes at 1.4%, across 139 verbatims.', [{
+      claim: 'Awe ranks twelfth among home cooking modes',
+      direction: 'rank', k: 12, subject: 'awe', set: HC_SET, basis_n: [139],
+    }]);
+    return reasons(r).includes('comparison_ordering_false')
+        && JSON.stringify(r.failures).includes('Tied on value');
+  })());
+
+check('a place claim still requires the whole set',
+  reasons(frame(HC_READ, [{
+    claim: 'Relational is the second most common mode in home cooking',
+    direction: 'rank', k: 2, subject: 'relational', basis_n: [139],
+    set: HC_SET.slice(0, 4),
+  }])).includes('comparison_set_incomplete'));
+
+check('rank without k is rejected',
+  reasons(frame(HC_READ, [{
+    claim: 'Relational is the second most common mode in home cooking',
+    direction: 'rank', subject: 'relational', set: HC_SET, basis_n: [139],
+  }])).includes('malformed_comparison'));
+
+// ---------------------------------------------------------------------------
 // Shape and provenance of the set itself.
 // ---------------------------------------------------------------------------
 check('a member whose numbers are on no returned row is rejected',
