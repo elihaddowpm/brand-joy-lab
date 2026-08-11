@@ -61,6 +61,42 @@ const DEPTH_TO_MAX_TURNS = {
   thorough: 16   // deep dive + demographic cut + 4 cross-category function calls
 };
 
+// 2026-08-11: the turn budget was never the binding constraint, so raising
+// it in 2026-07-09 changed nothing. Measured across 56 thorough data_pull
+// jobs over 45 days:
+//
+//   - thorough hit the cap 91% of the time (51/56)
+//   - the 5 jobs that exited GRACEFULLY ran 15.8 queries; the 51 capped
+//     ones ran 15.9. Nothing converged early, because nothing could.
+//   - 0.0% exact-duplicate queries in every third of every job. The loop
+//     was not spinning. It was working a to-do list.
+//   - the decomposer hands over 8-23 territories (mode 12) with "confirm
+//     or drop each". At ~1 territory per turn against 16 turns, the list
+//     is structurally longer than the budget. The cap-hit was arithmetic,
+//     not judgment.
+//
+// So the fix is not a bigger budget. It is a plan that fits the budget,
+// plus a budget the model can actually see (see runInvestigation).
+//
+// Derived, never a second hand-maintained map. A separate TERRITORY cap
+// constant would desync from the turn cap the first time someone raised
+// one and not the other — the same duplicated-constant failure the cohort
+// floors were split to avoid. Raise the turns, the territory cap follows.
+//
+// Half the budget: the other half pays for the home/deep-dive queries, the
+// audience arms, and retries. The investigator prompt targets 6-8 queries
+// at thorough, and thorough(16) -> 8 territories lands on that target
+// rather than fighting it. focused(10) -> 5, minimal(4) -> 2.
+//
+// The floor is 2, not 3, deliberately. A floor of 3 would hand minimal(4)
+// three territories against four turns — reproducing the exact "list longer
+// than the budget" failure at small scale, which is the thing this function
+// exists to prevent. At 2 the floor never binds for any real depth; it only
+// guards against a pathologically small maxTurns.
+function territoryBudgetFor(maxTurns) {
+  return Math.max(2, Math.floor(maxTurns / 2));
+}
+
 // -------------------------------------------------------------------------
 // Load prompts and schema doc — bundled as a JSON sibling
 // -------------------------------------------------------------------------
@@ -174,7 +210,14 @@ const TOOLS = [
       type: 'object',
       properties: {
         sql: { type: 'string', description: 'The SQL query to execute' },
-        rationale: { type: 'string', description: 'Why this query is being run, what finding it supports, and what you plan to query next based on this result' }
+        rationale: { type: 'string', description: 'Why this query is being run, what finding it supports, and what you plan to query next based on this result' },
+        // Optional, and optional on purpose: plenty of legitimate queries
+        // (home deep-dive, audience arms, a retry after a zero-row result)
+        // belong to no territory. Requiring it would push the model to
+        // invent an attribution to satisfy the schema. When it IS supplied
+        // it makes plan coverage countable in JS, which is what lets the
+        // per-turn budget line report progress instead of guessing at it.
+        territory: { type: 'string', description: 'Optional. If this query tests one of the territories from the decomposer search plan, copy that territory\'s "value" string exactly. Omit for home-set, audience-arm, exploratory, or retry queries.' }
       },
       required: ['sql', 'rationale']
     }
@@ -368,19 +411,31 @@ function buildInvestigatorSystemPrompt(triage, opts) {
   opts = opts || {};
   const jobId = opts.jobId || null;
   const decomposer = opts.decomposer || null;
+  const maxTurns = opts.maxTurns || DEPTH_TO_MAX_TURNS.focused;
 
-  const decomposerSection = decomposer && (decomposer.territories?.length || decomposer.home_items?.length)
+  // Cap the territory list to what the turn budget can actually test. The
+  // decomposer is free to think as wide as it likes; the investigator is
+  // handed only the head of that list. Order is the decomposer's own
+  // priority order, so the truncation drops its weakest hypotheses.
+  const allTerritories = Array.isArray(decomposer?.territories) ? decomposer.territories : [];
+  const territoryBudget = territoryBudgetFor(maxTurns);
+  const territories = allTerritories.slice(0, territoryBudget);
+  const droppedTerritories = allTerritories.length - territories.length;
+
+  const decomposerSection = decomposer && (territories.length || decomposer.home_items?.length)
     ? `
 
 ## DECOMPOSER SEARCH PLAN
 
 The decomposer (reasoning step) has already produced a search plan. Use it: Step 1's home category and home set come from \`home_items\` below. Territories are hypotheses to test in scratch — confirm or drop each against arm output. Anything unconfirmed drops silently downstream; do not narrate leaps the data didn't back.
 
+**This list is already trimmed to your budget.** The decomposer proposed ${allTerritories.length}; you are being handed the top ${territories.length}${droppedTerritories > 0 ? `, and ${droppedTerritories} lower-priority ${droppedTerritories === 1 ? 'hypothesis was' : 'hypotheses were'} dropped before you saw ${droppedTerritories === 1 ? 'it' : 'them'}` : ''}. Testing these ${territories.length} IS covering the plan — there is no longer list behind this one that you are falling short of. Do not go looking for more territories to test. When these are tested and your home/audience work is done, you are finished: say so and stop calling tools.
+
 strategic_read (internal, never surfaces):
 ${decomposer.strategic_read || '(none)'}
 
-territories (hypotheses to test):
-${JSON.stringify(decomposer.territories || [], null, 2)}
+territories (hypotheses to test — this is the whole list, already capped):
+${JSON.stringify(territories, null, 2)}
 
 home_items (anchors for the within-category deep dive and the audience definition):
 ${JSON.stringify(decomposer.home_items || [], null, 2)}
@@ -413,13 +468,25 @@ ${decomposerSection}`;
 
 async function runInvestigation(triage, prompt, extraContext, opts) {
   if (triage.investigation_depth === 'none') {
-    return { scratch: [], queryCount: 0 };
+    return { scratch: [], queryCount: 0, stop_reason: 'not_invoked' };
   }
   opts = opts || {};
   const jobId = opts.jobId || null;
 
   const maxTurns = DEPTH_TO_MAX_TURNS[triage.investigation_depth] || DEPTH_TO_MAX_TURNS.focused;
-  const systemPrompt = buildInvestigatorSystemPrompt(triage, { jobId, decomposer: opts.decomposer });
+  const systemPrompt = buildInvestigatorSystemPrompt(triage, { jobId, decomposer: opts.decomposer, maxTurns });
+
+  // The capped plan, recomputed here so the per-turn budget line can report
+  // coverage against the same list the system prompt handed over.
+  const plannedTerritories = (Array.isArray(opts.decomposer?.territories) ? opts.decomposer.territories : [])
+    .slice(0, territoryBudgetFor(maxTurns))
+    // Territory elements are objects shaped { type, value, rationale } —
+    // `value` is the identifier. Verified against live decomposer_plan rows
+    // rather than assumed; an earlier draft keyed off `name` and would have
+    // silently reported 0% coverage forever.
+    .map(t => (typeof t === 'string' ? t : (t && (t.value || t.name || t.territory)) || ''))
+    .filter(Boolean);
+  const coveredTerritories = new Set();
 
   // Build user message: the question, plus any extra context blocks.
   const parts = [];
@@ -455,7 +522,7 @@ async function runInvestigation(triage, prompt, extraContext, opts) {
       if (text) {
         scratch.push({ type: 'final_summary', text });
       }
-      return { scratch, queryCount };
+      return { scratch, queryCount, stop_reason: 'end_turn', turns_used: turn + 1, max_turns: maxTurns };
     }
 
     if (response.stop_reason === 'tool_use') {
@@ -465,10 +532,18 @@ async function runInvestigation(triage, prompt, extraContext, opts) {
         if (block.type === 'tool_use' && block.name === 'execute_sql') {
           queryCount++;
           const sqlResult = await executeSql(block.input.sql);
+          // Only count a territory that is actually IN the plan. Counting
+          // any string the model supplies would let a mislabelled or
+          // invented name push coverage to "complete" and trip the stop
+          // signal on work that was never done — the stopping condition
+          // must not be satisfiable by relabelling.
+          const territory = typeof block.input.territory === 'string' ? block.input.territory.trim() : '';
+          if (territory && plannedTerritories.includes(territory)) coveredTerritories.add(territory);
           scratch.push({
             type: 'query',
             query: block.input.sql,
             rationale: block.input.rationale,
+            territory: territory || null,
             result: sqlResult.rows || sqlResult.error,
             rowcount: sqlResult.rows ? sqlResult.rows.length : 0
           });
@@ -479,15 +554,67 @@ async function runInvestigation(triage, prompt, extraContext, opts) {
           });
         }
       }
+
+      // ---- Observable budget ----
+      // The system prompt is built ONCE, before this loop, so nothing put
+      // there can carry a live turn count. That is why the prompt's
+      // "frame-first deadline at query 6" and "STOP if you want more than
+      // your budget" never bound anything: they were written against a
+      // number the model had no way to read. Measured consequence — the 5
+      // thorough jobs that exited gracefully ran 15.8 queries and the 51
+      // that hit the cap ran 15.9. Nothing converged early because nothing
+      // could tell where it was.
+      //
+      // Appending to the tool_result message is the only place a live count
+      // fits without spending a call. ~20 tokens a turn, no extra request,
+      // and it rides the turn that was happening anyway. Tool_result blocks
+      // must lead the content array, so this text block goes last.
+      const turnsLeft = maxTurns - (turn + 1);
+      const coverage = plannedTerritories.length
+        ? ` Territories tested: ${coveredTerritories.size} of ${plannedTerritories.length}.`
+        : '';
+      const planDone = plannedTerritories.length > 0 && coveredTerritories.size >= plannedTerritories.length;
+      const closing = planDone
+        ? ' The plan is covered. Finish any home/audience work still outstanding, then stop calling tools and write your summary.'
+        : (turnsLeft <= 2
+            ? ' You are nearly out of budget. Stop querying and write your summary now — a clear read from what you have beats one more query you cannot use.'
+            : '');
+      toolResults.push({
+        type: 'text',
+        text: `[BUDGET] Turn ${turn + 1} of ${maxTurns} used. ${turnsLeft} remain. Queries run: ${queryCount}.${coverage}${closing}`
+      });
+
       messages.push({ role: 'user', content: toolResults });
       continue;
     }
-    break;
+
+    // Any other stop_reason — 'max_tokens' being the realistic one at
+    // max_tokens 4096, also 'pause_turn' / 'refusal'. This is NOT a budget
+    // exhaustion, and reporting it as one is why the old hit_max_turns
+    // number could not be trusted: it conflated a real cap-hit with a
+    // mid-sentence truncation. Named honestly so the metric stops lying.
+    return {
+      scratch,
+      queryCount,
+      stop_reason: response.stop_reason || 'unknown',
+      turns_used: turn + 1,
+      max_turns: maxTurns,
+      truncated: response.stop_reason === 'max_tokens'
+    };
   }
 
-  // Hit the depth budget without an end_turn. Return scratch as-is; the
-  // synthesizer can write the response from queries alone.
-  return { scratch, queryCount, hit_max_turns: true };
+  // Genuinely exhausted the turn budget without an end_turn. Return scratch
+  // as-is; the synthesizer can write the response from queries alone.
+  return {
+    scratch,
+    queryCount,
+    hit_max_turns: true,
+    stop_reason: 'max_turns',
+    turns_used: maxTurns,
+    max_turns: maxTurns,
+    territories_planned: plannedTerritories.length,
+    territories_covered: coveredTerritories.size
+  };
 }
 
 // -------------------------------------------------------------------------
@@ -1252,10 +1379,17 @@ exports.handler = async (event) => {
     );
 
     // Stage 2: Investigation
-    const { scratch, queryCount, hit_max_turns } = await runInvestigation(triage, job.prompt, job.extra_context, {
+    const investigation = await runInvestigation(triage, job.prompt, job.extra_context, {
       jobId: job.job_id,
       decomposer,
     });
+    const { scratch, queryCount, hit_max_turns } = investigation;
+    console.log('[bjl-query-background] investigation ended:',
+      'stop_reason=' + (investigation.stop_reason || 'n/a'),
+      'turns=' + (investigation.turns_used || 0) + '/' + (investigation.max_turns || 0),
+      'queries=' + queryCount,
+      'territories=' + (investigation.territories_covered ?? '-') + '/' + (investigation.territories_planned ?? '-')
+    );
 
     // The decomposer plan travels to the synthesizer via a scratch meta
     // entry, so Path B confirmation (keep arm-backed territories, drop
@@ -1263,10 +1397,19 @@ exports.handler = async (event) => {
     // Scaffolding fields (strategic_read, confirmation_plan) never surface
     // to the client — the synthesizer prompt enforces that.
     if (Array.isArray(scratch)) {
+      // territories is the CAPPED list — the same one the investigator was
+      // handed. Passing the full list here would let the confirmation pass
+      // reason about hypotheses that were never tested, and read their
+      // absence from scratch as "dropped for lack of evidence" when in fact
+      // they were never looked at. territories_proposed keeps the original
+      // count so the truncation stays visible rather than silent.
+      const plannedForSynth = (Array.isArray(decomposer.territories) ? decomposer.territories : [])
+        .slice(0, territoryBudgetFor(DEPTH_TO_MAX_TURNS[triage.investigation_depth] || DEPTH_TO_MAX_TURNS.focused));
       scratch.push({
         type: 'decomposer_plan',
         strategic_read: decomposer.strategic_read || '',
-        territories: decomposer.territories || [],
+        territories: plannedForSynth,
+        territories_proposed: Array.isArray(decomposer.territories) ? decomposer.territories.length : 0,
         home_items: decomposer.home_items || [],
         audience_definition: decomposer.audience_definition || null,
         confirmation_plan: decomposer.confirmation_plan || '',
@@ -1330,10 +1473,19 @@ exports.handler = async (event) => {
     // Mark complete. If we hit the depth budget without an end_turn,
     // append a meta entry so the synthesizer scratch reflects that state
     // (no dedicated column for it; the scratch is the source of truth).
-    const finalScratch = (hit_max_turns
-      ? scratch.concat([{ type: 'meta', hit_max_turns: true }])
-      : scratch
-    ).concat(guardMeta);
+    // The meta entry now records HOW the loop ended, not just whether it
+    // ran out. hit_max_turns stays on the true cap-hit path only, so the
+    // metric measures one thing again; stop_reason carries the rest.
+    const finalScratch = scratch.concat([{
+      type: 'meta',
+      ...(hit_max_turns ? { hit_max_turns: true } : {}),
+      stop_reason: investigation.stop_reason || null,
+      turns_used: investigation.turns_used ?? null,
+      max_turns: investigation.max_turns ?? null,
+      truncated: !!investigation.truncated,
+      territories_planned: investigation.territories_planned ?? null,
+      territories_covered: investigation.territories_covered ?? null,
+    }]).concat(guardMeta);
 
     await supabase
       .from('bjl_query_jobs')
