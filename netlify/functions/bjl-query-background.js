@@ -110,6 +110,7 @@ function territoryBudgetFor(maxTurns) {
 const PROMPTS = require('./_prompts_bundle.json');
 const {
   runProvenanceGuard,
+  runConnectiveReadGuard,
   buildRetryAllowlistDigest,
 } = require('./bjl-cross-domain-provenance-guard');
 
@@ -522,7 +523,12 @@ async function runInvestigation(triage, prompt, extraContext, opts) {
       if (text) {
         scratch.push({ type: 'final_summary', text });
       }
-      return { scratch, queryCount, stop_reason: 'end_turn', turns_used: turn + 1, max_turns: maxTurns };
+      return {
+        scratch, queryCount, stop_reason: 'end_turn',
+        turns_used: turn + 1, max_turns: maxTurns,
+        territories_planned: plannedTerritories.length,
+        territories_covered: coveredTerritories.size
+      };
     }
 
     if (response.stop_reason === 'tool_use') {
@@ -599,7 +605,9 @@ async function runInvestigation(triage, prompt, extraContext, opts) {
       stop_reason: response.stop_reason || 'unknown',
       turns_used: turn + 1,
       max_turns: maxTurns,
-      truncated: response.stop_reason === 'max_tokens'
+      truncated: response.stop_reason === 'max_tokens',
+      territories_planned: plannedTerritories.length,
+      territories_covered: coveredTerritories.size
     };
   }
 
@@ -614,6 +622,127 @@ async function runInvestigation(triage, prompt, extraContext, opts) {
     max_turns: maxTurns,
     territories_planned: plannedTerritories.length,
     territories_covered: coveredTerritories.size
+  };
+}
+
+// -------------------------------------------------------------------------
+// Stage 2.5: The frame pass (Sonnet 4.6, no tools)
+// -------------------------------------------------------------------------
+// The tool exists to surface a connection somebody could not have reached by
+// thinking hard in a room. The investigation loop gathers well and reports
+// per-query; nobody was looking ACROSS the queries. Measured: across 56
+// thorough jobs there were 891 query entries and 5 final_summary entries —
+// the cross-cutting read that justifies a thorough run was lost 91% of the
+// time, because it was the loop's leftover rather than its point.
+//
+// So this is a separate, guaranteed pass between the loop and the report. It
+// is gated on nothing but "did any query actually return", which means it
+// runs identically on the cap-hit path and the end_turn path. That is the
+// whole design: the frame stops being what happens if the loop has budget
+// left over.
+//
+// Deliberately NOT folded into the synthesizer. The synthesizer is forbidden
+// from reasoning over results — every figure it prints traces to a row, and
+// that constraint is what keeps it honest. A connective read IS reasoning
+// over results, so folding it in would repeal the honesty constraint on the
+// surface where it matters most.
+//
+// Also deliberately NOT a tool the loop must call before exiting. That was
+// the first draft and it re-creates the original bug: it depends on the model
+// choosing to act before a deadline it cannot see.
+async function runFramePass(triage, scratch, extraContext) {
+  const parts = [];
+  if (extraContext && extraContext.strategistContext && String(extraContext.strategistContext).trim()) {
+    parts.push('[STRATEGIST CONTEXT]\n' + String(extraContext.strategistContext).trim());
+  }
+  parts.push('[QUESTION]\n' + (triage.the_question || ''));
+  parts.push(`[EVIDENCE] Investigator scratch (${scratch.length} entries):\n${JSON.stringify(scratch, null, 2)}`);
+  parts.push('Return the JSON object now.');
+  // Guard-retry rules go FIRST, ahead of the question and the evidence, so
+  // the model reads the constraint before the material. Threaded on its own
+  // key rather than folded into strategistContext: the retry is machine
+  // instruction, and filing it under a header that says a human wrote it
+  // would be a lie to the model about where the text came from.
+  if (extraContext && typeof extraContext.__frame_retry_prefix === 'string' && extraContext.__frame_retry_prefix.trim()) {
+    parts.unshift(extraContext.__frame_retry_prefix.trim());
+  }
+
+  const rsp = await anthropic.messages.create({
+    model: SONNET_MODEL,
+    max_tokens: 2048,
+    system: PROMPTS.framePass,
+    messages: [{ role: 'user', content: parts.join('\n\n') }],
+  });
+
+  const rawText = (rsp.content[0] && rsp.content[0].text) ? rsp.content[0].text.trim() : '';
+  const slice = extractJsonObjectSubstring(rawText) || rawText;
+  let parsed;
+  try {
+    parsed = JSON.parse(slice);
+  } catch (e) {
+    // Unparseable is treated as "no read", never as a soft pass. A malformed
+    // frame is exactly the case where guessing at intent would invent one.
+    console.warn('[frame] unparseable frame-pass output, treating as no read:', rawText.slice(0, 300));
+    return { has_read: false, read: null, evidence: [], why_not: null, _parse_failed: true };
+  }
+  return {
+    has_read: parsed.has_read === true,
+    read: typeof parsed.read === 'string' ? parsed.read : null,
+    evidence: Array.isArray(parsed.evidence) ? parsed.evidence : [],
+    why_not: typeof parsed.why_not === 'string' ? parsed.why_not : null,
+  };
+}
+
+// Frame pass + provenance guard, shipped together on purpose. An unguarded
+// frame pass is a confabulation engine pointed at exactly the output a reader
+// most wants to believe: a surprising cross-cutting connection is the claim
+// least likely to be questioned, so it is the one that most needs a check
+// that does not depend on the model's own judgment.
+//
+// Policy mirrors the synthesizer guard — retry once with the failures shown,
+// then drop. Dropping is safe here in a way it is not elsewhere: the read is
+// additive, so a dropped read costs a nice-to-have and a kept-but-wrong read
+// costs the tool its credibility.
+async function runFramePassWithGuard(triage, scratch, extraContext) {
+  const first = await runFramePass(triage, scratch, extraContext);
+  if (!first.has_read) return first;
+
+  const firstPass = runConnectiveReadGuard({ connective_read: first, scratch });
+  if (firstPass.ok) return first;
+
+  console.warn('[frame] provenance failed on first pass. failures:',
+    JSON.stringify(firstPass.failures).slice(0, 800));
+
+  const retryContext = Object.assign({}, extraContext || {}, {
+    __frame_retry_prefix: [
+      'RETRY. Your previous connective read did not verify against the rows that came back. The specific failures were:',
+      JSON.stringify(firstPass.failures, null, 2),
+      '',
+      'Every item_name, score, and n must be copied verbatim from a row in the evidence below. Drop any row you are not certain of.',
+      '',
+      'If dropping leaves you with fewer than two grounded rows, there is no connective read: return has_read false, a null read, and an empty evidence array. That is a correct answer and the run is not worse for it. Do not substitute a different, weaker connection to have something to return.',
+    ].join('\n'),
+  });
+
+  const retry = await runFramePass(triage, scratch, retryContext);
+  if (!retry.has_read) return retry;
+
+  const secondPass = runConnectiveReadGuard({ connective_read: retry, scratch });
+  if (secondPass.ok) return retry;
+
+  console.warn('[frame] provenance failed on retry. dropping the read. failures:',
+    JSON.stringify(secondPass.failures).slice(0, 800));
+
+  // Dropped, and the drop is recorded rather than silent. A frame that failed
+  // twice is a signal worth keeping in scratch: it is the shape of a run where
+  // the model wanted a corner badly enough to reach for one.
+  return {
+    has_read: false,
+    read: null,
+    evidence: [],
+    why_not: null,
+    frame_warning: 'provenance_failed',
+    frame_warning_detail: secondPass.failures,
   };
 }
 
@@ -1415,6 +1544,37 @@ exports.handler = async (event) => {
         confirmation_plan: decomposer.confirmation_plan || '',
         decomposer_warning: decomposer._decomposer_warning || null,
       });
+    }
+
+    // Stage 2.5: The frame pass (guard-wrapped). Runs over the full gathered
+    // picture before the report is written, so the connective read is a
+    // deliberate step rather than whatever the loop had budget left to do.
+    // Gated only on "did any query return" — it fires the same on the cap-hit
+    // path and the end_turn path, which is the point.
+    //
+    // Failure here must never cost the answer. The read is additive; the
+    // report is the deliverable. A thrown frame pass degrades to no read.
+    let connectiveRead = null;
+    if (queryCount > 0 && Array.isArray(scratch)) {
+      try {
+        connectiveRead = await runFramePassWithGuard(triage, scratch, job.extra_context);
+        console.log('[bjl-query-background] frame pass:',
+          'has_read=' + connectiveRead.has_read,
+          'evidence=' + (connectiveRead.evidence || []).length,
+          'warning=' + (connectiveRead.frame_warning || 'none')
+        );
+        scratch.push({
+          type: 'connective_read',
+          has_read: connectiveRead.has_read,
+          read: connectiveRead.read,
+          evidence: connectiveRead.evidence || [],
+          why_not: connectiveRead.why_not,
+          frame_warning: connectiveRead.frame_warning || null,
+          frame_warning_detail: connectiveRead.frame_warning_detail || null,
+        });
+      } catch (frameErr) {
+        console.error('[bjl-query-background] frame pass threw, continuing without it:', frameErr);
+      }
     }
 
     // Stage 3: Synthesis (guard-wrapped). The wrapper runs the provenance

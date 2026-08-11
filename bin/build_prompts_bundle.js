@@ -22,6 +22,7 @@ const SOURCES = {
   triage: 'prompts/triage_prompt.md',
   decomposer: 'prompts/decomposer_prompt_v1.md',
   investigator: 'prompts/investigator_prompt_v3.md',
+  framePass: 'prompts/frame_pass_v1.md',
   synthesizer: 'prompts/synthesizer_prompt_v3.md',
   joyMapSynthesis: 'prompts/joy_map_synthesis.md',
   joyMapAudienceParse: 'prompts/joy_map_audience_parse.md',

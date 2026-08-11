@@ -51,6 +51,19 @@
  *      2. Number provenance: joy_index (1 decimal), n (exact).
  *      3. Source provenance: stat_item.source equals row's source.
  *      4. Single-source rule: every stat_item in a card shares a source.
+ * I) connective_read. The frame pass's cross-cutting claim. Allowlist: the
+ *    same broad card allowlist (any row from any SELECT), deliberately NOT
+ *    the single-source one — a read that does not span sources is not a
+ *    cross-cutting read. Checks:
+ *      1. Two-row minimum: a connection needs two things to connect, so a
+ *         one-row read is a restatement and is rejected as such.
+ *      2. Item provenance: every evidence item_name matches a returned row.
+ *      3. Number provenance: score (1 decimal), n (exact).
+ *      4. Negative-claim hygiene: has_read false must carry no read text and
+ *         no evidence, so "there is no corner" cannot smuggle a claim.
+ *    This surface exists because a fabricated cross-cutting insight is the
+ *    single most dangerous output the tool can produce: it is exactly what
+ *    the reader wants to hear, so it is the least likely to be questioned.
  *
  * Returns { ok, failures } where failures is [] on success and an array of
  * { surface, claim, reason } objects on failure. The caller decides
@@ -1141,6 +1154,126 @@ function runCardsGuard({ cards, scratch }) {
 }
 
 /**
+ * Guard the frame pass's connective read.
+ *
+ * Standalone rather than folded into runProvenanceGuard because the read is
+ * produced by its own pass, before synthesis, and carries its own
+ * retry-once-then-drop policy. Wiring it into the synthesizer's guard would
+ * have coupled two independent failure domains and delayed the check until
+ * after the read had already shaped the report.
+ *
+ * The allowlist is buildCardAllowlist — every row from every SELECT, keyed on
+ * item_name and tagged with an inferred source. That breadth is deliberate:
+ * the read's whole job is to hold findings from different queries together,
+ * so a narrower per-function allowlist would reject exactly the claims worth
+ * making.
+ *
+ * Returns { ok, failures }. The caller decides retry/drop.
+ */
+function runConnectiveReadGuard({ connective_read, scratch }) {
+  const failures = [];
+  const cr = connective_read;
+
+  if (!cr || typeof cr !== 'object') return { ok: true, failures };
+
+  const hasRead = cr.has_read === true;
+  const evidence = Array.isArray(cr.evidence) ? cr.evidence : [];
+  const readText = typeof cr.read === 'string' ? cr.read.trim() : '';
+
+  // Negative-claim hygiene. "There is no corner" is a valid and wanted
+  // outcome, but it must arrive empty-handed. A false read carrying prose or
+  // evidence is a claim wearing a disclaimer, and it would pass unguarded
+  // into the report because nothing downstream inspects a negative result.
+  if (!hasRead) {
+    if (readText) {
+      failures.push({
+        surface: 'connective_read',
+        claim: { read: readText.slice(0, 200) },
+        reason: 'negative_read_carries_text',
+        detail: 'has_read is false but read is non-empty. A no-corner result must not carry a claim.',
+      });
+    }
+    if (evidence.length > 0) {
+      failures.push({
+        surface: 'connective_read',
+        claim: { evidence_count: evidence.length },
+        reason: 'negative_read_carries_evidence',
+      });
+    }
+    return { ok: failures.length === 0, failures };
+  }
+
+  if (!readText) {
+    failures.push({ surface: 'connective_read', claim: null, reason: 'read_text_missing' });
+  }
+
+  // Two-row minimum. A connection needs two things to connect; a single-row
+  // "read" is a restatement of one query, which is the report writer's job
+  // and not this pass's. Enforced in JS because the prompt asking for it is
+  // exactly the kind of instruction a model satisfies in spirit and not in
+  // fact.
+  if (evidence.length < 2) {
+    failures.push({
+      surface: 'connective_read',
+      claim: { evidence_count: evidence.length },
+      reason: 'connective_read_insufficient_evidence',
+      detail: 'A connective read must cite at least two rows. One row is a restatement, not a connection.',
+    });
+  }
+
+  const itemIndex = buildCardAllowlist(scratch);
+
+  // Nothing came back at all. Any grounded claim in this state is off-source
+  // by definition.
+  if (itemIndex.size === 0 && evidence.length > 0) {
+    failures.push({
+      surface: 'connective_read',
+      claim: null,
+      reason: 'connective_read_no_allowlist',
+      detail: 'Scratch produced no item rows, so no evidence entry can be grounded.',
+    });
+    return { ok: false, failures };
+  }
+
+  for (const e of evidence) {
+    if (!e || typeof e !== 'object' || typeof e.item_name !== 'string') {
+      failures.push({ surface: 'connective_read', claim: e, reason: 'malformed_evidence_entry' });
+      continue;
+    }
+
+    const bucket = itemIndex.get(normalizeItemName(e.item_name));
+    if (!bucket || bucket.length === 0) {
+      failures.push({
+        surface: 'connective_read',
+        claim: { item_name: e.item_name },
+        reason: 'connective_read_item_not_in_allowlist',
+      });
+      continue;
+    }
+
+    // A row matches when BOTH numbers line up. Checking them jointly, rather
+    // than each against any row, stops a score from one row pairing with an n
+    // from another to authorize a figure that no single row ever carried.
+    const claimScore = roundJoy(e.score != null ? e.score : e.joy_index);
+    const claimN = toInt(e.n);
+    const matched = bucket.some(row =>
+      (claimScore === null || row.joy_index === claimScore) &&
+      (claimN === null || row.n === claimN)
+    );
+    if (!matched) {
+      failures.push({
+        surface: 'connective_read',
+        claim: { item_name: e.item_name, score: e.score, n: e.n },
+        reason: 'connective_read_number_mismatch',
+        detail: bucket.slice(0, 4),
+      });
+    }
+  }
+
+  return { ok: failures.length === 0, failures };
+}
+
+/**
  * Build a compact allowlist digest the synthesizer can be shown on retry.
  * Groups the returned rows into a shape the model can reproduce verbatim:
  * threads (by thread_tag) with their members and exact numbers. Used only
@@ -1213,6 +1346,7 @@ function buildRetryAllowlistDigest(scratch) {
 module.exports = {
   runProvenanceGuard,
   runCrossDomainProvenanceGuard,   // back-compat alias
+  runConnectiveReadGuard,
   buildRetryAllowlistDigest,
   buildCardAllowlist,
   buildSignatureAllowlist,
