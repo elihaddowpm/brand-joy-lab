@@ -65,6 +65,17 @@
  *    single most dangerous output the tool can produce: it is exactly what
  *    the reader wants to hear, so it is the least likely to be questioned.
  *
+ * Number matching on (H) and (I) is same-row, any-column. Both surfaces read
+ * rows produced by free-form investigator SQL, which aliases the joy index
+ * however the query reads best -- `ji`, `avg_ji`, `mean_score`. Matching on
+ * named columns meant those rows parsed to a null score, which (I) treated as
+ * a mismatch and rejected correct claims on, and (H) treated as agreement and
+ * so stopped checking scores on entirely. Same-row is the property that
+ * matters and is kept: a score and an n must come from ONE returned row, in
+ * different fields, so neither can be spliced in from another row. The cost
+ * is that a wide row offers more surface for a coincidental match. That cost
+ * is accepted; the column-name assumption free-form SQL cannot honor is not.
+ *
  * Returns { ok, failures } where failures is [] on success and an array of
  * { surface, claim, reason } objects on failure. The caller decides
  * retry/drop policy.
@@ -96,6 +107,80 @@ function toInt(x) {
   const n = Number(x);
   if (!Number.isFinite(n)) return null;
   return Math.trunc(n);
+}
+
+/**
+ * Every numeric value a returned row carried, paired with the field it came
+ * from.
+ *
+ * The investigator writes its own SQL and aliases the joy index however the
+ * query reads best -- `ji`, `avg_ji`, `mean_score`. A guard that looks only
+ * at `score` / `joy_index` / `audience_score` therefore cannot see the
+ * number on most rows, records it as null, and rejects claims that copied it
+ * correctly. Recording the whole numeric surface of the row lets a claim
+ * verify against the row it actually came from without the guard having to
+ * guess what the column was called.
+ *
+ * Postgres numerics arrive as strings over JSON, so a string is accepted
+ * only when it is wholly a number -- '2024-01-01' and 'Gen X' stay out.
+ * Booleans are excluded so `true` cannot pass for 1.
+ */
+function numericFields(row) {
+  const out = [];
+  if (!row || typeof row !== 'object') return out;
+  for (const field of Object.keys(row)) {
+    const raw = row[field];
+    if (raw === null || raw === undefined) continue;
+    if (typeof raw === 'string') {
+      if (!/^-?\d+(\.\d+)?$/.test(raw.trim())) continue;
+    } else if (typeof raw !== 'number') {
+      continue;
+    }
+    const num = Number(raw);
+    if (!Number.isFinite(num)) continue;
+    out.push({ field, num });
+  }
+  return out;
+}
+
+/**
+ * Does a single allowlist row carry both claimed numbers?
+ *
+ * The property worth keeping is that the score and the n came from the SAME
+ * returned row. That is the anti-splice latch: it stops a score from one row
+ * pairing with an n from another to authorize a figure no row ever carried.
+ *
+ * The property not worth keeping is the assumption that the score lives in a
+ * column named `score`, `joy_index` or `audience_score`. Free-form SQL
+ * cannot honor that, and asking the investigator to alias canonically is a
+ * request, not a latch.
+ *
+ * So the check is same-row, any-column, with the score and the n required to
+ * come from DIFFERENT fields so one value cannot stand in for both. A wide
+ * row gives more surface for a coincidental match: that is the real cost of
+ * this design, and it is accepted deliberately, because the alternative it
+ * replaces was rejecting correct numbers on most rows.
+ *
+ * Returns { ok, joyFound, nFound } so a caller can attribute a failure to
+ * the specific number that is absent rather than reporting a bare mismatch.
+ */
+function rowCarriesNumbers(row, claimJoy, claimN) {
+  const values = Array.isArray(row && row.values) ? row.values : [];
+
+  const joyFields = claimJoy === null ? null
+    : values.filter(v => roundJoy(v.num) === claimJoy).map(v => v.field);
+  const nFields = claimN === null ? null
+    : values.filter(v => v.num === claimN).map(v => v.field);
+
+  const joyFound = joyFields === null || joyFields.length > 0;
+  const nFound   = nFields   === null || nFields.length > 0;
+  if (!joyFound || !nFound) return { ok: false, joyFound, nFound };
+
+  // Only one number was claimed, so there is no pairing to police.
+  if (joyFields === null || nFields === null) return { ok: true, joyFound, nFound };
+
+  const distinct = joyFields.some(f => nFields.some(g => g !== f));
+  return { ok: distinct, joyFound, nFound };
 }
 
 /**
@@ -232,6 +317,10 @@ function buildCardAllowlist(scratch) {
         n:         toInt(nValue),
         source,
         construct: typeof row.construct === 'string' ? row.construct : null,
+        // The row's full numeric surface, so a claim can verify against an
+        // aliased score column. joy_index and n above stay for the failure
+        // detail a human reads; `values` is what the match runs against.
+        values:    numericFields(row),
       });
       itemIndex.set(key, bucket);
     }
@@ -1089,43 +1178,78 @@ function runCardsGuard({ cards, scratch }) {
       // must match too when both sides provide one (bjl_scores rows have
       // no construct; v2 rows do). Multiple rows can exist per item;
       // accept the stat item if any row agrees.
+      //
+      // The numbers are matched same-row, any-column. Reading them from
+      // named columns meant an aliased score column parsed to null, and the
+      // null was treated as agreement -- so the score check silently stopped
+      // running on any row whose SQL did not spell the column `score`.
       let matched = false;
+      // Whether ANY row in the bucket satisfied each dimension on its own. An
+      // item can legitimately have several rows, so a row that failed on the
+      // score is not evidence the score is wrong when a different row carried
+      // it. Attributing the failure to a dimension no row satisfied keeps the
+      // reported reason pointed at the thing that is actually wrong, which
+      // matters because the reason is what a retry is sent after.
+      let anyNums = false, anySource = false, anyConstruct = false;
       let closest = { joy: null, n: null, source: null, construct: null };
       for (const row of bucket) {
-        const joyOk       = claimJoy === null || row.joy_index === null || claimJoy === row.joy_index;
-        const nOk         = claimN === null || row.n === null || claimN === row.n;
+        const nums        = rowCarriesNumbers(row, claimJoy, claimN);
         const sourceOk    = claimSource === null || claimSource === row.source;
         const constructOk = claimConstruct === null || row.construct === null || claimConstruct === (row.construct || '').toLowerCase();
-        if (joyOk && nOk && sourceOk && constructOk) { matched = true; break; }
-        if (!joyOk       && closest.joy       === null) closest.joy       = { claim: claimJoy, allowlist: row.joy_index };
-        if (!nOk         && closest.n         === null) closest.n         = { claim: claimN, allowlist: row.n };
+        if (nums.ok && sourceOk && constructOk) { matched = true; break; }
+        if (nums.ok)     anyNums = true;
+        if (sourceOk)    anySource = true;
+        if (constructOk) anyConstruct = true;
+        const rowNums = (row.values || []).map(v => v.field + '=' + v.num).join(', ');
+        if (!nums.joyFound && closest.joy       === null) closest.joy       = { claim: claimJoy, row_numbers: rowNums };
+        if (!nums.nFound   && closest.n         === null) closest.n         = { claim: claimN, row_numbers: rowNums };
+        // Both numbers appear but only as the same single field, so the row
+        // cannot supply a distinct score and n. Report it against the score.
+        if (nums.joyFound && nums.nFound && !nums.ok && closest.joy === null) {
+          closest.joy = { claim: claimJoy, row_numbers: rowNums, note: 'score and n resolve to the same field' };
+        }
         if (!sourceOk    && closest.source    === null) closest.source    = { claim: claimSource, allowlist: row.source };
         if (!constructOk && closest.construct === null) closest.construct = { claim: claimConstruct, allowlist: row.construct };
       }
       if (!matched) {
-        if (closest.joy) {
+        const baseClaim = { card_index: ci, item_name: s.item_name };
+        if (!anyNums && closest.joy) {
           failures.push({
-            claim: { card_index: ci, item_name: s.item_name, score: claimScoreRaw },
+            claim: Object.assign({}, baseClaim, { score: claimScoreRaw }),
             reason: 'card_score_mismatch',
             detail: closest.joy,
           });
-        } else if (closest.n) {
+        } else if (!anyNums && closest.n) {
           failures.push({
-            claim: { card_index: ci, item_name: s.item_name, n: s.n },
+            claim: Object.assign({}, baseClaim, { n: s.n }),
             reason: 'card_n_mismatch',
             detail: closest.n,
           });
-        } else if (closest.source) {
+        } else if (!anySource && closest.source) {
           failures.push({
-            claim: { card_index: ci, item_name: s.item_name, source: s.source },
+            claim: Object.assign({}, baseClaim, { source: s.source }),
             reason: 'card_source_mismatch',
             detail: closest.source,
           });
-        } else if (closest.construct) {
+        } else if (!anyConstruct && closest.construct) {
           failures.push({
-            claim: { card_index: ci, item_name: s.item_name, construct: s.construct },
+            claim: Object.assign({}, baseClaim, { construct: s.construct }),
             reason: 'card_construct_mismatch',
             detail: closest.construct,
+          });
+        } else {
+          // Every dimension was satisfied by some row, but never by one row
+          // together. That is a claim assembled out of parts of several rows,
+          // which is exactly what same-row matching exists to catch, and it
+          // deserves its own name rather than being filed under whichever
+          // single field happened to be checked first.
+          failures.push({
+            claim: Object.assign({}, baseClaim, { score: claimScoreRaw, n: s.n, source: s.source }),
+            reason: 'card_no_single_row_match',
+            detail: bucket.slice(0, 4).map(row => ({
+              source: row.source,
+              numbers: (row.values || []).map(v => v.field + '=' + v.num).join(', '),
+            })),
           });
         }
       }
@@ -1251,21 +1375,26 @@ function runConnectiveReadGuard({ connective_read, scratch }) {
       continue;
     }
 
-    // A row matches when BOTH numbers line up. Checking them jointly, rather
-    // than each against any row, stops a score from one row pairing with an n
-    // from another to authorize a figure that no single row ever carried.
+    // A row matches when BOTH numbers line up on that ONE row. Checking them
+    // jointly, rather than each against any row, stops a score from one row
+    // pairing with an n from another to authorize a figure that no single row
+    // ever carried. Which column held them is not checked -- see
+    // rowCarriesNumbers.
     const claimScore = roundJoy(e.score != null ? e.score : e.joy_index);
     const claimN = toInt(e.n);
-    const matched = bucket.some(row =>
-      (claimScore === null || row.joy_index === claimScore) &&
-      (claimN === null || row.n === claimN)
-    );
+    const matched = bucket.some(row => rowCarriesNumbers(row, claimScore, claimN).ok);
     if (!matched) {
       failures.push({
         surface: 'connective_read',
         claim: { item_name: e.item_name, score: e.score, n: e.n },
         reason: 'connective_read_number_mismatch',
-        detail: bucket.slice(0, 4),
+        // The numbers each candidate row actually carried, so a retry can
+        // read the correct values off the failure rather than guess at them.
+        detail: bucket.slice(0, 4).map(row => {
+          const nums = {};
+          for (const v of (row.values || [])) nums[v.field] = v.num;
+          return nums;
+        }),
       });
     }
   }
@@ -1359,4 +1488,6 @@ module.exports = {
   roundJoy,
   buildAllowlist,
   inferSourceTable,
+  numericFields,
+  rowCarriesNumbers,
 };

@@ -703,12 +703,25 @@ async function runFramePass(triage, scratch, extraContext) {
 // then drop. Dropping is safe here in a way it is not elsewhere: the read is
 // additive, so a dropped read costs a nice-to-have and a kept-but-wrong read
 // costs the tool its credibility.
+//
+// Every exit sets `frame_outcome`. Five different things produce a frame with
+// no read on it, and they mean opposite things about the run: "the data had no
+// corner" is the system working, "the model reached for one and the rows did
+// not back it" is the system catching itself, and "the output would not parse"
+// is a bug. Collapsing them into a bare has_read:false makes the has_read rate
+// unreadable in exactly the way a truncated run reporting a graceful stop made
+// the cap-hit rate unreadable, so each state is named at the point it happens
+// and the name reaches the scratch entry.
 async function runFramePassWithGuard(triage, scratch, extraContext) {
   const first = await runFramePass(triage, scratch, extraContext);
-  if (!first.has_read) return first;
+  if (!first.has_read) {
+    return Object.assign({}, first, first._parse_failed
+      ? { frame_outcome: 'parse_failed', frame_warning: 'parse_failed' }
+      : { frame_outcome: 'no_corner', frame_warning: null });
+  }
 
   const firstPass = runConnectiveReadGuard({ connective_read: first, scratch });
-  if (firstPass.ok) return first;
+  if (firstPass.ok) return Object.assign({}, first, { frame_outcome: 'read', frame_warning: null });
 
   console.warn('[frame] provenance failed on first pass. failures:',
     JSON.stringify(firstPass.failures).slice(0, 800));
@@ -718,17 +731,33 @@ async function runFramePassWithGuard(triage, scratch, extraContext) {
       'RETRY. Your previous connective read did not verify against the rows that came back. The specific failures were:',
       JSON.stringify(firstPass.failures, null, 2),
       '',
-      'Every item_name, score, and n must be copied verbatim from a row in the evidence below. Drop any row you are not certain of.',
+      'Read that carefully: it names which item and which number did not line up, and where a number was involved it lists the numbers the candidate rows actually carried.',
       '',
-      'If dropping leaves you with fewer than two grounded rows, there is no connective read: return has_read false, a null read, and an empty evidence array. That is a correct answer and the run is not worse for it. Do not substitute a different, weaker connection to have something to return.',
+      'The check is not a judgment call and it is not unpredictable. It compares your evidence against the rows in the payload below, and the rows are right there. An item_name must match a row character for character. A score and an n must both come from the SAME row. Nothing is being asked of you that the payload does not already contain — go back to the row, read the numbers off it, and copy them exactly.',
+      '',
+      'If your read was right and you simply mis-transcribed a figure, fix the figure and keep the read. Do not abandon a real connection because a number was wrong; correct the number. Uncertainty about whether a value will pass is not a reason to withhold a read — look the value up and remove the uncertainty.',
+      '',
+      'Drop a row only when you genuinely cannot find it in the payload. If dropping leaves fewer than two grounded rows, return has_read false with a null read and an empty evidence array — but reach that by looking, not by declining to look. And do not substitute a different, weaker connection to have something to return.',
     ].join('\n'),
   });
 
   const retry = await runFramePass(triage, scratch, retryContext);
-  if (!retry.has_read) return retry;
+  if (!retry.has_read) {
+    // Not the same as "no corner". The model had a read and gave it up after
+    // the guard pushed back, which is either the guard working or the guard
+    // false-positiving, and the two are only distinguishable if this state is
+    // named. The first-pass failures ride along as the diagnosis.
+    return Object.assign({}, retry, retry._parse_failed
+      ? { frame_outcome: 'parse_failed_on_retry', frame_warning: 'parse_failed' }
+      : {
+          frame_outcome: 'declined_after_guard_failure',
+          frame_warning: 'declined_after_guard_failure',
+          frame_warning_detail: firstPass.failures,
+        });
+  }
 
   const secondPass = runConnectiveReadGuard({ connective_read: retry, scratch });
-  if (secondPass.ok) return retry;
+  if (secondPass.ok) return Object.assign({}, retry, { frame_outcome: 'read', frame_warning: null });
 
   console.warn('[frame] provenance failed on retry. dropping the read. failures:',
     JSON.stringify(secondPass.failures).slice(0, 800));
@@ -741,6 +770,7 @@ async function runFramePassWithGuard(triage, scratch, extraContext) {
     read: null,
     evidence: [],
     why_not: null,
+    frame_outcome: 'dropped_provenance_failed',
     frame_warning: 'provenance_failed',
     frame_warning_detail: secondPass.failures,
   };
@@ -1560,12 +1590,17 @@ exports.handler = async (event) => {
         connectiveRead = await runFramePassWithGuard(triage, scratch, job.extra_context);
         console.log('[bjl-query-background] frame pass:',
           'has_read=' + connectiveRead.has_read,
+          'outcome=' + (connectiveRead.frame_outcome || 'unknown'),
           'evidence=' + (connectiveRead.evidence || []).length,
           'warning=' + (connectiveRead.frame_warning || 'none')
         );
         scratch.push({
           type: 'connective_read',
           has_read: connectiveRead.has_read,
+          // Which of the five outcomes this was. has_read alone cannot tell a
+          // genuine "no corner" from a declined retry or a parse failure, and
+          // the rate is only interpretable if they are told apart.
+          frame_outcome: connectiveRead.frame_outcome || 'unknown',
           read: connectiveRead.read,
           evidence: connectiveRead.evidence || [],
           why_not: connectiveRead.why_not,
