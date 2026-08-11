@@ -150,6 +150,47 @@ check('cards: wrong source still rejected',
     .some(f => f.reason === 'card_source_mismatch'));
 
 // ---------------------------------------------------------------------------
+// Cut queries. These group by a cut and never select item_name, so the rows
+// identify no item -- but the query pinned one in its own WHERE clause. These
+// are the real rows behind job 7e3ad9fc's theme-park income card, which was
+// a correct citation the allowlist could not see.
+// ---------------------------------------------------------------------------
+const CUT = [{
+  type: 'query',
+  query: "SELECT p.income_bracket, COUNT(*) AS n, ROUND(AVG(r.joy_index)::numeric,1) AS ji "
+       + "FROM bjl_responses r JOIN bjl_respondents p ON p.respondent_id = r.respondent_id "
+       + "JOIN bjl_items i ON i.item_id = r.item_id "
+       + "WHERE i.item_name = 'Visiting a THEME PARK or amusement park' GROUP BY 1",
+  result: [
+    { income_bracket: '$150,000 to $199,999', n: 323,  ji: 63.7 },
+    { income_bracket: 'Less than $25,000',    n: 1096, ji: 51.9 },
+  ],
+}];
+const PARK = 'Visiting a THEME PARK or amusement park';
+
+check('cut query: rows inherit the item the WHERE clause pinned',
+  cardStats({ item_name: PARK, score: 63.7, n: 323, source: 'bjl_responses' }, CUT).length === 0);
+
+check('cut query: a fabricated number on an inherited row is still rejected',
+  cardStats({ item_name: PARK, score: 77.7, n: 323, source: 'bjl_responses' }, CUT)
+    .some(f => f.reason === 'card_score_mismatch'));
+
+check('cut query: splicing across two cuts is still rejected',
+  cardStats({ item_name: PARK, score: 63.7, n: 1096, source: 'bjl_responses' }, CUT)
+    .some(f => f.reason === 'card_score_mismatch' || f.reason === 'card_no_single_row_match'));
+
+// Ambiguous pins must NOT be inherited: several items named, rows identifying
+// none, so no row can be said to belong to any one of them.
+check('cut query: a multi-item WHERE clause confers no provenance',
+  cardStats({ item_name: PARK, score: 63.7, n: 323, source: 'bjl_responses' }, [{
+    type: 'query',
+    query: "SELECT p.income_bracket, COUNT(*) AS n, ROUND(AVG(r.joy_index)::numeric,1) AS ji "
+         + "FROM bjl_responses r WHERE i.item_name IN ('Visiting a THEME PARK or amusement park', "
+         + "'Listening to LIVE MUSIC') GROUP BY 1",
+    result: [{ income_bracket: '$150,000 to $199,999', n: 323, ji: 63.7 }],
+  }]).some(f => f.reason === 'no_scratch_rows_for_cards' || f.reason === 'card_item_not_in_allowlist'));
+
+// ---------------------------------------------------------------------------
 const failed = results.filter(r => !r[1]);
 for (const [name, ok] of results) console.log((ok ? '  PASS  ' : '  FAIL  ') + name);
 console.log('\n' + (results.length - failed.length) + '/' + results.length + ' assertions passed');

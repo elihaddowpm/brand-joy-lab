@@ -280,6 +280,36 @@ function inferSourceTable(sql) {
 }
 
 /**
+ * The item a query pinned in its own WHERE clause, when it pinned exactly
+ * one.
+ *
+ * A cut query -- theme-park joy by income bracket, live music by generation
+ * -- groups by the cut and never selects item_name, so its rows carry no item
+ * at all and the allowlist cannot see them. The item is not missing, though:
+ * the query named it in `WHERE i.item_name = '...'`. Reading it from there
+ * gives those rows the provenance they always had.
+ *
+ * Exactly one is required. A query pinning several items and returning rows
+ * that identify none of them cannot say which row belongs to which item, and
+ * attributing every row to every pinned name would invent provenance rather
+ * than recover it.
+ */
+function pinnedItemName(sql) {
+  if (typeof sql !== 'string') return null;
+  const names = new Set();
+  const eq = /\bitem_name\s*=\s*'((?:[^']|'')*)'/gi;
+  let m;
+  while ((m = eq.exec(sql)) !== null) names.add(m[1].replace(/''/g, "'"));
+  const list = /\bitem_name\s*(?:=\s*any\s*\(\s*array\s*\[|in\s*\()([^)\]]*)/gi;
+  while ((m = list.exec(sql)) !== null) {
+    const lit = /'((?:[^']|'')*)'/g;
+    let l;
+    while ((l = lit.exec(m[1])) !== null) names.add(l[1].replace(/''/g, "'"));
+  }
+  return names.size === 1 ? Array.from(names)[0] : null;
+}
+
+/**
  * Build the card allowlist from investigator scratch. Broader than the
  * threads allowlist: indexes every row from any SELECT with an item_name,
  * tagged with the source table inferred from the query's FROM clause.
@@ -297,12 +327,16 @@ function buildCardAllowlist(scratch) {
                  : '';
     const source = inferSourceTable(rawSql);
     if (!source) continue;
+    const pinned = pinnedItemName(rawSql);
     const rows = Array.isArray(entry.result) ? entry.result
                : Array.isArray(entry.rows)   ? entry.rows
                : [];
     for (const row of rows) {
       if (!row || typeof row !== 'object') continue;
-      const key = normalizeItemName(row.item_name);
+      // A row that names its own item wins. A row that names none inherits
+      // the item its query pinned in the WHERE clause, which is how cut
+      // queries (by generation, by income bracket) get provenance at all.
+      const key = normalizeItemName(row.item_name || pinned);
       if (!key) continue;
       // v2 rows use `score`; v1/legacy rows use `joy_index`. Also accept
       // `audience_score` when the row comes from bjl_audience_affinity(_v2),
