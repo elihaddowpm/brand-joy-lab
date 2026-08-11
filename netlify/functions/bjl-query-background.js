@@ -689,6 +689,10 @@ async function runFramePass(triage, scratch, extraContext) {
     has_read: parsed.has_read === true,
     read: typeof parsed.read === 'string' ? parsed.read : null,
     evidence: Array.isArray(parsed.evidence) ? parsed.evidence : [],
+    // The full sets behind any comparative wording in the read. Absent is not
+    // the same as empty here: a read with a superlative in it and no
+    // comparisons fails the guard, which is the point.
+    comparisons: Array.isArray(parsed.comparisons) ? parsed.comparisons : [],
     why_not: typeof parsed.why_not === 'string' ? parsed.why_not : null,
   };
 }
@@ -734,6 +738,8 @@ async function runFramePassWithGuard(triage, scratch, extraContext) {
       'Read that carefully: it names which item and which number did not line up, and where a number was involved it lists the numbers the candidate rows actually carried.',
       '',
       'The check is not a judgment call and it is not unpredictable. It compares your evidence against the rows in the payload below, and the rows are right there. An item_name must match a row character for character. A score and an n must both come from the SAME row. Nothing is being asked of you that the payload does not already contain — go back to the row, read the numbers off it, and copy them exactly.',
+      '',
+      'If the failure is about a comparison — an ordering, an incomplete set, an undisclosed base — the fix is one of exactly two things. Either carry the whole set: every row the result returned, each with its label and its numbers, so the ranking can be recomputed. Or drop the comparative wording and state what you actually verified. "Playful separates them by 34 points" needs no set. "Playful is the largest gap" needs all of them. The second sentence is not worth more than the first if it is not true.',
       '',
       'If your read was right and you simply mis-transcribed a figure, fix the figure and keep the read. Do not abandon a real connection because a number was wrong; correct the number. Uncertainty about whether a value will pass is not a reason to withhold a read — look the value up and remove the uncertainty.',
       '',
@@ -1603,6 +1609,9 @@ exports.handler = async (event) => {
           frame_outcome: connectiveRead.frame_outcome || 'unknown',
           read: connectiveRead.read,
           evidence: connectiveRead.evidence || [],
+          // The sets behind any ranking in the read, kept so a hand-read can
+          // check the ordering the guard checked instead of re-deriving it.
+          comparisons: connectiveRead.comparisons || [],
           why_not: connectiveRead.why_not,
           frame_warning: connectiveRead.frame_warning || null,
           frame_warning_detail: connectiveRead.frame_warning_detail || null,

@@ -61,6 +61,10 @@
  *      3. Number provenance: score (1 decimal), n (exact).
  *      4. Negative-claim hygiene: has_read false must carry no read text and
  *         no evidence, so "there is no corner" cannot smuggle a claim.
+ *      5. Comparative provenance: any comparative or superlative wording in
+ *         the read must be backed by a `comparisons` entry that carries the
+ *         WHOLE set it ranks over, and the guard recomputes the ordering
+ *         itself. See checkComparison.
  *    This surface exists because a fabricated cross-cutting insight is the
  *    single most dangerous output the tool can produce: it is exactly what
  *    the reader wants to hear, so it is the least likely to be questioned.
@@ -1311,6 +1315,317 @@ function runCardsGuard({ cards, scratch }) {
   return failures;
 }
 
+// ---------------------------------------------------------------------------
+// Comparative and superlative claims.
+//
+// The frame pass's first verified read said "the largest gap across all 14
+// modes is playful ... a 34-point spread". Every number in it was real and
+// traced to a row. Playful's gap really is 34. The read was still false:
+// hedonic's gap is 39.8. The ORDERING was the lie, and no amount of number
+// checking reaches it, because 34 is a true number.
+//
+// This is structural rather than incidental. The around-the-corner insight the
+// tool exists to produce IS a superlative -- "the surprising thing is that X
+// matters most" is the shape of nearly every read worth having. So the tool's
+// most valuable output and its most dangerous failure are the same sentence,
+// and they are not separable by checking numerals. Only recomputing the
+// ordering separates them.
+//
+// So a comparative claim must carry the whole set it ranks over, and the guard
+// does the ranking itself. "Largest of 14" requires all 14 members present;
+// the guard confirms the named one is actually the maximum, or the claim
+// cannot be made. When the set cannot be carried, the fallback is to downgrade
+// to a non-comparative statement -- say the smaller true thing rather than
+// assert an unbacked ranking.
+//
+// THE BOUNDARY, stated because it is real and this guard does not reach past
+// it: orderings can only be checked over rows that came back. This verifies
+// "largest of these 14 gathered modes". It cannot verify "the strongest
+// divergence in the corpus" when the corpus was never scanned. A comparative
+// claim over an ungathered set is forbidden by the prompt, not by this code,
+// and past that line only a hand-read catches it.
+// ---------------------------------------------------------------------------
+
+// Wording that asserts a relationship between quantities rather than reporting
+// one. Deliberately wide: an over-trigger costs a downgrade to a plainer true
+// sentence, an under-trigger ships an unchecked ranking. Relational words like
+// `identical` and `parity` are in here on purpose -- calling 67.4 and 70.1
+// "parity" is a claim about a relationship the numbers do not support, and it
+// deserves exactly the scrutiny "largest" gets.
+const COMPARATIVE_TERMS = [
+  'largest', 'biggest', 'smallest', 'highest', 'lowest', 'greatest', 'strongest',
+  'weakest', 'widest', 'narrowest', 'steepest', 'sharpest', 'maximum', 'minimum',
+  'most', 'least', 'top', 'peak', 'no other', 'nothing else', 'above all',
+  'larger', 'bigger', 'smaller', 'higher', 'lower', 'greater', 'stronger',
+  'weaker', 'wider', 'narrower', 'steeper', 'sharper',
+  'more than', 'less than', 'fewer than', 'outpaces', 'outstrips', 'outperforms',
+  'dominates', 'dwarfs', 'double', 'triple', 'twice', 'half as',
+  'identical', 'parity', 'indistinguishable', 'on par', 'equally', 'the same as',
+  'as high as', 'as low as', 'matched', 'flat across', 'no difference',
+];
+const COMPARATIVE_RE = new RegExp('\\b(' + COMPARATIVE_TERMS.join('|') + ')\\b', 'i');
+
+const COMPARISON_DIRECTIONS = new Set(['max', 'min', 'greater', 'less', 'equal']);
+
+// Every returned SELECT, with each row's numeric surface precomputed. A
+// comparison's set has to live inside ONE of these results: that is what makes
+// "the whole set" a checkable statement rather than an assertion.
+function collectQueryResults(scratch) {
+  const out = [];
+  for (const entry of (Array.isArray(scratch) ? scratch : [])) {
+    if (!entry || typeof entry !== 'object' || entry.type !== 'query') continue;
+    const rows = (Array.isArray(entry.result) ? entry.result : [])
+      .filter(r => r && typeof r === 'object')
+      .map(r => ({ raw: r, values: numericFields(r) }));
+    if (rows.length) out.push({ query: typeof entry.query === 'string' ? entry.query : '', rows });
+  }
+  return out;
+}
+
+// Does one row carry all of these numbers, in distinct fields? Distinct so a
+// single column cannot supply both halves of a difference -- the same
+// anti-splice property rowCarriesNumbers enforces, applied to set members.
+// Greedy assignment, which can only ever be stricter than optimal, and strict
+// is the safe direction here.
+function rowCarriesValues(row, nums) {
+  const used = new Set();
+  for (const x of nums) {
+    const target = roundJoy(x);
+    const hit = (row.values || []).find(v => !used.has(v.field) && roundJoy(v.num) === target);
+    if (!hit) return false;
+    used.add(hit.field);
+  }
+  return true;
+}
+
+// Every numeral that appears in a piece of prose, as numbers. Used to check
+// that a disclosed base actually reaches the reader instead of only the guard.
+function proseNumerals(text) {
+  const out = new Set();
+  for (const m of String(text || '').match(/\d+(?:\.\d+)?/g) || []) out.add(Number(m));
+  return out;
+}
+
+// A member's value is either read straight off a row or is the plain
+// difference between two numbers read off one row. That is the same arithmetic
+// the read itself is licensed to do, and no more: no ratios, no modelled
+// figures, no shares of a population nobody counted.
+function comparisonMemberValue(m) {
+  const from = (Array.isArray(m.from) && m.from.length) ? m.from : [m.value];
+  const nums = from.map(Number);
+  if (!nums.length || nums.some(x => !Number.isFinite(x))) return null;
+  if (nums.length === 1) return { value: roundJoy(nums[0]), from: nums };
+  if (nums.length === 2) return { value: roundJoy(Math.abs(nums[0] - nums[1])), from: nums };
+  return null;
+}
+
+/**
+ * Check one comparative claim against the returned rows.
+ *
+ * Four things have to hold, and they are ordered so a failure names the
+ * earliest thing that broke rather than a downstream symptom:
+ *
+ *   1. The claim is quoted from the read, so the structured object cannot back
+ *      a sentence the reader never sees.
+ *   2. Every member's numbers came off a returned row, and each member stands
+ *      on its OWN row.
+ *   3. A superlative's set covers its home result completely. A set that ranks
+ *      three of fourteen rows is a ranking of a hand-picked slice, which is how
+ *      a true number ends up carrying a false superlative. Pairwise claims are
+ *      exempt: they quantify over their two members and nothing else.
+ *   4. The ordering, recomputed here. This is the check the whole thing is for.
+ *
+ * Returns an array of failure objects.
+ */
+function checkComparison(cmp, results, readText, ci) {
+  const failures = [];
+  const at = { comparison_index: ci, claim: (cmp && cmp.claim) || null };
+  const fail = (reason, detail) => {
+    failures.push({ surface: 'connective_read', claim: at, reason, detail });
+    return failures;
+  };
+
+  if (!cmp || typeof cmp !== 'object') return fail('malformed_comparison', 'Not an object.');
+
+  const direction = typeof cmp.direction === 'string' ? cmp.direction.toLowerCase() : null;
+  if (!COMPARISON_DIRECTIONS.has(direction)) {
+    return fail('malformed_comparison',
+      'direction must be one of max, min, greater, less, equal. Got: ' + JSON.stringify(cmp.direction));
+  }
+  if (typeof cmp.subject !== 'string' || !cmp.subject.trim()) {
+    return fail('malformed_comparison', 'subject must name the member the claim is about.');
+  }
+  const needsAgainst = direction === 'greater' || direction === 'less' || direction === 'equal';
+  if (needsAgainst && (typeof cmp.against !== 'string' || !cmp.against.trim())) {
+    return fail('malformed_comparison', 'direction ' + direction + ' requires `against` naming the other member.');
+  }
+
+  // 1. The prose this backs must actually be in the read.
+  const flat = s => String(s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  if (typeof cmp.claim !== 'string' || !cmp.claim.trim()) {
+    return fail('malformed_comparison', 'claim must quote the clause of the read this backs.');
+  }
+  if (!flat(readText).includes(flat(cmp.claim))) {
+    return fail('comparison_claim_not_in_read',
+      'The quoted claim does not appear in the read. A comparison must back a sentence the reader actually gets.');
+  }
+
+  const set = Array.isArray(cmp.set) ? cmp.set : [];
+  if (set.length < 2) {
+    return fail('comparison_set_too_small', 'A comparison needs at least two members. Got ' + set.length + '.');
+  }
+
+  const members = [];
+  for (const m of set) {
+    if (!m || typeof m !== 'object' || typeof m.label !== 'string' || !m.label.trim()) {
+      return fail('malformed_comparison', 'Every set member needs a label and a value.');
+    }
+    const resolved = comparisonMemberValue(m);
+    if (!resolved) {
+      return fail('malformed_comparison',
+        'Member ' + m.label + ': value must be a number, or `from` must hold one or two numbers.');
+    }
+    if (roundJoy(m.value) !== resolved.value) {
+      return fail('comparison_value_not_derivable', {
+        member: m.label, stated: m.value, from: resolved.from, difference: resolved.value,
+      });
+    }
+    members.push({ label: m.label, key: normalizeItemName(m.label), value: resolved.value, from: resolved.from });
+  }
+
+  const labels = new Set(members.map(m => m.key));
+  if (labels.size !== members.length) {
+    return fail('malformed_comparison', 'Set members must have distinct labels.');
+  }
+  const subjectKey = normalizeItemName(cmp.subject);
+  if (!labels.has(subjectKey)) {
+    return fail('comparison_subject_not_in_set', 'subject "' + cmp.subject + '" is not one of the set members.');
+  }
+  const againstKey = needsAgainst ? normalizeItemName(cmp.against) : null;
+  if (needsAgainst && !labels.has(againstKey)) {
+    return fail('comparison_subject_not_in_set', 'against "' + cmp.against + '" is not one of the set members.');
+  }
+
+  // 2 + 3. Provenance, and -- for superlatives only -- completeness.
+  //
+  // The two directions need different things. `max` and `min` quantify over a
+  // set ("the largest of the fourteen"), so the set has to BE a returned
+  // result, whole: ranking three of fourteen rows is how a true number ends up
+  // carrying a false superlative. A pairwise `greater` / `less` / `equal`
+  // quantifies over nothing but its two members, so requiring it to drag in
+  // the other twenty-one rows of whatever query it touched would be a tax on
+  // exactly the cross-query pairing this pass exists to make -- and the two
+  // members are usually in DIFFERENT results anyway.
+  const ranksASet = direction === 'max' || direction === 'min';
+
+  if (ranksASet) {
+    let home = null;
+    for (const res of results) {
+      const taken = new Set();
+      const seats = new Map();
+      for (const m of members) {
+        const idx = res.rows.findIndex((row, i) => !taken.has(i) && rowCarriesValues(row, m.from));
+        if (idx >= 0) { taken.add(idx); seats.set(m.key, idx); }
+      }
+      if (!home || seats.size > home.seats.size) home = { res, seats, taken };
+    }
+    if (!home || home.seats.size < members.length) {
+      return fail('comparison_member_not_in_rows', {
+        note: 'A ranked set must sit inside ONE returned result, each member on its own row.',
+        unseated: members.filter(m => !home || !home.seats.has(m.key))
+                         .map(m => ({ member: m.label, numbers: m.from })).slice(0, 6),
+      });
+    }
+    const uncovered = home.res.rows.filter((_, i) => !home.taken.has(i)).map(r => r.raw);
+    if (uncovered.length) {
+      return fail('comparison_set_incomplete', {
+        note: 'The set ranks ' + members.length + ' of the ' + home.res.rows.length
+            + ' rows this result returned. A ranking over a slice is not a ranking. '
+            + 'Carry every row, or drop the comparative wording.',
+        query: home.res.query.slice(0, 300),
+        uncovered_rows: uncovered.slice(0, 8),
+      });
+    }
+  } else {
+    // Each member on its own returned row, anywhere in the payload. Distinct
+    // rows so one row cannot supply both sides of a comparison with itself.
+    const taken = new Set();
+    for (const m of members) {
+      let seated = false;
+      for (let ri = 0; ri < results.length && !seated; ri++) {
+        for (let i = 0; i < results[ri].rows.length; i++) {
+          const key = ri + ':' + i;
+          if (taken.has(key)) continue;
+          if (rowCarriesValues(results[ri].rows[i], m.from)) { taken.add(key); seated = true; break; }
+        }
+      }
+      if (!seated) {
+        return fail('comparison_member_not_in_rows', {
+          note: 'Every member of a comparison must stand on its own returned row.',
+          unseated: [{ member: m.label, numbers: m.from }],
+        });
+      }
+    }
+  }
+
+  // 4. The ordering, recomputed. This is the check.
+  const byKey = new Map(members.map(m => [m.key, m]));
+  const subject = byKey.get(subjectKey);
+  const others = members.filter(m => m.key !== subjectKey);
+  const ranked = members.slice().sort((a, b) => b.value - a.value);
+  const table = ranked.map(m => m.label + '=' + m.value);
+
+  const orderingFail = (detail) => fail('comparison_ordering_false', Object.assign({
+    direction, subject: cmp.subject, set_ranked: table,
+  }, detail));
+
+  if (direction === 'max' && others.some(m => m.value >= subject.value)) {
+    return orderingFail({ actual_extreme: ranked[0].label + '=' + ranked[0].value });
+  }
+  if (direction === 'min' && others.some(m => m.value <= subject.value)) {
+    const low = ranked[ranked.length - 1];
+    return orderingFail({ actual_extreme: low.label + '=' + low.value });
+  }
+  if (needsAgainst) {
+    const against = byKey.get(againstKey);
+    const holds = direction === 'greater' ? subject.value > against.value
+                : direction === 'less'    ? subject.value < against.value
+                : subject.value === against.value;
+    if (!holds) {
+      return orderingFail({ against: cmp.against, values: [subject.value, against.value] });
+    }
+  }
+
+  // The base the compared numbers rest on. The rest of the tool carries its n
+  // everywhere; the frame was quietly exempt, which let a 34-point spread over
+  // 50 and 139 verbatims read like a spread over the corpus. Required, traced
+  // to a row, and required to reach the prose -- a base disclosed only to the
+  // guard is not disclosed.
+  const basis = Array.isArray(cmp.basis_n) ? cmp.basis_n
+              : (cmp.basis_n === undefined || cmp.basis_n === null) ? [] : [cmp.basis_n];
+  if (!basis.length) {
+    return fail('comparison_basis_missing',
+      'basis_n must give the count the compared numbers rest on, and the read must state it.');
+  }
+  const numerals = proseNumerals(readText);
+  for (const b of basis) {
+    const n = toInt(b);
+    if (n === null || n <= 0) return fail('comparison_basis_missing', 'basis_n must be a positive whole number. Got: ' + JSON.stringify(b));
+    const onARow = results.some(res => res.rows.some(row => (row.values || []).some(v => v.num === n)));
+    if (!onARow) {
+      return fail('comparison_basis_not_in_rows', { basis_n: n, note: 'No returned row carries this count.' });
+    }
+    if (!numerals.has(n)) {
+      return fail('comparison_basis_undisclosed', {
+        basis_n: n,
+        note: 'The read does not state the base these numbers rest on. Say it in the read, not only here.',
+      });
+    }
+  }
+
+  return failures;
+}
+
 /**
  * Guard the frame pass's connective read.
  *
@@ -1433,6 +1748,29 @@ function runConnectiveReadGuard({ connective_read, scratch }) {
     }
   }
 
+  // Comparative and superlative claims. Checked against the whole set they
+  // rank over rather than against the numerals in them, because the failure
+  // this catches is a true number carrying a false ordering.
+  const comparisons = Array.isArray(cr.comparisons) ? cr.comparisons : [];
+  const results = collectQueryResults(scratch);
+  for (let ci = 0; ci < comparisons.length; ci++) {
+    for (const f of checkComparison(comparisons[ci], results, readText, ci)) failures.push(f);
+  }
+  // A comparative word with nothing behind it. The read is where the claim
+  // actually reaches the reader, so this is checked on the prose and not on
+  // whether the model chose to declare a comparison.
+  if (!comparisons.length && COMPARATIVE_RE.test(readText)) {
+    const hit = readText.match(COMPARATIVE_RE);
+    failures.push({
+      surface: 'connective_read',
+      claim: { term: hit && hit[0], read: readText.slice(0, 200) },
+      reason: 'uncarried_comparative_claim',
+      detail: 'The read asserts a comparison ("' + (hit && hit[0])
+            + '") but carries no `comparisons` entry, so the ordering cannot be checked. '
+            + 'Either carry the full set it ranks over, or state the finding without the comparison.',
+    });
+  }
+
   return { ok: failures.length === 0, failures };
 }
 
@@ -1524,4 +1862,7 @@ module.exports = {
   inferSourceTable,
   numericFields,
   rowCarriesNumbers,
+  checkComparison,
+  collectQueryResults,
+  COMPARATIVE_RE,
 };
