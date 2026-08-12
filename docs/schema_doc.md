@@ -134,7 +134,7 @@ When reporting distributions of `raw_value` for agreement / frequency / importan
 | is_quotable | pre-flagged quotability — ALWAYS filter `is_quotable = true` for output |
 | sentiment | positive / negative / mixed / neutral |
 | themes | text[] — thematic tags |
-| joy_modes, tensions, functional_jobs, occasions | text[] — all four populated for every substantive verbatim (Haiku v6 framework backfill, May 2026). See Reference vocabularies for valid tag values and `bjl_tag_calibration` for per-tag confidence. |
+| joy_modes, tensions, functional_jobs, occasions | text[] — **SPARSE. Non-empty on 33.0% / 5.1% / 26.4% / 23.6% of rows respectively.** An empty array means no tag was assigned, which is NOT evidence the respondent lacks that attribute. Never compute a rate over all verbatims — see "Population status and the denominator rule" below. Valid values in Reference vocabularies; per-tag confidence in `bjl_tag_calibration`. |
 | search_vector | tsvector — full-text index on response_text |
 | embedding | vector — semantic embedding |
 
@@ -239,17 +239,51 @@ The four BJL frameworks are tagged via reference tables. Each table has at minim
 
 `service` was added in v6 to capture customer-service / help-seeking interactions distinct from `shopping` and `post_purchase`.
 
-### Population status — all four frameworks fully populated
+### Population status and the denominator rule — READ BEFORE COUNTING TAGS
 
-The Haiku v6 framework backfill (May 2026) tagged all 63,271 substantive `bjl_verbatims` rows. Counts roughly:
-- joy_modes: ~32K verbatims tagged across 14 keys (most-used: relational, hedonic, tranquil, inspirational)
-- tensions: ~5K tag instances across 15 keys (most-used: luxury_vs_value, present_vs_future, dwelling_vs_advancing, aspiration_vs_acceptance)
-- functional_jobs: ~21K tag instances across 23 keys (most-used: share_experience, build_belonging, relax_recover, immerse_in_story)
-- occasions: ~24K tag instances across 26 keys (most-used: vacation, anticipation, shopping, everyday)
+**These four columns are sparse, not complete.** An earlier version of this document said all four were "populated for every substantive verbatim." That was false, by a factor of 3 on joy_modes and roughly 20 on tensions. It was wrong in a specific, load-bearing way: it invited the reader to treat an absent tag as a measured zero.
+
+Measured against all 67,635 `bjl_verbatims` rows:
+
+| Framework | Rows with ≥1 tag | % of all rows | Tag instances | Keys |
+|---|---|---|---|---|
+| joy_modes | 22,326 | **33.0%** | 31,603 | 14 |
+| functional_jobs | 17,882 | **26.4%** | 22,777 | 23 |
+| occasions | 15,969 | **23.6%** | 19,512 | 26 |
+| tensions | 3,476 | **5.1%** | 3,593 | 15 |
+
+Most-used keys: joy_modes — relational, hedonic, tranquil, inspirational. functional_jobs — share_experience, build_belonging, relax_recover, immerse_in_story. occasions — vacation, anticipation, shopping, everyday. tensions — luxury_vs_value, present_vs_future, dwelling_vs_advancing, aspiration_vs_acceptance.
+
+Note the shape of the old error: `~32K` was the joy_modes *tag instance* count (31,603) reported as a *verbatim* count. Row counts and instance counts are different numbers and one is not a proxy for the other — a verbatim can carry several tags.
+
+**What an empty array means.** It means no tag was assigned. It does NOT mean the respondent lacks that attribute. Three different situations all produce an empty array and they are indistinguishable from the column alone:
+
+1. The tagger examined the row and found nothing that met its threshold.
+2. The row was never scanned. 4,364 rows have `framework_scanned_at IS NULL` — 484 too-short verbatims (`response_text` < 5 chars, deliberately skipped) and the entire `sp_2025_01_rivalry` fielding (3,880 rows, never scanned).
+3. The tagger has low recall on that key. See `bjl_tag_calibration` — tensions in particular is a precision-oriented layer, which is why it lands at 5.1%.
+
+**The denominator rule — mandatory.** Any rate, share, or percentage over these four columns must be computed over rows that carry at least one tag in that framework. Never over all verbatims, and never over `COUNT(*)` of a filtered set that includes untagged rows.
+
+```sql
+-- CORRECT: denominator is rows tagged in this framework
+SELECT t AS tension, COUNT(*) AS n,
+       ROUND(100.0 * COUNT(*) / (
+         SELECT COUNT(*) FROM bjl_verbatims
+         WHERE array_length(tensions, 1) > 0   -- same filters as the outer query
+       )::numeric, 1) AS pct_of_tensioned
+FROM bjl_verbatims v, unnest(v.tensions) AS t
+WHERE array_length(v.tensions, 1) > 0
+GROUP BY t ORDER BY n DESC;
+
+-- WRONG: denominator is every verbatim, 94.9% of which were never tensioned.
+-- Produces a real numerator over a false base. Nothing downstream catches this.
+SELECT t, ROUND(100.0 * COUNT(*) / (SELECT COUNT(*) FROM bjl_verbatims)::numeric, 1)
+FROM bjl_verbatims v, unnest(v.tensions) AS t GROUP BY t;
+```
+
+**How to report it.** State the tagged base alongside the rate, the same way every other surface of this tool carries its n: "of the 3,476 verbatims carrying any tension tag, 18% cite luxury_vs_value" — not "18% of consumers express a luxury-vs-value tension." The second sentence is a claim about the population and this data does not support it.
 
 Filter with `'relational' = ANY(joy_modes)` or `joy_modes && ARRAY['hedonic','playful']` for overlap. Same patterns work for the other three array columns.
-
-The 484 too-short verbatims (response_text < 5 chars) were deliberately not tagged and remain NULL.
 
 ## Tag confidence — `bjl_tag_calibration`
 

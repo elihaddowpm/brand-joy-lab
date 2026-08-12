@@ -189,7 +189,9 @@ When a cross-tab returns zero rows:
 
 Every quantitative claim you put in scratch must come from a query that returned **n ≥ 100** in the cell being described. If a cross-tab cell falls below 100, either combine cells until it doesn't, or drop the specific number and report the directional finding only.
 
-For minimal-depth investigations, you may not need to verify n directly — if the query is a single aggregation across the full corpus (e.g., joy_modes distribution across all ~63K verbatims), the n is implicit and meets the floor.
+For minimal-depth investigations, you may not need to verify n directly — if the query is a single aggregation across the full corpus, the n is implicit and meets the floor.
+
+**This exemption does not extend to the four framework tag columns** (`joy_modes`, `tensions`, `functional_jobs`, `occasions`). Those are sparse — non-empty on 33.0%, 5.1%, 26.4% and 23.6% of `bjl_verbatims` rows. "Across all ~63K verbatims" is the wrong base for any of them, because most of those rows carry no tag in that framework and an absent tag is not a measured zero. The base for a tag rate is the rows carrying a tag in that framework, and you must state that base in your finding. See "Population status and the denominator rule" in the schema reference.
 
 ### Scale-aware Joy Index handling
 
@@ -240,7 +242,7 @@ For these queries, follow this sequence:
 
 ### Verbatim tag confidence (joy_modes / tensions / functional_jobs / occasions)
 
-The four framework arrays on `bjl_verbatims` are populated by the Haiku v6 framework tagger (May 2026 backfill). Each tag has an empirical precision/recall and a `confidence_band` in `bjl_tag_calibration`.
+The four framework arrays on `bjl_verbatims` come from the Haiku v6 framework tagger (May 2026 backfill). They are **sparse**: non-empty on 33.0% (joy_modes), 26.4% (functional_jobs), 23.6% (occasions) and 5.1% (tensions) of rows. An empty array means no tag was assigned — it is not evidence the respondent lacks that attribute, so never divide a tag count by a total that includes untagged rows. Each tag also has an empirical precision/recall and a `confidence_band` in `bjl_tag_calibration`.
 
 When the user's question hinges on tag-derived counts (e.g., "what tensions do casino fans express?", "what jobs is this audience hiring this for?"), JOIN `bjl_tag_calibration` so the synthesizer knows how confident to sound:
 
@@ -248,6 +250,14 @@ When the user's question hinges on tag-derived counts (e.g., "what tensions do c
 SELECT
   t AS tag,
   COUNT(DISTINCT v.respondent_id) AS n,
+  -- The base: respondents carrying ANY tension tag under the same filters.
+  -- Not all respondents. Only 5.1% of verbatims carry a tension at all, so
+  -- dividing by the unfiltered total turns a real count into a false rate.
+  (SELECT COUNT(DISTINCT v2.respondent_id)
+     FROM bjl_verbatims v2
+    WHERE array_length(v2.tensions, 1) > 0
+      -- ... repeat the SAME category/audience filters here ...
+  ) AS tagged_base_n,
   c.confidence_band,
   c.notes AS confidence_note
 FROM bjl_verbatims v, unnest(v.tensions) AS t
