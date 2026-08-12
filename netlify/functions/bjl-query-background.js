@@ -669,7 +669,13 @@ async function runFramePass(triage, scratch, extraContext) {
 
   const rsp = await anthropic.messages.create({
     model: SONNET_MODEL,
-    max_tokens: 2048,
+    // A comparative claim now has to carry every member of the set it ranks
+    // over -- fourteen joy modes, twenty-three items -- so the output got
+    // materially bigger than the read plus two evidence rows this was sized
+    // for. Truncation here does not look like truncation; it looks like
+    // unparseable JSON, which is recorded as parse_failed and blamed on the
+    // model. Headroom is cheaper than that confusion.
+    max_tokens: 8192,
     system: PROMPTS.framePass,
     messages: [{ role: 'user', content: parts.join('\n\n') }],
   });
@@ -682,8 +688,18 @@ async function runFramePass(triage, scratch, extraContext) {
   } catch (e) {
     // Unparseable is treated as "no read", never as a soft pass. A malformed
     // frame is exactly the case where guessing at intent would invent one.
+    //
+    // The tail of what came back rides along to the job record. A bare
+    // "parse_failed" is an outcome with no diagnosis attached: it cannot tell
+    // a truncated response from a model that wrapped its JSON in prose, and
+    // those want opposite fixes. Naming the state without keeping the evidence
+    // is half of the de-conflation.
     console.warn('[frame] unparseable frame-pass output, treating as no read:', rawText.slice(0, 300));
-    return { has_read: false, read: null, evidence: [], why_not: null, _parse_failed: true };
+    return {
+      has_read: false, read: null, evidence: [], why_not: null, _parse_failed: true,
+      _raw_tail: rawText.slice(-600),
+      _stop_reason: rsp.stop_reason || null,
+    };
   }
   return {
     has_read: parsed.has_read === true,
@@ -720,7 +736,8 @@ async function runFramePassWithGuard(triage, scratch, extraContext) {
   const first = await runFramePass(triage, scratch, extraContext);
   if (!first.has_read) {
     return Object.assign({}, first, first._parse_failed
-      ? { frame_outcome: 'parse_failed', frame_warning: 'parse_failed' }
+      ? { frame_outcome: 'parse_failed', frame_warning: 'parse_failed',
+          frame_warning_detail: { stop_reason: first._stop_reason, raw_tail: first._raw_tail } }
       : { frame_outcome: 'no_corner', frame_warning: null });
   }
 
@@ -754,7 +771,9 @@ async function runFramePassWithGuard(triage, scratch, extraContext) {
     // false-positiving, and the two are only distinguishable if this state is
     // named. The first-pass failures ride along as the diagnosis.
     return Object.assign({}, retry, retry._parse_failed
-      ? { frame_outcome: 'parse_failed_on_retry', frame_warning: 'parse_failed' }
+      ? { frame_outcome: 'parse_failed_on_retry', frame_warning: 'parse_failed',
+          frame_warning_detail: { stop_reason: retry._stop_reason, raw_tail: retry._raw_tail,
+                                  first_pass_failures: firstPass.failures } }
       : {
           frame_outcome: 'declined_after_guard_failure',
           frame_warning: 'declined_after_guard_failure',
