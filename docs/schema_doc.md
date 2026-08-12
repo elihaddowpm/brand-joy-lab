@@ -44,12 +44,24 @@ One row per respondent.
 | employment_status, employment_detail | use `employment_detail` (newer column, higher fill) |
 | occupation | text |
 | marital_status | text |
-| parental_status | derived: 'Parent' / 'Non-parent' / 'Unknown' |
+| parental_status | derived: 'Parent' / 'Non-parent' / 'Unknown' — **'Non-parent' only exists from `m_2026_08`; see the note below the table before cutting on it** |
 | children_under_18 | '0' / '1' / '2' / '3 or more' |
 | hispanic_origin | text |
 | race_american_indian, race_asian, race_black, race_hispanic, race_middle_eastern, race_pacific_islander, race_white | boolean per race |
 | race_other | text write-in |
 | decisionmaker_vacation, decisionmaker_internet, decisionmaker_car, decisionmaker_groceries, decisionmaker_bank, decisionmaker_vacation_activities, decisionmaker_car_insurance, decisionmaker_home_furnishing | text — household-decision-maker flags from the Decision_Maker battery |
+
+**`parental_status` is only comparable from `m_2026_08` onward.** The column has three values and they are not three points on one scale. `'Parent'` and `'Non-parent'` are both *measured*: the respondent was asked about children under 18 and answered. `'Unknown'` means the question was never asked or never recorded.
+
+Before `m_2026_08` the loaders wrote only `'Parent'` and `'Unknown'`, so a pre-2026-08 `'Unknown'` is genuinely unknown — it is **not** a non-parent. From `m_2026_08` the answer "no children under 18" is recorded as `'Non-parent'`, which is what it always was.
+
+The trap this creates, and the rule that avoids it:
+
+- `WHERE parental_status = 'Parent'` is safe across every wave. It meant the same thing before and after.
+- `WHERE parental_status = 'Non-parent'` silently restricts to `m_2026_08` and later. It will return zero older respondents, not because older respondents had children, but because the state could not be written down. Do not read that as a trend.
+- Any parent vs. non-parent comparison must either be scoped to `m_2026_08` and later, or state that the non-parent base begins there. Reporting a non-parent share over the full corpus divides a wave-limited numerator by an all-wave denominator, which is the false-denominator failure described under `bjl_verbatims` in a different costume.
+
+The three-valued column is the fix, not the problem: the data can now express a state it previously could not. No existing row changed meaning. The only queries affected are the ones that were already wrong.
 
 ### `bjl_items` — one row per (question, item) (~5,391 rows)
 
