@@ -125,6 +125,50 @@ LIKELIHOOD_5PT = {
     'unlikely', 'very unlikely', 'not at all likely',
 }
 
+# 4-pt likelihood — no midpoint, "somewhat" on both poles. Distinct from
+# LIKELIHOOD_5PT, which has a neutral centre and no "somewhat unlikely".
+LIKELIHOOD_4PT = {
+    'not at all likely', 'somewhat unlikely', 'somewhat likely', 'very likely',
+}
+
+def make_4pt_likelihood_map():
+    return {
+        'not at all likely': 0.0, 'somewhat unlikely': 1.0,
+        'somewhat likely': 2.0, 'very likely': 3.0,
+    }
+
+# 4-pt improvement — "how much would X improve each of these"
+IMPROVEMENT_4PT = {
+    'no improvement', 'minor improvement', 'moderate improvement',
+    'major improvement',
+}
+
+def make_4pt_improvement_map():
+    return {
+        'no improvement': 0.0, 'minor improvement': 1.0,
+        'moderate improvement': 2.0, 'major improvement': 3.0,
+    }
+
+# Stress-change ladder. DELIBERATELY ASYMMETRIC: the fielded scale offers two
+# steps toward stress and only one toward relief, with no "Much Less Stressed".
+# Mapped honestly at -2/-1/0/+1 rather than forced into symmetry or padded with
+# a response option nobody was offered. Consequence: the mean leans negative as
+# an artefact of the ladder's shape, not of sentiment. The scale_type carries
+# 'asymmetric' so nothing downstream reads the lean as severity.
+STRESS_CHANGE_4PT = {
+    'much more stressed', 'more stressed', 'about the same', 'less stressed',
+}
+
+def make_stress_change_map():
+    return {
+        'much more stressed': -2.0, 'more stressed': -1.0,
+        'about the same': 0.0, 'less stressed': 1.0,
+    }
+
+# Constant markers a loader may put in raw_value when the option text itself
+# lives in item_name. Their presence means "this box was ticked", nothing more.
+SELECTION_MARKERS = {'selected', 'checked', 'yes', 'true', '1'}
+
 # 5-pt familiarity
 FAMILIARITY_5PT = {
     'very familiar', 'somewhat familiar', 'familiar', 'neutral',
@@ -284,7 +328,11 @@ def make_frequency_map():
 def _normalize_label(s: Optional[str]) -> str:
     if s is None:
         return ''
-    return s.strip().lower()
+    # U+2212 MINUS SIGN is a different character from ASCII '-', so a fielding
+    # whose tool emits "−1" produces labels that match no scale vocabulary and
+    # the whole question falls through to 'unclassified'. clean_mojibake() does
+    # not touch it — this is typography, not encoding damage.
+    return s.strip().lower().replace('\u2212', '-')
 
 
 def _looks_joy_question(question_text: Optional[str]) -> bool:
@@ -325,6 +373,9 @@ def detect_scale(distinct_raws: set, has_numeric: bool, has_is_selected: bool,
     if has_numeric:
         # Strip anchored text like "5 (Maximum Joy!)" → "5"
         flat = {v.split(' ')[0] if v else v for v in real_labels}
+        # "+1" and "1" are the same point on a -3..+5 scale; some fieldings
+        # write the positive sign explicitly.
+        flat = {v[1:] if v and v.startswith('+') else v for v in flat}
         # Allow up to 15% of labels to be unrecognized (stray "Unfamiliar"
         # or other outliers) — the majority-match makes the classifier
         # robust to mixed-vocabulary batteries.
@@ -366,6 +417,10 @@ def detect_scale(distinct_raws: set, has_numeric: bool, has_is_selected: bool,
     # 4a. 5-pt likelihood
     if real_labels.issubset(LIKELIHOOD_5PT):
         return ('likelihood_scale', 'likely_unlikely_5pt', make_5pt_likelihood_map())
+
+    # 4a-ii. 4-pt likelihood (no midpoint)
+    if real_labels.issubset(LIKELIHOOD_4PT):
+        return ('likelihood_scale', 'likely_unlikely_4pt', make_4pt_likelihood_map())
 
     # 4b. 5-pt familiarity
     if real_labels.issubset(FAMILIARITY_5PT):
@@ -411,6 +466,15 @@ def detect_scale(distinct_raws: set, has_numeric: bool, has_is_selected: bool,
     if real_labels.issubset(COUNT_4PT):
         return ('ordinal_scale', 'count_4pt', make_count_4pt_map())
 
+    # 4i. Improvement-4pt ("Major / Moderate / Minor / No improvement")
+    if real_labels.issubset(IMPROVEMENT_4PT):
+        return ('ordinal_scale', 'improvement_4pt', make_4pt_improvement_map())
+
+    # 4j. Stress-change ladder — asymmetric by design, see STRESS_CHANGE_4PT
+    if real_labels.issubset(STRESS_CHANGE_4PT):
+        return ('ordinal_scale', 'stress_change_asymmetric_4pt',
+                make_stress_change_map())
+
     # 7. Demographic battery — exclusively demographic terms
     if real_labels.issubset(DEMOGRAPHIC_MARKERS | SKIP_VALUES) and len(real_labels) <= 10:
         return ('SKIP', 'demographic_battery', None)
@@ -418,6 +482,11 @@ def detect_scale(distinct_raws: set, has_numeric: bool, has_is_selected: bool,
     # 5. select_all — has is_selected, non-ordinal labels (statement-length)
     if has_is_selected and not has_numeric:
         if len(real_labels) >= 2:
+            return ('select_all', None, None)
+        # Single-label encoding: the option text is in item_name and raw_value
+        # is a constant tick marker. Same question, different loader convention
+        # — without this the whole battery falls through to 'unclassified'.
+        if real_labels.issubset(SELECTION_MARKERS):
             return ('select_all', None, None)
 
     # 6. Open-ended text — many distinct values, no structure. We also
@@ -441,10 +510,14 @@ def detect_scale(distinct_raws: set, has_numeric: bool, has_is_selected: bool,
 # ---------------------------------------------------------------------------
 
 def aggregate_item(qtype: str, stype: Optional[str], label_map: Optional[dict],
-                   item_rows: list) -> Optional[dict]:
+                   item_rows: list,
+                   question_base_n: Optional[int] = None) -> Optional[dict]:
     """
     Aggregate responses for a single item into a metrics dict for bjl_scores.
     Returns None if the item fails sample-size thresholds.
+
+    question_base_n is the number of distinct respondents who saw the whole
+    question. It matters for select_all: see the note at that branch.
     """
     # Skip rows whose raw_value is "Not applicable" etc.
     real_rows = [r for r in item_rows
@@ -521,9 +594,13 @@ def aggregate_item(qtype: str, stype: Optional[str], label_map: Optional[dict],
         selections = sum(1 for r in real_rows if r.get('is_selected') is True)
         if selections < 30:                              # select_all threshold
             return None
-        # base_n at the question level, not item level — but here we get item-level rows
-        # so use distinct respondent count as best available estimate
-        base_n = len({r['respondent_id'] for r in real_rows})
+        # base_n must be everyone who SAW the question, which cannot be derived
+        # from the rows handed in: when the loader stores only ticked boxes,
+        # those rows ARE the selections, so base_n would equal the selection
+        # count and every option would score exactly 100%. Options with few
+        # selections would additionally fall under the base_n floor and vanish,
+        # biasing the battery toward its popular answers. Caller supplies it.
+        base_n = question_base_n or len({r['respondent_id'] for r in real_rows})
         if base_n < 100:
             return None
         pct = round(selections / base_n * 100, 1) if base_n > 0 else None
@@ -637,6 +714,10 @@ def score_question(conn, question_id: int, dry_run: bool = False,
     if qtype == 'SKIP':
         return dict(question_id=question_id, status=f'skipped_{stype}')
 
+    # Everyone who saw the question, counted once. select_all percentages are
+    # shares of this, and it cannot be recovered from a single item's rows.
+    question_base_n = len({r['respondent_id'] for r in rows})
+
     # Group by item
     by_item = defaultdict(list)
     for r in rows:
@@ -656,7 +737,8 @@ def score_question(conn, question_id: int, dry_run: bool = False,
         if is_brand_gated(item_name, gated):
             summary['items_skipped_gated'] += 1
             continue
-        metrics = aggregate_item(qtype, stype, label_map, item_rows)
+        metrics = aggregate_item(qtype, stype, label_map, item_rows,
+                                 question_base_n=question_base_n)
         if metrics is None:
             summary['items_skipped_threshold'] += 1
             continue
