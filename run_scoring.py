@@ -592,12 +592,29 @@ def fetch_responses(conn, question_id: int) -> list:
         return [dict(r) for r in cur.fetchall()]
 
 
-def score_question(conn, question_id: int, dry_run: bool = False) -> dict:
+def fetch_live_keys(conn) -> set:
+    """Every natural key already present in bjl_scores.
+
+    The upsert conflicts on (item_name, question, question_type), so this
+    is exactly the set of rows a run would UPDATE rather than INSERT.
+    Used by --refresh-only.
+    """
+    with conn.cursor() as cur:
+        cur.execute("SELECT item_name, question, question_type FROM bjl_scores")
+        return {(a, b, c) for a, b, c in cur.fetchall()}
+
+
+def score_question(conn, question_id: int, dry_run: bool = False,
+                   live_keys: Optional[set] = None) -> dict:
     """
     Score one question_id end-to-end. Returns a summary:
       { 'question_id', 'qtype', 'stype', 'items_total', 'items_inserted',
         'items_skipped_threshold', 'items_skipped_gated', 'items_skipped_other',
         'status' }
+
+    When `live_keys` is supplied (--refresh-only), any computed row whose
+    natural key is not already in bjl_scores is dropped. That confines the
+    run to in-place updates of existing rows and makes inserts impossible.
     """
     meta = fetch_question_meta(conn, question_id)
     if not meta:
@@ -631,6 +648,7 @@ def score_question(conn, question_id: int, dry_run: bool = False) -> dict:
         question_id=question_id, qtype=qtype, stype=stype,
         items_total=len(by_item), items_inserted=0,
         items_skipped_threshold=0, items_skipped_gated=0, items_skipped_other=0,
+        items_skipped_not_live=0,
     )
 
     rows_to_upsert = []
@@ -661,17 +679,27 @@ def score_question(conn, question_id: int, dry_run: bool = False) -> dict:
             pct_max=metrics.get('pct_max'),
             pct_negative=metrics.get('pct_negative'),
         )
+        if live_keys is not None and (
+                item_name, meta['question_text'], qtype) not in live_keys:
+            summary['items_skipped_not_live'] += 1
+            continue
+
         rows_to_upsert.append(upsert_row)
         summary['items_inserted'] += 1
 
     if dry_run:
-        summary['dry_run_rows'] = rows_to_upsert[:3]   # preview for sanity check
+        # Full set, not a 3-row preview: verify_existing diffs every row.
+        summary['dry_run_rows'] = rows_to_upsert
         summary['status'] = 'dry_run'
         return summary
 
     if rows_to_upsert:
         upsert_scores(conn, rows_to_upsert)
-        mark_loaded(conn, question_id)
+        # In refresh-only mode the question was NOT fully loaded — its
+        # not-yet-live items were skipped by design. Flipping loaded=true
+        # here would retire it from the backfill queue with items missing.
+        if live_keys is None:
+            mark_loaded(conn, question_id)
 
     summary['status'] = 'loaded'
     return summary
@@ -725,36 +753,69 @@ def mark_loaded(conn, question_id: int) -> None:
 
 VERIFICATION_QIDS = [1, 5, 60, 106, 154]   # one per existing question_type
 
-def verify_existing(conn) -> None:
-    print('Verification mode — scoring 5 existing questions and diffing vs live bjl_scores')
+
+def verify_existing(conn, qids: Optional[list] = None) -> bool:
+    """Gate: does the script reproduce live numbers where the data has NOT moved?
+
+    Diffs on the NATURAL KEY (item_name, question, question_type) — the same
+    key the upsert conflicts on. It deliberately does NOT look up by
+    question_id: bjl_scores.question_id is a metadata stamp, not the
+    source-of-aggregation pointer (see "Known divergence" in
+    SCORING_README.md), so a question_id lookup misses almost every row and
+    reports a false failure.
+
+    A row only counts toward the verdict if its question has no responses
+    newer than the live score row. Where new responses HAVE landed, a moved
+    number is the refresh working, not a disagreement, and is reported
+    separately. Returns True if every comparable row reproduces exactly.
+    """
+    qids = qids or VERIFICATION_QIDS
+    with conn.cursor() as cur:
+        cur.execute("""SELECT item_name, question, question_type,
+                              n, mean, joy_index, created_at
+                       FROM bjl_scores""")
+        live = {(r[0], r[1], r[2]): r[3:] for r in cur.fetchall()}
+        cur.execute("SELECT question_id, max(created_at) FROM bjl_responses GROUP BY 1")
+        last_resp = dict(cur.fetchall())
+
+    stable_ok = stable_bad = refreshed = absent = 0
+    failures = []
+
+    print(f'Verification — {len(qids)} question(s), diffed on the natural key')
     print()
-    for qid in VERIFICATION_QIDS:
+    for qid in qids:
         result = score_question(conn, qid, dry_run=True)
-        print(f'Q{qid}: {result.get("status")} qtype={result.get("qtype")} stype={result.get("stype")}')
-        print(f'  items: total={result.get("items_total")} '
-              f'inserted={result.get("items_inserted")} '
-              f'gated={result.get("items_skipped_gated")} '
-              f'sub_threshold={result.get("items_skipped_threshold")}')
-        for preview in result.get('dry_run_rows', [])[:2]:
-            item = preview['item_name']
-            # Diff vs live
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("""
-                    SELECT mean, joy_index, n, top_response, top_pct, pct
-                    FROM bjl_scores
-                    WHERE question_id = %s AND item_name = %s
-                    LIMIT 1
-                """, (qid, item))
-                live = cur.fetchone()
-            if not live:
-                print(f'  [no live row to compare] {item[:60]}')
+        for row in result.get('dry_run_rows', []):
+            key = (row['item_name'], row['question'], row['question_type'])
+            if key not in live:
+                absent += 1
                 continue
-            mean_diff = abs((live['mean'] or 0) - (preview.get('mean') or 0))
-            ji_diff   = abs((live['joy_index'] or 0) - (preview.get('joy_index') or 0))
-            n_diff    = abs((live['n'] or 0) - (preview.get('n') or 0))
-            print(f'  {item[:50]:50s} mean Δ={mean_diff:.3f} '
-                  f'ji Δ={ji_diff:.1f} n Δ={n_diff}')
-        print()
+            ln, lmean, lji, screated = live[key]
+            moved = (ln or 0) != (row.get('n') or 0)
+            has_new_data = (last_resp.get(qid) and screated
+                            and last_resp[qid] > screated)
+            if has_new_data:
+                refreshed += 1
+            elif moved:
+                stable_bad += 1
+                if len(failures) < 15:
+                    failures.append(
+                        f"  q{qid} {row['item_name'][:40]!r} "
+                        f"n {ln}->{row.get('n')}  ji {lji}->{row.get('joy_index')}")
+            else:
+                stable_ok += 1
+
+    print(f'  reproduces exactly (no new data)   : {stable_ok}')
+    print(f'  DISAGREES (no new data)            : {stable_bad}')
+    print(f'  moved, question has new responses  : {refreshed}   (expected)')
+    print(f'  not yet in bjl_scores              : {absent}')
+    if failures:
+        print('\n  disagreements:')
+        for f in failures:
+            print(f)
+    verdict = stable_bad == 0 and stable_ok > 0
+    print(f'\n  GATE: {"PASS" if verdict else "FAIL"}')
+    return verdict
 
 
 # ---------------------------------------------------------------------------
@@ -766,7 +827,12 @@ def main():
     parser.add_argument('--dry-run', action='store_true',
                         help='Show what would be written without inserting.')
     parser.add_argument('--verify-existing', action='store_true',
-                        help='Score 5 existing questions and diff against live rows.')
+                        help='Diff computed rows against live on the natural key. '
+                             'Honours --question-ids; defaults to 5 sample questions.')
+    parser.add_argument('--refresh-only', action='store_true',
+                        help='Only update rows already in bjl_scores; never insert. '
+                             'Use this to bring existing scores current without '
+                             'expanding the corpus.')
     parser.add_argument('--question-ids',
                         help='Comma-separated list of question_ids to score (overrides scope).')
     parser.add_argument('--max-questions', type=int,
@@ -783,8 +849,9 @@ def main():
 
     with psycopg2.connect(db_url) as conn:
         if args.verify_existing:
-            verify_existing(conn)
-            return
+            qids = ([int(q.strip()) for q in args.question_ids.split(',') if q.strip()]
+                    if args.question_ids else None)
+            sys.exit(0 if verify_existing(conn, qids) else 1)
 
         if args.question_ids:
             qids = [int(q.strip()) for q in args.question_ids.split(',') if q.strip()]
@@ -800,22 +867,31 @@ def main():
         if args.max_questions:
             qids = qids[:args.max_questions]
 
+        live_keys = fetch_live_keys(conn) if args.refresh_only else None
+        if live_keys is not None:
+            print(f'refresh-only: {len(live_keys)} existing natural keys; '
+                  f'rows outside this set will be skipped, not inserted')
+
         print(f'Scoring {len(qids)} question(s). dry_run={args.dry_run}')
         print()
         totals = Counter()
         for qid in qids:
-            result = score_question(conn, qid, dry_run=args.dry_run)
+            result = score_question(conn, qid, dry_run=args.dry_run,
+                                    live_keys=live_keys)
             status = result.get('status', 'unknown')
             qtype = result.get('qtype', '-')
             inserted = result.get('items_inserted', 0)
             gated = result.get('items_skipped_gated', 0)
             sub = result.get('items_skipped_threshold', 0)
+            notlive = result.get('items_skipped_not_live', 0)
             print(f'Q{qid:4d}  {status:28s}  qtype={qtype:18s}  '
-                  f'inserted={inserted:3d}  gated={gated:3d}  sub_threshold={sub:3d}')
+                  f'written={inserted:3d}  gated={gated:3d}  sub_threshold={sub:3d}'
+                  + (f'  not_live={notlive:3d}' if live_keys is not None else ''))
             totals[status] += 1
-            totals['items_inserted'] += inserted
+            totals['items_written'] += inserted
             totals['items_gated'] += gated
             totals['items_sub_threshold'] += sub
+            totals['items_skipped_not_live'] += notlive
 
         print()
         print('Summary:')
