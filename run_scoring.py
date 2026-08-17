@@ -80,7 +80,7 @@ from collections import Counter, defaultdict
 from typing import Iterable, Optional
 
 import psycopg2
-from psycopg2.extras import RealDictCursor, execute_values
+from psycopg2.extras import RealDictCursor, execute_values, Json
 
 
 # ---------------------------------------------------------------------------
@@ -247,6 +247,67 @@ def make_more_less_3pt_map():
     }
 
 
+# Direction-of-change 3-pt. Distinct from MORE_LESS_3PT, whose labels carry
+# their own comparison clause ("...than the last year or two").
+MORE_OFTEN_3PT = {'more often', 'about the same', 'less often'}
+
+def make_more_often_3pt_map():
+    return {'less often': -1.0, 'about the same': 0.0, 'more often': 1.0}
+
+
+# Worry-change 5-pt. Unlike STRESS_CHANGE_4PT this ladder IS symmetric — it
+# offers two steps in each direction around a true midpoint — so it maps to a
+# symmetric scale and carries no asymmetry caveat. Sign convention matches the
+# stress ladder: more worried is negative.
+WORRY_CHANGE_5PT = {
+    'much more worried', 'somewhat more worried', 'about the same',
+    'somewhat less worried', 'much less worried',
+}
+
+def make_worry_change_map():
+    return {
+        'much more worried': -2.0, 'somewhat more worried': -1.0,
+        'about the same': 0.0, 'somewhat less worried': 1.0,
+        'much less worried': 2.0,
+    }
+
+
+# Engagement 4-pt. Ordered by degree of engagement, not by frequency:
+# "consistently" is a stronger commitment than "occasionally", and "very
+# actively" stronger again.
+ENGAGEMENT_4PT = {'not at all', 'occasionally', 'consistently', 'very actively'}
+
+def make_engagement_4pt_map():
+    return {
+        'not at all': 0.0, 'occasionally': 1.0,
+        'consistently': 2.0, 'very actively': 3.0,
+    }
+
+
+# Degree-of-increase 4-pt, used for "is this a reason you are doing X more".
+MORE_THAN_BEFORE_4PT = {
+    'not at all', 'not more than before', 'somewhat more than before',
+    'much more than before',
+}
+
+def make_more_than_before_map():
+    return {
+        'not at all': 0.0, 'not more than before': 1.0,
+        'somewhat more than before': 2.0, 'much more than before': 3.0,
+    }
+
+
+# Intent 4-pt. The fielded set also offers "I have no idea", which is not a
+# point on this axis — see UNAWARE_LABELS. It is stripped before matching and
+# reported separately, so the axis itself is a clean four points.
+INTENT_4PT = {'not at all', 'maybe', 'probably', 'absolutely!'}
+
+def make_intent_4pt_map():
+    return {
+        'not at all': 0.0, 'maybe': 1.0, 'probably': 2.0, 'absolutely!': 3.0,
+    }
+
+
 # Count-4pt — "Not at all / Once / Twice / 3 or more times". Used in trip-
 # count questions (in the past year, how many business/personal trips).
 COUNT_4PT = {'not at all', 'once', 'twice', '3 or more times'}
@@ -254,14 +315,34 @@ COUNT_4PT = {'not at all', 'once', 'twice', '3 or more times'}
 def make_count_4pt_map():
     return {'not at all': 0.0, 'once': 1.0, 'twice': 2.0, '3 or more times': 3.0}
 
-# Skip values that don't carry analytic meaning. Real-world response sets
-# include several variants — empty string, the canonical N/A, and the
-# longer "Don't know" / "Unfamiliar" markers that respondents use when
-# they didn't know the brand or topic enough to rate it.
-SKIP_VALUES = {
-    'not applicable', 'n/a', 'na', "n/a, don't know", "don't know",
-    'unfamiliar', 'no opinion', 'prefer not to answer', '', None,
+# Two different things used to live in one bucket here, and collapsing them
+# lost a real measurement.
+#
+# NON_RESPONSE is an absence of data: the respondent declined, or the item
+# did not apply. Nothing can be inferred, so these rows leave the base.
+#
+# UNAWARE_LABELS is a finding. "I have no idea" / "Unfamiliar" / "Never heard
+# of it" is not a refusal to answer — it is the respondent telling us they
+# have no mental picture of the thing. For anything at awareness stage that
+# cohort is often the most strategically interesting group in the data. It
+# has no position on the response axis, so it can never enter a mean; but
+# dropping it silently deletes the finding. It is counted and reported as its
+# own number instead. Same measurement as "one in five hostel rejecters have
+# no mental picture of a hostel" — that only exists if this set is kept.
+NON_RESPONSE = {
+    'not applicable', 'n/a', 'na', 'prefer not to answer', '', None,
 }
+
+UNAWARE_LABELS = {
+    "don't know", "n/a, don't know", 'dont know', 'unfamiliar', 'not familiar',
+    'no opinion', 'i have no idea', 'no idea', 'never heard of it',
+    'never heard of them', "i've never heard of it", 'not sure',
+    'unsure', "i'm not familiar with it", 'not familiar with it',
+}
+
+# Everything that must stay out of a mean, for either reason. Classification
+# and averaging both use this; only the reporting differs.
+SKIP_VALUES = NON_RESPONSE | UNAWARE_LABELS
 
 # Demographic battery markers — if a question's response set is dominated
 # by these, the whole question is skipped
@@ -475,6 +556,29 @@ def detect_scale(distinct_raws: set, has_numeric: bool, has_is_selected: bool,
         return ('ordinal_scale', 'stress_change_asymmetric_4pt',
                 make_stress_change_map())
 
+    # 4k. Worry-change 5-pt — symmetric, see WORRY_CHANGE_5PT
+    if real_labels.issubset(WORRY_CHANGE_5PT):
+        return ('ordinal_scale', 'worry_change_symmetric_5pt',
+                make_worry_change_map())
+
+    # 4l. Direction-of-change 3-pt ("More often / About the same / Less often")
+    if real_labels.issubset(MORE_OFTEN_3PT):
+        return ('ordinal_scale', 'more_often_3pt', make_more_often_3pt_map())
+
+    # 4m. Engagement 4-pt
+    if real_labels.issubset(ENGAGEMENT_4PT):
+        return ('ordinal_scale', 'engagement_4pt', make_engagement_4pt_map())
+
+    # 4n. Degree-of-increase 4-pt
+    if real_labels.issubset(MORE_THAN_BEFORE_4PT):
+        return ('ordinal_scale', 'more_than_before_4pt',
+                make_more_than_before_map())
+
+    # 4o. Intent 4-pt — the unaware option is already stripped from
+    #     real_labels, so the axis here is exactly four points.
+    if real_labels.issubset(INTENT_4PT):
+        return ('likelihood_scale', 'intent_4pt', make_intent_4pt_map())
+
     # 7. Demographic battery — exclusively demographic terms
     if real_labels.issubset(DEMOGRAPHIC_MARKERS | SKIP_VALUES) and len(real_labels) <= 10:
         return ('SKIP', 'demographic_battery', None)
@@ -519,12 +623,39 @@ def aggregate_item(qtype: str, stype: Optional[str], label_map: Optional[dict],
     question_base_n is the number of distinct respondents who saw the whole
     question. It matters for select_all: see the note at that branch.
     """
-    # Skip rows whose raw_value is "Not applicable" etc.
-    real_rows = [r for r in item_rows
-                 if r['raw_value'] is None or _normalize_label(r['raw_value']) not in SKIP_VALUES]
+    # Three cohorts, not two. real_rows are the people who placed themselves
+    # on the response axis. unaware_rows are the people who told us they have
+    # no mental picture of the thing — a finding, reported separately below.
+    # The remainder is non-response and carries nothing.
+    real_rows, unaware_rows = [], []
+    for r in item_rows:
+        if r['raw_value'] is None:
+            real_rows.append(r)
+            continue
+        lab = _normalize_label(r['raw_value'])
+        if lab in UNAWARE_LABELS:
+            unaware_rows.append(r)
+        elif lab not in SKIP_VALUES:
+            real_rows.append(r)
 
     if not real_rows:
         return None
+
+    # Share of everyone who saw this item who has no mental picture of it.
+    # Denominator is the whole item base, so this is comparable to the axis
+    # percentages rather than to each other. Null when nobody was unaware, so
+    # an absent cohort is distinguishable from a zero-sized one.
+    dist = None
+    if unaware_rows:
+        seen = len(item_rows)
+        dist = {
+            'unaware_n': len(unaware_rows),
+            'unaware_pct': round(len(unaware_rows) / seen * 100, 1) if seen else None,
+            'unaware_labels': sorted({r['raw_value'] for r in unaware_rows
+                                      if r['raw_value']}),
+            'axis_n': len(real_rows),
+            'item_base_n': seen,
+        }
 
     if qtype == 'joy_scale':
         # Use numeric_value when present; otherwise apply label_map
@@ -550,7 +681,7 @@ def aggregate_item(qtype: str, stype: Optional[str], label_map: Optional[dict],
         pct_negative = round(neg_count / n * 100, 1) if n > 0 else None
         return dict(
             mean=round(mean, 3), joy_index=joy_index, n=n,
-            pct_max=pct_max, pct_negative=pct_negative,
+            pct_max=pct_max, pct_negative=pct_negative, distribution=dist,
         )
 
     if qtype in ('ordinal_scale', 'likelihood_scale', 'familiarity_trust'):
@@ -586,6 +717,7 @@ def aggregate_item(qtype: str, stype: Optional[str], label_map: Optional[dict],
         return dict(
             mean=round(mean, 3), joy_index=None, n=n, base_n=base_n,
             top_response=top_label, top_pct=top_pct, pct_max=pct_max,
+            distribution=dist,
         )
 
     if qtype == 'select_all':
@@ -606,7 +738,7 @@ def aggregate_item(qtype: str, stype: Optional[str], label_map: Optional[dict],
         pct = round(selections / base_n * 100, 1) if base_n > 0 else None
         return dict(
             mean=None, joy_index=None, n=selections, base_n=base_n,
-            pct=pct,
+            pct=pct, distribution=dist,
         )
 
     return None
@@ -760,6 +892,8 @@ def score_question(conn, question_id: int, dry_run: bool = False,
             pct=metrics.get('pct'),
             pct_max=metrics.get('pct_max'),
             pct_negative=metrics.get('pct_negative'),
+            distribution=(Json(metrics['distribution'])
+                          if metrics.get('distribution') else None),
         )
         if live_keys is not None and (
                 item_name, meta['question_text'], qtype) not in live_keys:
@@ -794,6 +928,7 @@ def upsert_scores(conn, rows: list) -> None:
         'item_name', 'category', 'question', 'question_id', 'question_type',
         'scale_type', 'wave', 'mean', 'joy_index', 'n', 'base_n',
         'top_response', 'top_pct', 'pct', 'pct_max', 'pct_negative',
+        'distribution',
     ]
     values = [tuple(r.get(c) for c in cols) for r in rows]
     sql = f"""
@@ -811,6 +946,7 @@ def upsert_scores(conn, rows: list) -> None:
             pct = EXCLUDED.pct,
             pct_max = EXCLUDED.pct_max,
             pct_negative = EXCLUDED.pct_negative,
+            distribution = EXCLUDED.distribution,
             question_id = EXCLUDED.question_id,
             category = COALESCE(bjl_scores.category, EXCLUDED.category),
             wave = EXCLUDED.wave
