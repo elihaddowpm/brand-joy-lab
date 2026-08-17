@@ -100,6 +100,30 @@ function normalizeItemName(s) {
     .toLowerCase();
 }
 
+/**
+ * The cross-cutting columns a cut query groups by.
+ *
+ * These are the columns an around-corners finding actually lives on. A read
+ * about "Gen Z on live music" is a claim about ONE row of a cut, and the
+ * cohort is not decoration on that claim -- it IS the claim. Recording which
+ * cohort each returned row belongs to is what lets the guard check it.
+ */
+const AXIS_FIELDS = ['mode', 'generation', 'income_bracket'];
+
+// The normalized axis values a returned row carried, keyed by column.
+// Empty object for a row that is not part of a cut.
+function rowAxisValues(row) {
+  const out = {};
+  if (!row || typeof row !== 'object') return out;
+  for (const field of AXIS_FIELDS) {
+    const raw = row[field];
+    if (typeof raw !== 'string') continue;
+    const norm = normalizeItemName(raw);
+    if (norm) out[field] = norm;
+  }
+  return out;
+}
+
 // Round to one decimal, matching what bjl_corpus_threads emits.
 function roundJoy(x) {
   const n = Number(x);
@@ -318,7 +342,14 @@ function pinnedItemName(sql) {
  * threads allowlist: indexes every row from any SELECT with an item_name,
  * tagged with the source table inferred from the query's FROM clause.
  *
- * Returns Map<normalized_item_name, Array<{joy_index, n, source}>>.
+ * Rows are indexed under their item name AND under each cross-cutting axis
+ * value they carry (generation, mode, income_bracket), so a read that names
+ * the cohort rather than the item can be grounded at all. Every bucketed row
+ * records the axis values it came with, which is what lets the guard check
+ * that a cited number belongs to the cohort the claim names rather than
+ * merely existing somewhere under the item.
+ *
+ * Returns Map<normalized_key, Array<{joy_index, n, source, axis}>>.
  */
 function buildCardAllowlist(scratch) {
   const itemIndex = new Map();
@@ -349,18 +380,29 @@ function buildCardAllowlist(scratch) {
                        : row.joy_index != null ? row.joy_index
                        : row.audience_score;
       const nValue = row.n != null ? row.n : row.aud_n;
-      const bucket = itemIndex.get(key) || [];
-      bucket.push({
+      const axis = rowAxisValues(row);
+      const entry_ = {
         joy_index: roundJoy(scoreValue),
         n:         toInt(nValue),
         source,
         construct: typeof row.construct === 'string' ? row.construct : null,
+        // Which cohort of a cut this row is. Empty when the row is not a cut.
+        axis,
         // The row's full numeric surface, so a claim can verify against an
         // aliased score column. joy_index and n above stay for the failure
         // detail a human reads; `values` is what the match runs against.
         values:    numericFields(row),
-      });
-      itemIndex.set(key, bucket);
+      };
+      // Index under the item, and under each axis value the row carried. The
+      // second is how a read that says "Gen Z" finds any rows at all. An axis
+      // value that collides with a real item name simply merges the two
+      // buckets; the axis check below is what separates them again.
+      const keys = new Set([key, ...Object.values(axis)]);
+      for (const k of keys) {
+        const bucket = itemIndex.get(k) || [];
+        bucket.push(entry_);
+        itemIndex.set(k, bucket);
+      }
     }
   }
   return itemIndex;
@@ -1745,12 +1787,63 @@ function runConnectiveReadGuard({ connective_read, scratch }) {
       continue;
     }
 
-    const bucket = itemIndex.get(normalizeItemName(e.item_name));
+    const itemKey = normalizeItemName(e.item_name);
+    const bucket = itemIndex.get(itemKey);
     if (!bucket || bucket.length === 0) {
       failures.push({
         surface: 'connective_read',
         claim: { item_name: e.item_name },
         reason: 'connective_read_item_not_in_allowlist',
+      });
+      continue;
+    }
+
+    // Which cohort of a cut this claim is about.
+    //
+    // On a cross-cutting read the cohort IS the claim. Without this the
+    // bucket for `live music` holds every generation's row and the numbers
+    // check below, which accepts ANY row in the bucket, will clear Boomers'
+    // number attached to Gen Z: a true number carrying a false attribution,
+    // the same shape as the superlative failure and just as invisible to
+    // anything that only checks numerals.
+    //
+    // A claim that names the cohort in item_name instead of in `axis` is
+    // read the same way -- it said the thing, the field it said it in does
+    // not matter.
+    let claimAxis = normalizeItemName(
+      typeof e.axis === 'string' ? e.axis
+      : typeof e.generation === 'string' ? e.generation
+      : typeof e.mode === 'string' ? e.mode
+      : typeof e.income_bracket === 'string' ? e.income_bracket
+      : ''
+    );
+    if (!claimAxis && bucket.some(r => Object.values(r.axis || {}).includes(itemKey))) {
+      claimAxis = itemKey;
+    }
+
+    // Named a cohort: only rows from that cohort can back it.
+    // Named none: only rows that belong to no cut can back it. An unqualified
+    // claim matched against a cut row is unverifiable by construction --
+    // which cohort's number is it? -- and that is the hole, not a formality.
+    const candidates = claimAxis
+      ? bucket.filter(r => Object.values(r.axis || {}).includes(claimAxis))
+      : bucket.filter(r => Object.keys(r.axis || {}).length === 0);
+
+    if (candidates.length === 0) {
+      failures.push({
+        surface: 'connective_read',
+        claim: { item_name: e.item_name, axis: claimAxis || null, score: e.score, n: e.n },
+        reason: claimAxis
+          ? 'connective_read_axis_not_in_allowlist'
+          : 'connective_read_axis_unspecified',
+        detail: claimAxis
+          ? 'No returned row for this item carries that cohort.'
+          : 'Every returned row for this item belongs to a cut. Name the cohort the number came from.',
+        // The cohorts that did come back, so a retry can name one rather
+        // than guess at it.
+        cohorts_available: Array.from(new Set(
+          bucket.flatMap(r => Object.values(r.axis || {}))
+        )).slice(0, 12),
       });
       continue;
     }
@@ -1762,15 +1855,15 @@ function runConnectiveReadGuard({ connective_read, scratch }) {
     // rowCarriesNumbers.
     const claimScore = roundJoy(e.score != null ? e.score : e.joy_index);
     const claimN = toInt(e.n);
-    const matched = bucket.some(row => rowCarriesNumbers(row, claimScore, claimN).ok);
+    const matched = candidates.some(row => rowCarriesNumbers(row, claimScore, claimN).ok);
     if (!matched) {
       failures.push({
         surface: 'connective_read',
-        claim: { item_name: e.item_name, score: e.score, n: e.n },
+        claim: { item_name: e.item_name, axis: claimAxis || null, score: e.score, n: e.n },
         reason: 'connective_read_number_mismatch',
         // The numbers each candidate row actually carried, so a retry can
         // read the correct values off the failure rather than guess at them.
-        detail: bucket.slice(0, 4).map(row => {
+        detail: candidates.slice(0, 4).map(row => {
           const nums = {};
           for (const v of (row.values || [])) nums[v.field] = v.num;
           return nums;

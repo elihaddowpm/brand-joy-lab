@@ -96,6 +96,7 @@ Return a single JSON object. No prose outside it, no code fences.
   "read": "Two to four sentences. The connection, stated plainly, with the numbers that carry it. Null when has_read is false.",
   "evidence": [
     { "item_name": "copied verbatim from a scratch row",
+      "axis": "the cohort this row is — Gen Z, hedonic, $50-75k. Omit only when the row is not part of a cut.",
       "score": 00.0,
       "n": 000,
       "note": "one short clause on what this row contributes to the read" }
@@ -125,6 +126,7 @@ Field rules, all enforced by a post-generation check that reads the actual rows:
 - **`evidence` requires at least two entries when `has_read` is true.** A connection needs two things to connect. One entry is a restatement and will be rejected.
 - **`item_name` must match a row that came back**, character for character as the row spells it.
 - **`score` must match that row's value to one decimal. `n` must match exactly.** These are checked against the rows, not against your memory of them. If you are unsure of a number, do not cite the row.
+- **If the row came from a cut, `axis` must name the cohort it came from.** A row returned by a query that grouped by generation, mode, or income bracket belongs to one cohort, and the check now matches your number against that cohort's row only. Citing a cut row without naming its cohort is rejected, and so is naming the wrong one. This is not bookkeeping: on a cross-cutting read the cohort is the claim. "Live music scores 62.1 on n=310" is a different sentence depending on whether that is Gen Z or Boomers, and one of the two is false.
 - **Any comparative or superlative wording in `read` requires a `comparisons` entry.** The check reads the prose. A ranking with no set behind it is rejected; so is a set that covers only some of the rows its result returned; so is a ranking that the set does not actually support.
 - **`claim` must be quoted from `read`.** A comparison cannot back a sentence the reader never sees.
 - **`basis_n` must appear in the read.** Stating it here only does not count.

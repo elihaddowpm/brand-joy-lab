@@ -90,8 +90,18 @@ function cardStats(stat, scratch) {
 const LM = 'Listening to LIVE MUSIC';
 const DISH = 'Bringing/cooking your favorite dish';
 
+// These fixture rows are a generation cut, so a claim on them must say which
+// generation. This assertion used to pass without naming one, and that is
+// exactly the hole test_frame_axis_guard.js now covers: unnamed, 72.9/93 and
+// 59.2/96 were interchangeable to the guard, so Boomers' number could be sold
+// as Gen Z's. The cohort is not decoration on the claim; it is the claim.
 check('read: aliased column verifies when copied verbatim',
-  read([{ item_name: LM, score: 72.9, n: 93 }, { item_name: DISH, score: 51.8, n: 66 }], ALIASED).ok);
+  read([{ item_name: LM, axis: 'Gen X', score: 72.9, n: 93 },
+        { item_name: DISH, axis: 'Gen X', score: 51.8, n: 66 }], ALIASED).ok);
+
+check('read: a cut row cited without its cohort is rejected',
+  !read([{ item_name: LM, score: 72.9, n: 93 },
+         { item_name: DISH, score: 51.8, n: 66 }], ALIASED).ok);
 
 check('read: fabricated score on an aliased row is rejected',
   !read([{ item_name: LM, score: 88.4, n: 93 }, { item_name: DISH, score: 51.8, n: 66 }], ALIASED).ok);
