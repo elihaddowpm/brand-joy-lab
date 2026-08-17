@@ -340,6 +340,34 @@ check('an honest no-corner result is unaffected',
     scratch: SCRATCH,
   }).ok);
 
+// Rounding. Live job c903ec21 produced a correct read -- live music's
+// generational spread is 13.7 against home cooking's 8.7 -- and it was dropped
+// because 74.5 - 65.9 is 8.6. The real gap is 8.6523, so 8.7 is right and the
+// guard's arithmetic on the already-rounded operands was wrong. The rows only
+// ever carry ROUND(...,1), so the accepted set is what some true pair of
+// operands consistent with the cited ones could produce: one tenth either way.
+const GAP = 'Live music splits generations by 13.7 points against home cooking\'s 8.7, on 93 and 438.';
+const gapCmp = value => [{
+  claim: 'Live music splits generations by 13.7 points against home cooking\'s 8.7',
+  direction: 'greater', subject: 'live music', against: 'home cooking',
+  set: [{ label: 'live music', value: 13.7, from: [72.9, 59.2] },
+        { label: 'home cooking', value, from: [74.5, 65.9] }],
+  basis_n: [93, 438],
+}];
+
+check('rounding: a gap rounded before subtraction is accepted',
+  !reasons(frame(GAP, gapCmp(8.7))).includes('comparison_value_not_derivable'));
+
+check('rounding: the arithmetic on the cited operands is still accepted',
+  !reasons(frame(GAP, gapCmp(8.6))).includes('comparison_value_not_derivable'));
+
+check('rounding: a gap outside what the operands could produce is rejected',
+  reasons(frame(GAP, gapCmp(8.9))).includes('comparison_value_not_derivable'));
+
+check('rounding: the rejection names the values the operands do admit',
+  frame(GAP, gapCmp(8.9)).failures
+    .find(f => f.reason === 'comparison_value_not_derivable').detail.accepted.join(',') === '8.5,8.6,8.7');
+
 // ---------------------------------------------------------------------------
 const failed = results.filter(r => !r[1]);
 for (const [name, ok] of results) console.log((ok ? '  PASS  ' : '  FAIL  ') + name);

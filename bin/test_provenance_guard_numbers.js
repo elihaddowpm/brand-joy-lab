@@ -200,6 +200,48 @@ check('cut query: a multi-item WHERE clause confers no provenance',
     result: [{ income_bracket: '$150,000 to $199,999', n: 323, ji: 63.7 }],
   }]).some(f => f.reason === 'no_scratch_rows_for_cards' || f.reason === 'card_item_not_in_allowlist'));
 
+// The investigator pins by id at least as often as by name. Live job
+// c635c8d9 cut coffee by generation with `WHERE i.item_id IN (4753, 4765)`;
+// every row was dropped, and a true read drawn from them failed as
+// ungrounded. A single id resolves through the corpus rows the investigation
+// already returned.
+const ID_LOOKUP = {
+  type: 'query',
+  query: 'SELECT i.item_id, i.item_name FROM bjl_items i',
+  result: [{ item_id: 4753, item_name: PARK }, { item_id: 4765, item_name: 'Listening to LIVE MUSIC' }],
+};
+const ID_CUT = [ID_LOOKUP, {
+  type: 'query',
+  query: 'SELECT p.income_bracket, COUNT(*) AS n, ROUND(AVG(r.joy_index)::numeric,1) AS ji '
+       + 'FROM bjl_responses r JOIN bjl_items i ON i.item_id = r.item_id '
+       + 'WHERE i.item_id = 4753 GROUP BY 1',
+  result: [{ income_bracket: '$150,000 to $199,999', n: 323, ji: 63.7 }],
+}];
+
+check('id pin: a single item_id resolves to its name and grounds the cut',
+  cardStats({ item_name: PARK, score: 63.7, n: 323, source: 'bjl_responses' }, ID_CUT).length === 0);
+
+check('id pin: a fabricated number on an id-resolved row is still rejected',
+  cardStats({ item_name: PARK, score: 77.7, n: 323, source: 'bjl_responses' }, ID_CUT)
+    .some(f => f.reason === 'card_score_mismatch'));
+
+// Two ids do not return one row per item -- they return rows aggregated
+// across both, belonging to neither. This is the live c635c8d9
+// misattribution, now caught by design rather than by absence.
+// The name is in the allowlist from the corpus lookup, so the rejection lands
+// on the number: the blended figure belongs to no single item and no row of
+// that item ever carried it.
+check('id pin: a two-id WHERE clause confers no number',
+  cardStats({ item_name: PARK, score: 63.7, n: 323, source: 'bjl_responses' }, [ID_LOOKUP, {
+    type: 'query',
+    query: 'SELECT p.income_bracket, COUNT(*) AS n, ROUND(AVG(r.joy_index)::numeric,1) AS ji '
+         + 'FROM bjl_responses r JOIN bjl_items i ON i.item_id = r.item_id '
+         + 'WHERE i.item_id IN (4753, 4765) GROUP BY 1',
+    result: [{ income_bracket: '$150,000 to $199,999', n: 323, ji: 63.7 }],
+  }]).some(f => f.reason === 'card_score_mismatch'
+             || f.reason === 'card_item_not_in_allowlist'
+             || f.reason === 'no_scratch_rows_for_cards'));
+
 // ---------------------------------------------------------------------------
 const failed = results.filter(r => !r[1]);
 for (const [name, ok] of results) console.log((ok ? '  PASS  ' : '  FAIL  ') + name);

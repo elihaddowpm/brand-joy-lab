@@ -338,6 +338,55 @@ function pinnedItemName(sql) {
 }
 
 /**
+ * The item_id a query pinned in its own WHERE clause, when it pinned exactly
+ * one.
+ *
+ * The investigator pins by id at least as often as by name -- `WHERE
+ * i.item_id IN (4753, 4765)` -- and pinnedItemName cannot see that at all, so
+ * every row of such a query was dropped from the allowlist and any true read
+ * drawn from it failed as ungrounded.
+ *
+ * Exactly one, for the same reason as above and with a sharper edge here: a
+ * query pinning two ids does not return one row per item, it returns rows
+ * AGGREGATED ACROSS BOTH. That number belongs to neither item and attributing
+ * it to either is a misattribution, not a recovery. Multi-id pins stay
+ * dropped, deliberately.
+ */
+function pinnedItemId(sql) {
+  if (typeof sql !== 'string') return null;
+  const ids = new Set();
+  const eq = /\bitem_id\s*=\s*(\d+)/gi;
+  let m;
+  while ((m = eq.exec(sql)) !== null) ids.add(m[1]);
+  const list = /\bitem_id\s*(?:=\s*any\s*\(\s*array\s*\[|in\s*\()([^)\]]*)/gi;
+  while ((m = list.exec(sql)) !== null) {
+    for (const d of m[1].match(/\d+/g) || []) ids.add(d);
+  }
+  return ids.size === 1 ? Array.from(ids)[0] : null;
+}
+
+/**
+ * item_id -> item_name, harvested from every row in scratch that carried
+ * both. The corpus lookups the investigator runs first are exactly this
+ * shape, so the map is usually populated before any cut query needs it.
+ */
+function buildItemIdIndex(scratch) {
+  const byId = new Map();
+  for (const entry of (Array.isArray(scratch) ? scratch : [])) {
+    if (!entry || typeof entry !== 'object') continue;
+    const rows = Array.isArray(entry.result) ? entry.result
+               : Array.isArray(entry.rows)   ? entry.rows
+               : [];
+    for (const row of rows) {
+      if (!row || typeof row !== 'object') continue;
+      if (row.item_id == null || typeof row.item_name !== 'string') continue;
+      byId.set(String(row.item_id), row.item_name);
+    }
+  }
+  return byId;
+}
+
+/**
  * Build the card allowlist from investigator scratch. Broader than the
  * threads allowlist: indexes every row from any SELECT with an item_name,
  * tagged with the source table inferred from the query's FROM clause.
@@ -354,6 +403,7 @@ function pinnedItemName(sql) {
 function buildCardAllowlist(scratch) {
   const itemIndex = new Map();
   const entries = Array.isArray(scratch) ? scratch : [];
+  const idIndex = buildItemIdIndex(scratch);
   for (const entry of entries) {
     if (!entry || typeof entry !== 'object') continue;
     const rawSql = typeof entry.query === 'string' ? entry.query
@@ -362,7 +412,11 @@ function buildCardAllowlist(scratch) {
                  : '';
     const source = inferSourceTable(rawSql);
     if (!source) continue;
-    const pinned = pinnedItemName(rawSql);
+    // Named pin first; fall back to a single id pin resolved through the
+    // corpus rows the investigation already returned.
+    const pinnedId = pinnedItemId(rawSql);
+    const pinned = pinnedItemName(rawSql)
+                || (pinnedId !== null ? (idIndex.get(pinnedId) || null) : null);
     const rows = Array.isArray(entry.result) ? entry.result
                : Array.isArray(entry.rows)   ? entry.rows
                : [];
@@ -1463,9 +1517,37 @@ function comparisonMemberValue(m) {
   const from = (Array.isArray(m.from) && m.from.length) ? m.from : [m.value];
   const nums = from.map(Number);
   if (!nums.length || nums.some(x => !Number.isFinite(x))) return null;
-  if (nums.length === 1) return { value: roundJoy(nums[0]), from: nums };
-  if (nums.length === 2) return { value: roundJoy(Math.abs(nums[0] - nums[1])), from: nums };
-  return null;
+  if (nums.length === 1) {
+    const v = roundJoy(nums[0]);
+    return { value: v, from: nums, accepts: new Set([v]) };
+  }
+  if (nums.length !== 2) return null;
+
+  const v = roundJoy(Math.abs(nums[0] - nums[1]));
+
+  // The operands are themselves already rounded to one decimal -- the rows
+  // carry ROUND(AVG(...),1) and nothing else, so the guard never sees the
+  // unrounded figure and cannot recompute from it.
+  //
+  // A read that subtracts before rounding is therefore RIGHT to disagree with
+  // this arithmetic by a tenth: home cooking's real gap is 8.6523, which is
+  // 8.7, while the cited 74.5 and 65.9 subtract to 8.6. Rejecting that cost a
+  // true read on a run where every number in it was correct.
+  //
+  // So the accepted set is every value some pair of true operands consistent
+  // with the cited ones could produce. Each cited operand stands for a true
+  // value within half a tenth of it, so their difference moves by at most a
+  // tenth in either direction. That is exact interval arithmetic on the
+  // rounding the SQL already did, not a tolerance chosen to make claims pass.
+  //
+  // It is worth being plain about the cost: it admits three values where one
+  // was admitted before, and a fabricated gap landing inside that tenth is
+  // indistinguishable from a correctly-derived one. The width is the data's
+  // own precision rather than a number picked for convenience, but it is
+  // slack, and a read wanting no slack should cite the gap it subtracted
+  // rather than one it rounded.
+  const accepts = new Set([roundJoy(v - 0.1), v, roundJoy(v + 0.1)]);
+  return { value: v, from: nums, accepts };
 }
 
 /**
@@ -1541,9 +1623,10 @@ function checkComparison(cmp, results, readText, ci) {
       return fail('malformed_comparison',
         'Member ' + m.label + ': value must be a number, or `from` must hold one or two numbers.');
     }
-    if (roundJoy(m.value) !== resolved.value) {
+    if (!resolved.accepts.has(roundJoy(m.value))) {
       return fail('comparison_value_not_derivable', {
         member: m.label, stated: m.value, from: resolved.from, difference: resolved.value,
+        accepted: Array.from(resolved.accepts).sort((a, b) => a - b),
       });
     }
     members.push({ label: m.label, key: normalizeItemName(m.label), value: resolved.value, from: resolved.from });
