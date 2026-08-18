@@ -507,6 +507,128 @@ check('figures: a figure standing on no returned row is rejected',
     scratch: SCRATCH,
   })).includes('figure_not_in_rows'));
 
+// ---------------------------------------------------------------------------
+// Cross-item gaps: two operands, two DIFFERENT rows.
+//
+// Rows and values below are copied from the live beer run (job dac480e4),
+// which is the run that found the defect: requiring both operands on one row
+// left a true cross-item gap no legal form at all. Declared as a figure it was
+// rejected as not-in-rows; left undeclared it was rejected as an uncarried
+// difference. Both doors shut on the commonest shape a connective read takes.
+//
+// 'Taking a VACATION' is the splice decoy and it is real: on that run 73.9
+// came back on BOTH it (n=9892) and 'Snacking at home' (n=252). Seating an
+// operand against any row carrying its value would let a gap labelled for
+// snacking stand on the vacation number.
+// ---------------------------------------------------------------------------
+const BEER_SCRATCH = [{
+  type: 'query',
+  query: 'SELECT i.item_name, COUNT(*) AS n, ROUND(AVG(r.joy_index)::numeric,1) AS ji, '
+       + 'AVG(r.joy_index) AS ji_raw FROM bjl_responses r '
+       + 'JOIN bjl_items i ON i.item_id = r.item_id GROUP BY i.item_name',
+  result: [
+    { item_name: 'Snacking at home',    n: 252,  ji: 73.9, ji_raw: 73.88888888888889 },
+    { item_name: 'Drinking a BEER',     n: 871,  ji: 50.4, ji_raw: 50.4247990815155 },
+    { item_name: 'Having PIZZA at home', n: 667, ji: 67.4, ji_raw: 67.37631184407796 },
+    { item_name: 'Taking a VACATION',   n: 9892, ji: 73.9, ji_raw: 73.9 },
+  ],
+}];
+const SNACK = { item_name: 'Snacking at home', score: 73.9, n: 252, note: 'a' };
+const BEER  = { item_name: 'Drinking a BEER', score: 50.4, n: 871, note: 'b' };
+const PIZZA = { item_name: 'Having PIZZA at home', score: 67.4, n: 667, note: 'c' };
+const VAC   = { item_name: 'Taking a VACATION', score: 73.9, n: 9892, note: 'd' };
+
+const beerRun = (evidence, figures, read) => runConnectiveReadGuard({
+  connective_read: {
+    has_read: true, comparisons: [], evidence, figures,
+    read: read || 'Snacking at home scores JI 73.9 (n=252) against Drinking a BEER at '
+                + 'JI 50.4 (n=871) - a 23.5 point gap.',
+  },
+  scratch: BEER_SCRATCH,
+});
+
+check('cross-item: a true gap between two cited rows passes',
+  beerRun([SNACK, BEER],
+    [{ label: 'gap, snacking vs beer', value: 23.5, from: [73.9, 50.4] }]).ok);
+
+check('cross-item: the undeclared form of the same true gap is still rejected',
+  reasons(beerRun([SNACK, BEER], [])).includes('uncarried_difference_claim'));
+
+check('SPLICE: an operand real on a returned row but never cited is rejected',
+  reasons(beerRun([BEER, PIZZA],
+    [{ label: 'gap, snacking vs beer', value: 23.5, from: [73.9, 50.4] }]))
+    .includes('figure_not_in_rows'));
+
+check('SPLICE: the rejection shows which values the read actually cited',
+  beerRun([BEER, PIZZA], [{ label: 'g', value: 23.5, from: [73.9, 50.4] }])
+    .failures.some(f => f.reason === 'figure_not_in_rows'
+                     && JSON.stringify(f.detail.cited_evidence_values) === '[50.4,67.4]'));
+
+check('SPLICE: a fabricated gap between two cited rows is still rejected',
+  reasons(beerRun([SNACK, BEER],
+    [{ label: 'gap', value: 19.9, from: [73.9, 50.4] }]))
+    .includes('figure_value_not_derivable'));
+
+// Isolated from the same-row path on purpose: with no `ji_raw` column there is
+// no second field on the row that rounds to 73.9, so the only way this could
+// seat is the cross-row one -- and that requires two DIFFERENT cited rows.
+const NO_RAW = [{
+  type: 'query',
+  query: 'SELECT i.item_name, COUNT(*) AS n, ROUND(AVG(r.joy_index)::numeric,1) AS ji '
+       + 'FROM bjl_responses r JOIN bjl_items i ON i.item_id = r.item_id GROUP BY i.item_name',
+  result: [
+    { item_name: 'Snacking at home', n: 252, ji: 73.9 },
+    { item_name: 'Drinking a BEER',  n: 871, ji: 50.4 },
+  ],
+}];
+check('SPLICE: one cited row cannot supply both halves of its own difference',
+  reasons(runConnectiveReadGuard({
+    connective_read: {
+      has_read: true, comparisons: [], evidence: [SNACK, BEER],
+      read: 'Snacking at home scores JI 73.9 (n=252) and Drinking a BEER JI 50.4 (n=871).',
+      figures: [{ label: 'snacking against itself', value: 0, from: [73.9, 73.9] }],
+    },
+    scratch: NO_RAW,
+  })).includes('figure_not_in_rows'));
+
+// The decoy earns its keep: the same operand pair seats once the collision
+// row is the one cited, which is exactly why any-row seating was unsafe.
+check('SPLICE: value collision does not confer provenance on the uncited row',
+  reasons(beerRun([VAC, BEER],
+    [{ label: 'gap, snacking vs beer', value: 23.5, from: [73.9, 50.4] }]))
+    .includes('figure_not_in_rows') === false);
+
+// Exactness has to survive the crossing. Operands on two rows, each with its
+// own unrounded copy: rounded 74.5-65.9 = 8.6, unrounded 74.5205-65.8683 =
+// 8.6522 -> 8.7. Two answers, and nothing between them.
+const CROSS_RAW = [{
+  type: 'query',
+  query: 'SELECT i.item_name, COUNT(*) AS n, ROUND(AVG(r.joy_index)::numeric,1) AS ji, '
+       + 'AVG(r.joy_index) AS ji_raw FROM bjl_responses r '
+       + 'JOIN bjl_items i ON i.item_id = r.item_id GROUP BY i.item_name',
+  result: [
+    { item_name: HC, n: 438, ji: 74.5, ji_raw: 74.5205 },
+    { item_name: LM, n: 377, ji: 65.9, ji_raw: 65.8683 },
+  ],
+}];
+const crossGap = value => reasons(runConnectiveReadGuard({
+  connective_read: {
+    has_read: true, comparisons: [], read: 'The two sit ' + value + ' points apart.',
+    evidence: [{ item_name: HC, score: 74.5, n: 438 }, { item_name: LM, score: 65.9, n: 377 }],
+    figures: [{ label: 'the distance', value, from: [74.5, 65.9] }],
+  },
+  scratch: CROSS_RAW,
+}));
+
+check('cross-item rounding: the displayed subtraction is accepted',
+  !crossGap(8.6).includes('figure_value_not_derivable'));
+
+check('cross-item rounding: the unrounded subtraction is accepted',
+  !crossGap(8.7).includes('figure_value_not_derivable'));
+
+check('cross-item rounding: exactly two values are admitted, not a band',
+  [8.5, 8.8].every(v => crossGap(v).includes('figure_value_not_derivable')));
+
 check('prose: difference wording with nothing behind it is caught as a comparison',
   reasons(runConnectiveReadGuard({
     connective_read: {

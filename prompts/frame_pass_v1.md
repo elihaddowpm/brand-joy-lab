@@ -71,6 +71,10 @@ A number stated with no ordering behind it belongs in `figures`. That is what ma
 
 Each figure must sit on a returned row, and a `from` of two numbers is checked by subtraction — so declaring a wrong gap as a figure does not launder it. That is deliberate: `figures` is where you show the arithmetic, not where you hide it.
 
+**A gap between two different items must cite both of them in `evidence`.** Two items sit on two rows, so there is no single row the check can read the pair off; it reads them off the rows you cited instead. *"Snacking at home 73.9 against a beer at 50.4 — a 23.5 point gap"* needs both an `evidence` entry for snacking and one for beer, and then `{ "value": 23.5, "from": [73.9, 50.4] }`. Cite only one of them and the figure is rejected, however true the gap is.
+
+This is not bookkeeping either. On the run this rule comes from, 73.9 came back on **two** rows — 'Snacking at home' at n=252 and 'Taking a VACATION' at n=9892. A gap that seats on whichever row happens to carry the number is a true figure under a false label, which is the same failure as every other one on this page. Naming the rows is what tells the check which 73.9 you meant.
+
 **If a number is awkward to declare, take it out of the read.** A sentence without it is always available and is never a failure. Do not write a numeral you cannot point at a row for — not a count of items you did not list, not a round-number restatement of something you never cited.
 
 Stating a distance — *"a 34-point difference"*, *"18.2 points apart"* — requires the subtraction behind it, either a `comparisons` entry or a `figures` entry whose `from` holds the two numbers. Saying one number is **above**, **below**, **under**, **over**, **ahead of** or **behind** another is an ordering claim and needs a `comparisons` entry, same as *largest* does.
@@ -168,6 +172,7 @@ Field rules, all enforced by a post-generation check that reads the actual rows:
 - **`basis_n` must appear in the read.** Stating it here only does not count.
 - **Every numeral in `read` must be accounted for** by `evidence`, `figures` or `comparisons`, or be a plain difference between two numbers those declare. An integer restatement of a declared value is fine — "the 29-point gap" for 29.1 — but a number that appears nowhere but the sentence is rejected, and so is a difference that does not come out to what you said.
 - **`figures` entries must sit on a returned row**, and a `from` pair is checked by subtraction. Rows now carry an unrounded `_raw` column beside the rounded one where the investigator returned it, so both the displayed subtraction and the exact one are accepted. Nothing between them is.
+- **A `from` pair spanning two items must have both items in `evidence`.** One row carrying both numbers is the other legal form — a mode row's two percentages, say. A pair that is neither is rejected, and the failure lists the values you did cite so you can see what was missing.
 - **When `has_read` is false, `read` must be null and `evidence` must be empty.** Do not smuggle a claim into `why_not`. `why_not` describes the search, not a finding.
 
 ## What happens to your output

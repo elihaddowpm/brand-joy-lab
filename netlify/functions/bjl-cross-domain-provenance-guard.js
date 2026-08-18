@@ -1611,9 +1611,47 @@ function declaredNumbers(evidence, comparisons, figures) {
  * figure gets the exact difference check, which is the second place a
  * fabricated gap gets caught.
  */
-function checkFigures(figures, results) {
+// The rows the read already cited, each with the most precise value it
+// carried. A figure whose operands come off two different rows may stand only
+// on these.
+//
+// Why cited evidence and not any returned row: a wide run returns thousands of
+// numbers, and on the live beer run 73.9 came back on BOTH 'Snacking at home'
+// (n=252) and 'Taking a VACATION' (n=9892). Seating an operand against any row
+// that happens to carry its value would let a figure labelled "snacking" stand
+// on the vacation number -- a true number under a false label, the same shape
+// as every other fabrication here. Evidence entries are already latched
+// jointly on item, score and n, so drawing operands from them inherits that
+// precision rather than re-deriving it.
+//
+// An evidence entry that does not seat contributes nothing, so a figure cannot
+// borrow provenance from a row that failed its own check.
+function evidenceSeats(evidence, results) {
+  const seats = [];
+  for (const e of (Array.isArray(evidence) ? evidence : [])) {
+    if (!e || typeof e !== 'object') continue;
+    const score = roundJoy(e.score != null ? e.score : e.joy_index);
+    if (!Number.isFinite(score)) continue;
+    const n = toInt(e.n);
+
+    let seated = null;
+    for (const res of (Array.isArray(results) ? results : [])) {
+      for (const row of res.rows) {
+        if (!rowCarriesNumbers(row, score, n).ok) continue;
+        seated = { item_name: e.item_name, value: score, precise: preciseOnRow(row, score) };
+        break;
+      }
+      if (seated) break;
+    }
+    if (seated) seats.push(seated);
+  }
+  return seats;
+}
+
+function checkFigures(figures, results, evidence) {
   const failures = [];
   const list = Array.isArray(figures) ? figures : [];
+  const seats = evidenceSeats(evidence, results);
 
   for (let fi = 0; fi < list.length; fi++) {
     const f = list[fi];
@@ -1631,6 +1669,29 @@ function checkFigures(figures, results) {
         'Figure ' + f.label + ': value must be a number, or `from` must hold one or two numbers.');
       continue;
     }
+    // A gap between two items lives on two rows by construction, so the
+    // same-row seating below cannot express it. Requiring it anyway left a
+    // true cross-item gap no legal form at all -- declared as a figure it was
+    // rejected here, left undeclared it was rejected as an uncarried
+    // difference -- which killed the commonest shape a connective read takes.
+    // Each operand seats on its own cited row, and the two must be different
+    // rows, so one row can never supply both halves of its own difference.
+    const crossSeated = [];
+    if (resolved.from.length === 2) {
+      const want = resolved.from.map(roundJoy);
+      for (let a = 0; a < seats.length; a++) {
+        if (seats[a].value !== want[0]) continue;
+        for (let b = 0; b < seats.length; b++) {
+          if (b === a || seats[b].value !== want[1]) continue;
+          crossSeated.push(roundJoy(Math.abs(seats[a].precise - seats[b].precise)));
+        }
+      }
+    }
+    // Added before the derivability check so the unrounded cross-row
+    // subtraction is one of the exact answers, on the same terms as the
+    // same-row one: two computations, never a band between them.
+    for (const v of crossSeated) resolved.accepts.add(v);
+
     if (!resolved.accepts.has(roundJoy(f.value))) {
       fail('figure_value_not_derivable', {
         figure: f.label, stated: f.value, from: resolved.from,
@@ -1638,11 +1699,15 @@ function checkFigures(figures, results) {
       });
       continue;
     }
-    const seated = (results || []).some(res => res.rows.some(row => rowCarriesValues(row, resolved.from)));
-    if (!seated) {
+    const sameRow = (results || []).some(res => res.rows.some(row => rowCarriesValues(row, resolved.from)));
+    if (!sameRow && !crossSeated.length) {
       fail('figure_not_in_rows', {
         figure: f.label, numbers: resolved.from,
-        note: 'No returned row carries these numbers. A stated figure must come off a row.',
+        note: 'A figure must come off a returned row. Either one row carries all of '
+            + 'these numbers, or -- for a gap between two items -- each number is the '
+            + 'score of a row this read already cites in `evidence`. Cite both rows as '
+            + 'evidence, or take the figure out.',
+        cited_evidence_values: seats.map(s => s.value),
       });
     }
   }
@@ -2217,7 +2282,7 @@ function runConnectiveReadGuard({ connective_read, scratch }) {
 
   // Numbers the read states plainly, without asserting a relationship.
   const figures = Array.isArray(cr.figures) ? cr.figures : [];
-  for (const f of checkFigures(figures, results)) failures.push(f);
+  for (const f of checkFigures(figures, results, evidence)) failures.push(f);
 
   // A stated distance needs the subtraction behind it -- from a comparison or
   // from a two-operand figure, either is a checked arithmetic claim.
