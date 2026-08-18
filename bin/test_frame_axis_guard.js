@@ -129,7 +129,8 @@ check('FABRICATION: Boomers\' number attached to Gen Z is rejected',
 
 check('FABRICATION: the failure is attributed, not a bare mismatch',
   swapped.failures.some(f => f.reason === 'connective_read_number_mismatch'
-                          && f.claim.axis === 'gen z'));
+                          && Array.isArray(f.claim.axis)
+                          && f.claim.axis.join(' + ') === 'gen z'));
 
 check('FABRICATION: the failure carries Gen Z\'s real numbers for the retry',
   JSON.stringify(swapped.failures[0].detail).includes('66.6'));
@@ -148,6 +149,17 @@ check('FABRICATION: an invented cohort is rejected by name',
     { item_name: LM, axis: 'Gen Alpha', score: 72.9, n: 93 },
     { item_name: LM, axis: 'Gen X',     score: 72.9, n: 93 },
   ], CUT)).includes('connective_read_axis_not_in_allowlist'));
+
+// An invented cohort and no cohort at all are different mistakes and need
+// different retry instructions. Telling a read that named "Gen Alpha" to
+// "name the cohort" would send it round the same loop.
+check('FABRICATION: an invented cohort is shown back what it said',
+  read([
+    { item_name: LM, axis: 'Gen Alpha', score: 72.9, n: 93 },
+    { item_name: LM, axis: 'Gen X',     score: 72.9, n: 93 },
+  ], CUT).failures.some(f => f.reason === 'connective_read_axis_not_in_allowlist'
+                          && Array.isArray(f.claim.axis)
+                          && f.claim.axis.includes('gen alpha')));
 
 check('FABRICATION: citing a cut row without naming the cohort is rejected',
   reasons(read([

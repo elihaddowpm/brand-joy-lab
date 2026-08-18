@@ -419,6 +419,24 @@ The execute_read_sql wrapper appends its own semicolon. Do not include trailing 
 
 Broad cross-tabs across the full bjl_responses table (2.1M rows) can hit query timeouts. Always filter by question_id, item_id, or item characteristics via JOIN bjl_items. Don't run unfiltered SELECT AVG(joy_index) FROM bjl_responses.
 
+### Rounded averages: carry the unrounded value too
+
+When you return a rounded average, return the unrounded one beside it, aliased with a `_raw` suffix:
+
+```sql
+SELECT i.item_name,
+       ROUND(AVG(r.joy_index)::numeric, 1) AS ji,
+       AVG(r.joy_index)                    AS ji_raw,
+       COUNT(*)                            AS n
+FROM   bjl_responses r
+JOIN   bjl_items i ON i.item_id = r.item_id
+GROUP  BY 1
+```
+
+This costs nothing and it settles an argument that is otherwise unsettleable. A later pass will subtract two of your scores and state the gap. Rounding first and rounding last give different answers: 74.5205 and 65.8683 are 8.7 apart, but the displayed 74.5 and 65.9 subtract to 8.6. Both are defensible, and with only the rounded columns in hand nothing downstream can tell a correct 8.7 from an invented one, so a check has to either reject true gaps or admit a tenth of slack for false ones. Returning `_raw` removes the choice: the exact subtraction becomes available.
+
+Round for the reader in `ji`. Keep the full precision in `ji_raw`. Do not round `_raw`, and do not cast it to text.
+
 ### Brand-not-in-data handling
 
 If a specific brand isn't in the data, identify the closest 1-2 proxy items in the same category within your first 3 queries, then do all subsequent analysis on those proxies. Don't keep searching for the original brand once you've established it's absent.

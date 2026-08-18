@@ -242,6 +242,46 @@ check('id pin: a two-id WHERE clause confers no number',
              || f.reason === 'card_item_not_in_allowlist'
              || f.reason === 'no_scratch_rows_for_cards'));
 
+// The live case, with the live numbers, because the abstract version above
+// understates what the blend costs.
+//
+// bjl_items holds TWO rows named 'Drinking COFFEE': 4753 and 4765. They are
+// different stimuli that happen to share a label, and they do not agree --
+// 51.7 on n=1939 against 47.5 on n=3964. Pinning both and averaging gives
+// 48.9 on n=5903, which is a real computation over real responses and is
+// nobody's score. It is also entirely plausible: it sits between the two,
+// carries a huge base, and nothing about it looks wrong.
+//
+// This is why a multi-id pin confers no name. A guard that resolved the pair
+// to 'Drinking COFFEE' would clear 48.9 as that item's score, and the read
+// would be sourced, checked, and false.
+const COFFEE = 'Drinking COFFEE';
+const COFFEE_LOOKUP = {
+  type: 'query',
+  query: "SELECT i.item_id, i.item_name FROM bjl_items i WHERE i.item_name = 'Drinking COFFEE'",
+  result: [{ item_id: 4753, item_name: COFFEE }, { item_id: 4765, item_name: COFFEE }],
+};
+const blendQuery = ids => ({
+  type: 'query',
+  query: 'SELECT COUNT(*) AS n, ROUND(AVG(r.joy_index)::numeric,1) AS ji '
+       + 'FROM bjl_responses r WHERE r.item_id IN (' + ids + ')',
+  result: ids === '4753, 4765'
+    ? [{ n: 5903, ji: 48.9 }]
+    : [{ n: 1939, ji: 51.7 }],
+});
+
+check('two ids, one name: the blended score is attributed to neither item',
+  cardStats({ item_name: COFFEE, score: 48.9, n: 5903, source: 'bjl_responses' },
+    [COFFEE_LOOKUP, blendQuery('4753, 4765')]).length > 0);
+
+check('two ids, one name: pinning just one still grounds that one',
+  cardStats({ item_name: COFFEE, score: 51.7, n: 1939, source: 'bjl_responses' },
+    [COFFEE_LOOKUP, blendQuery('4753')]).length === 0);
+
+check('two ids, one name: the other item\'s score is not grounded by the single pin',
+  cardStats({ item_name: COFFEE, score: 47.5, n: 3964, source: 'bjl_responses' },
+    [COFFEE_LOOKUP, blendQuery('4753')]).length > 0);
+
 // ---------------------------------------------------------------------------
 const failed = results.filter(r => !r[1]);
 for (const [name, ok] of results) console.log((ok ? '  PASS  ' : '  FAIL  ') + name);

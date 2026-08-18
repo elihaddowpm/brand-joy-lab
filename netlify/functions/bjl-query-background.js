@@ -709,6 +709,10 @@ async function runFramePass(triage, scratch, extraContext) {
     // the same as empty here: a read with a superlative in it and no
     // comparisons fails the guard, which is the point.
     comparisons: Array.isArray(parsed.comparisons) ? parsed.comparisons : [],
+    // Numbers the read states without asserting a relationship. Absent is
+    // also not the same as empty: a read stating a numeral it declared
+    // nowhere fails the guard, which is likewise the point.
+    figures: Array.isArray(parsed.figures) ? parsed.figures : [],
     why_not: typeof parsed.why_not === 'string' ? parsed.why_not : null,
   };
 }
@@ -758,6 +762,8 @@ async function runFramePassWithGuard(triage, scratch, extraContext) {
       '',
       'If the failure is about a comparison — an ordering, an incomplete set, an undisclosed base — the fix is one of exactly two things. Either carry the whole set: every row the result returned, each with its label and its numbers, so the ranking can be recomputed. Or drop the comparative wording and state what you actually verified. "Playful separates them by 34 points" needs no set. "Playful is the largest gap" needs all of them. The second sentence is not worth more than the first if it is not true.',
       '',
+      'If the failure is about a number in the prose — prose_number_unaccounted, figure_value_not_derivable, uncarried_difference_claim — then the read states a numeral it never handed over, or handed over a subtraction that does not come out. Every numeral in the read has to be declared: a row\'s score and n go in `evidence`, anything else goes in `figures` with the row it came from, and a difference goes in `from` so it can be checked. The failure lists the differences your own declared numbers do produce; if one of them is what you meant, use it. If none is, the number was wrong — take it out of the sentence rather than looking for a way to declare it.',
+      '',
       'If your read was right and you simply mis-transcribed a figure, fix the figure and keep the read. Do not abandon a real connection because a number was wrong; correct the number. Uncertainty about whether a value will pass is not a reason to withhold a read — look the value up and remove the uncertainty.',
       '',
       'Drop a row only when you genuinely cannot find it in the payload. If dropping leaves fewer than two grounded rows, return has_read false with a null read and an empty evidence array — but reach that by looking, not by declining to look. And do not substitute a different, weaker connection to have something to return.',
@@ -794,6 +800,7 @@ async function runFramePassWithGuard(triage, scratch, extraContext) {
     has_read: false,
     read: null,
     evidence: [],
+    figures: [],
     why_not: null,
     frame_outcome: 'dropped_provenance_failed',
     frame_warning: 'provenance_failed',
@@ -1631,6 +1638,9 @@ exports.handler = async (event) => {
           // The sets behind any ranking in the read, kept so a hand-read can
           // check the ordering the guard checked instead of re-deriving it.
           comparisons: connectiveRead.comparisons || [],
+          // Where every other number in the read came from, kept for the same
+          // reason: a hand-read should not have to re-derive what was checked.
+          figures: connectiveRead.figures || [],
           why_not: connectiveRead.why_not,
           frame_warning: connectiveRead.frame_warning || null,
           frame_warning_detail: connectiveRead.frame_warning_detail || null,

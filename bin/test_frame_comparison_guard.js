@@ -164,9 +164,26 @@ check('carried set: a false minimum is rejected',
 // The downgrade. This is the fallback the rule depends on being available:
 // the same finding, the ranking word removed, no set required, still true.
 // ---------------------------------------------------------------------------
+// The downgraded sentence states three numbers -- 52, 18, 34 -- that live on a
+// mode row `evidence` has no shape for. Declaring them as `figures` is the
+// legal form: same rows, same arithmetic, no ranking asserted.
+const DOWNGRADE = 'Playful separates the two: 52% of live music verbatims carry it against 18% '
+  + 'of home cooking verbatims, a 34-point difference.';
+const DOWNGRADE_FIGURES = [
+  { label: 'playful, live music', value: 52 },
+  { label: 'playful, home cooking', value: 18 },
+  { label: 'the distance between them', value: 34, from: [52, 18] },
+];
+
 check('downgrade: the finding without the ranking word passes with no set',
-  frame('Playful separates the two: 52% of live music verbatims carry it against 18% '
-      + 'of home cooking verbatims, a 34-point spread.', []).ok);
+  runConnectiveReadGuard({
+    connective_read: { has_read: true, read: DOWNGRADE, evidence: EVIDENCE,
+      comparisons: [], figures: DOWNGRADE_FIGURES },
+    scratch: SCRATCH,
+  }).ok);
+
+check('downgrade: the same sentence with the numbers undeclared is rejected',
+  reasons(frame(DOWNGRADE, [])).includes('prose_number_unaccounted'));
 
 // ---------------------------------------------------------------------------
 // Relational wording gets the same scrutiny as an explicit superlative.
@@ -340,12 +357,34 @@ check('an honest no-corner result is unaffected',
     scratch: SCRATCH,
   }).ok);
 
+// ---------------------------------------------------------------------------
 // Rounding. Live job c903ec21 produced a correct read -- live music's
 // generational spread is 13.7 against home cooking's 8.7 -- and it was dropped
-// because 74.5 - 65.9 is 8.6. The real gap is 8.6523, so 8.7 is right and the
-// guard's arithmetic on the already-rounded operands was wrong. The rows only
-// ever carry ROUND(...,1), so the accepted set is what some true pair of
-// operands consistent with the cited ones could produce: one tenth either way.
+// because the displayed 74.5 and 65.9 subtract to 8.6. The real gap is
+// 74.5205 - 65.8683 = 8.6522, so 8.7 is right and the guard was wrong.
+//
+// The fix is at the root: the investigator now returns the unrounded value
+// alongside the rounded one, so the guard can perform the SAME subtraction the
+// read did. Two exact computations are accepted -- the displayed operands and
+// the unrounded ones -- and nothing between or around them. 8.5 was accepted
+// under the interval version that this replaces; it is not accepted now.
+// ---------------------------------------------------------------------------
+const RAW_SCRATCH = [{
+  type: 'query',
+  query: 'SELECT i.item_name, AVG(...) FILTER (...) AS genx_ji, ... FROM bjl_responses r ...',
+  result: [
+    { item_name: LM, hi_ji: 72.9, hi_ji_raw: 72.8712, lo_ji: 59.2, lo_ji_raw: 59.1544, n: 93 },
+    { item_name: HC, hi_ji: 74.5, hi_ji_raw: 74.5205, lo_ji: 65.9, lo_ji_raw: 65.8683, n: 438 },
+  ],
+}];
+// The same two rows with the unrounded copies withheld.
+const ROUNDED_ONLY = [{
+  type: 'query',
+  query: RAW_SCRATCH[0].query,
+  result: RAW_SCRATCH[0].result.map(r =>
+    ({ item_name: r.item_name, hi_ji: r.hi_ji, lo_ji: r.lo_ji, n: r.n })),
+}];
+
 const GAP = 'Live music splits generations by 13.7 points against home cooking\'s 8.7, on 93 and 438.';
 const gapCmp = value => [{
   claim: 'Live music splits generations by 13.7 points against home cooking\'s 8.7',
@@ -354,19 +393,128 @@ const gapCmp = value => [{
         { label: 'home cooking', value, from: [74.5, 65.9] }],
   basis_n: [93, 438],
 }];
+const gapRun = (value, scratch) => runConnectiveReadGuard({
+  connective_read: {
+    has_read: true, read: GAP, comparisons: gapCmp(value),
+    evidence: [{ item_name: LM, score: 72.9, n: 93 }, { item_name: HC, score: 74.5, n: 438 }],
+    figures: [{ label: 'live music, older cohort', value: 59.2 },
+              { label: 'home cooking, older cohort', value: 65.9 }],
+  },
+  scratch,
+});
 
-check('rounding: a gap rounded before subtraction is accepted',
-  !reasons(frame(GAP, gapCmp(8.7))).includes('comparison_value_not_derivable'));
+check('rounding: a gap subtracted before rounding is accepted when the row carries the raw value',
+  !reasons(gapRun(8.7, RAW_SCRATCH)).includes('comparison_value_not_derivable'));
 
-check('rounding: the arithmetic on the cited operands is still accepted',
-  !reasons(frame(GAP, gapCmp(8.6))).includes('comparison_value_not_derivable'));
+check('rounding: the arithmetic on the displayed operands is still accepted',
+  !reasons(gapRun(8.6, RAW_SCRATCH)).includes('comparison_value_not_derivable'));
 
-check('rounding: a gap outside what the operands could produce is rejected',
-  reasons(frame(GAP, gapCmp(8.9))).includes('comparison_value_not_derivable'));
+check('rounding: exactly two values are admitted, not a band around them',
+  gapRun(8.9, RAW_SCRATCH).failures
+    .find(f => f.reason === 'comparison_value_not_derivable').detail.accepted.join(',') === '8.6,8.7');
 
-check('rounding: the rejection names the values the operands do admit',
-  frame(GAP, gapCmp(8.9)).failures
-    .find(f => f.reason === 'comparison_value_not_derivable').detail.accepted.join(',') === '8.5,8.6,8.7');
+check('rounding: 8.5 was inside the old interval and is now rejected',
+  reasons(gapRun(8.5, RAW_SCRATCH)).includes('comparison_value_not_derivable'));
+
+check('rounding: with no unrounded copy on the row the check is exact again',
+  reasons(gapRun(8.7, ROUNDED_ONLY)).includes('comparison_value_not_derivable'));
+
+check('rounding: the rounded-operand answer still passes without an unrounded copy',
+  !reasons(gapRun(8.6, ROUNDED_ONLY)).includes('comparison_value_not_derivable'));
+
+// ---------------------------------------------------------------------------
+// The prose latch. Live job 837726b0 passed every check above and shipped
+// "28.5 points below Gen Z's 61.5" where 61.5 - 32.4 is 29.1 -- then called it
+// "the 29-point generational gap" two sentences later. The 28.5 was never
+// declared anywhere the guard could see it.
+// ---------------------------------------------------------------------------
+const PROSE_SCRATCH = [{
+  type: 'query',
+  query: 'SELECT i.item_name, p.generation, AVG(r.joy_index) AS ji, COUNT(*) AS n '
+       + 'FROM bjl_responses r JOIN bjl_items i ON i.item_id = r.item_id '
+       + 'JOIN bjl_respondents p ON p.respondent_id = r.respondent_id GROUP BY 1,2',
+  result: [
+    { item_name: 'A Music- or Festival-Focused Trip', generation: 'Boomer', ji: 32.4, n: 816 },
+    { item_name: 'A Music- or Festival-Focused Trip', generation: 'Gen Z',  ji: 61.5, n: 522 },
+  ],
+}];
+const proseRead = gap => 'Boomers score 32.4 (n=816) on a music-focused trip, ' + gap
+  + ' points under Gen Z\'s 61.5 (n=522).';
+const PROSE_EVIDENCE = [
+  { item_name: 'A Music- or Festival-Focused Trip', axis: 'Boomer', score: 32.4, n: 816 },
+  { item_name: 'A Music- or Festival-Focused Trip', axis: 'Gen Z',  score: 61.5, n: 522 },
+];
+// The ordering IS carried, exactly as the shipped read carried it. Everything
+// the guard was handed is correct; the only wrong number is the one that
+// appears solely in the sentence.
+const proseCmp = gap => [{
+  claim: gap + ' points under Gen Z\'s 61.5',
+  direction: 'greater', subject: 'gen z', against: 'boomers',
+  set: [{ label: 'gen z', value: 61.5 }, { label: 'boomers', value: 32.4 }],
+  basis_n: [816, 522],
+}];
+const proseRun = gap => runConnectiveReadGuard({
+  connective_read: {
+    has_read: true, read: proseRead(gap), comparisons: proseCmp(gap), figures: [],
+    evidence: PROSE_EVIDENCE,
+  },
+  scratch: PROSE_SCRATCH,
+});
+
+check('prose: the shipped wrong difference is rejected',
+  reasons(proseRun(28.5)).includes('prose_number_unaccounted'));
+
+check('prose: the rejection names the number and offers the true one',
+  (() => {
+    const f = proseRun(28.5).failures.find(x => x.reason === 'prose_number_unaccounted');
+    return f.claim.number === 28.5 && f.detail.nearest_declared_differences.includes(29.1);
+  })());
+
+check('prose: the true difference between two cited rows needs no declaration',
+  !reasons(proseRun(29.1)).includes('prose_number_unaccounted'));
+
+check('prose: an integer restatement of a true difference is allowed',
+  !reasons(proseRun(29)).includes('prose_number_unaccounted'));
+
+check('prose: a number on no cited row is rejected even when it is real',
+  reasons(runConnectiveReadGuard({
+    connective_read: {
+      has_read: true, comparisons: [], figures: [], evidence: PROSE_EVIDENCE,
+      read: 'Boomers score 32.4 (n=816) on a music-focused trip; Gen Z 61.5 (n=522); '
+          + 'elsewhere the number is 44.5.',
+    },
+    scratch: PROSE_SCRATCH,
+  })).includes('prose_number_unaccounted'));
+
+// A figure is the legal form, and it is checked, not merely accepted.
+check('figures: a fabricated difference declared as a figure is still rejected',
+  reasons(runConnectiveReadGuard({
+    connective_read: {
+      has_read: true, comparisons: proseCmp(28.5), read: proseRead(28.5),
+      figures: [{ label: 'the distance', value: 28.5, from: [61.5, 32.4] }],
+      evidence: PROSE_EVIDENCE,
+    },
+    scratch: PROSE_SCRATCH,
+  })).includes('figure_value_not_derivable'));
+
+check('figures: a figure standing on no returned row is rejected',
+  reasons(runConnectiveReadGuard({
+    connective_read: {
+      has_read: true, comparisons: [], evidence: EVIDENCE,
+      read: 'Live music at 67.4 and home cooking at 70.1 sit either side of 88.8.',
+      figures: [{ label: 'invented', value: 88.8 }],
+    },
+    scratch: SCRATCH,
+  })).includes('figure_not_in_rows'));
+
+check('prose: difference wording with nothing behind it is caught as a comparison',
+  reasons(runConnectiveReadGuard({
+    connective_read: {
+      has_read: true, comparisons: [], figures: [], evidence: EVIDENCE,
+      read: 'Home cooking at 70.1 sits above live music at 67.4.',
+    },
+    scratch: SCRATCH,
+  })).includes('uncarried_comparative_claim'));
 
 // ---------------------------------------------------------------------------
 const failed = results.filter(r => !r[1]);

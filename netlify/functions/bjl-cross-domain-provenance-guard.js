@@ -1458,8 +1458,29 @@ const COMPARATIVE_TERMS = [
   'dominates', 'dwarfs', 'double', 'triple', 'twice', 'half as',
   'identical', 'parity', 'indistinguishable', 'on par', 'equally', 'the same as',
   'as high as', 'as low as', 'matched', 'flat across', 'no difference',
+  // Plain ordering wording. "Boomers score 32.4, below Gen Z's 61.5" ranks
+  // two quantities without reaching for a comparative adjective, and the
+  // ordering it asserts is checkable in exactly the way `greater` is.
+  'below', 'above', 'under', 'over', 'ahead of', 'behind', 'trails', 'leads',
 ];
 const COMPARATIVE_RE = new RegExp('\\b(' + COMPARATIVE_TERMS.join('|') + ')\\b', 'i');
+
+// Wording that asserts a DISTANCE rather than an order: "a 34-point
+// difference", "28.5 points apart". Split out from the list above because the
+// two need different things behind them, and conflating them would break the
+// downgrade the comparison rule depends on.
+//
+// A ranking needs its whole set -- nothing smaller can check "the largest".
+// A distance needs one subtraction, and a two-operand `figures` entry carries
+// exactly that. Demanding a full comparison object for "a 34-point
+// difference" would push the model back toward the ranking it was just told
+// to drop, which is the over-strict half of the defect this work exists to
+// end.
+const DIFFERENCE_TERMS = [
+  'points apart', 'points off', 'point difference', 'point gap', 'point spread',
+  'separated by', 'the difference between', 'differ by', 'apart',
+];
+const DIFFERENCE_RE = new RegExp('\\b(' + DIFFERENCE_TERMS.join('|') + ')\\b', 'i');
 
 // `rank` and `top` exist because "the largest" is not the only ordering a real
 // read makes. The first live run under this check produced two true claims --
@@ -1509,11 +1530,209 @@ function proseNumerals(text) {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// The prose is the claim.
+//
+// Everything above checks the numbers the read HANDS the guard. The read also
+// states numbers it never hands over, and those reached the reader unchecked.
+//
+// A passing live run said: "Boomers score 32.4 (n=816) -- 28.5 points below
+// Gen Z's 61.5 (n=522)". Every cited row verified. 61.5 - 32.4 is 29.1. The
+// same read then called it "the 29-point generational gap", contradicting
+// itself two sentences on. Nothing caught it, because 28.5 was never declared
+// anywhere the guard could see it -- the model performed the subtraction in
+// the sentence and only the sentence.
+//
+// So: every numeral in the read must be accounted for. A number is accounted
+// for when it is one the read itself declared, or a plain difference between
+// two it declared -- the exact arithmetic the prompt licenses and no more.
+// An integer restatement of either is allowed, because "the 29-point gap" for
+// 29.1 is a display convention rather than a different claim.
+//
+// Deliberately NOT accounted for: any number merely present somewhere in the
+// returned rows. Thousands of values come back on a wide run, and admitting
+// all of them would let a fabricated gap clear by coincidence -- which is the
+// precise failure mode this exists to stop. If the read wants to say a number,
+// it has to cite the row it came from.
+//
+// This is a latch and it will occasionally cost a true sentence: a read that
+// mentions "14 modes" without citing them gets rejected. That is the intended
+// direction. The remedy is to cite the row or drop the numeral, both of which
+// are always available, and the prompt says so.
+// ---------------------------------------------------------------------------
+function declaredNumbers(evidence, comparisons, figures) {
+  const out = new Set();
+  const add = (x) => {
+    const n = Number(x);
+    if (Number.isFinite(n)) out.add(roundJoy(n));
+  };
+
+  for (const e of (Array.isArray(evidence) ? evidence : [])) {
+    if (!e || typeof e !== 'object') continue;
+    if (e.score != null) add(e.score);
+    if (e.joy_index != null) add(e.joy_index);
+    if (e.n != null) add(e.n);
+  }
+
+  for (const f of (Array.isArray(figures) ? figures : [])) {
+    if (!f || typeof f !== 'object') continue;
+    if (f.value != null) add(f.value);
+    for (const x of (Array.isArray(f.from) ? f.from : [])) add(x);
+  }
+
+  for (const c of (Array.isArray(comparisons) ? comparisons : [])) {
+    if (!c || typeof c !== 'object') continue;
+    for (const m of (Array.isArray(c.set) ? c.set : [])) {
+      if (!m || typeof m !== 'object') continue;
+      if (m.value != null) add(m.value);
+      for (const f of (Array.isArray(m.from) ? m.from : [])) add(f);
+    }
+    const basis = Array.isArray(c.basis_n) ? c.basis_n
+                : (c.basis_n == null ? [] : [c.basis_n]);
+    for (const b of basis) add(b);
+  }
+
+  return out;
+}
+
+/**
+ * `figures`: numbers the read states without asserting a relationship.
+ *
+ * This exists because the prose latch would otherwise close the escape hatch
+ * the comparison rule leans on. The prompt's whole fallback is "drop the
+ * comparative word and say the smaller true thing" -- *"Playful separates
+ * them by 34 points, 52% to 18%"* -- and those three numerals live on a mode
+ * row that `evidence`, which carries item rows, has no shape for. Requiring
+ * every stated number to be declared while leaving that sentence no legal
+ * form would push the model back toward the comparison it was told to drop.
+ *
+ * A figure is a number plus where it came from. Same arithmetic license as a
+ * comparison member and the same seating requirement -- so a two-operand
+ * figure gets the exact difference check, which is the second place a
+ * fabricated gap gets caught.
+ */
+function checkFigures(figures, results) {
+  const failures = [];
+  const list = Array.isArray(figures) ? figures : [];
+
+  for (let fi = 0; fi < list.length; fi++) {
+    const f = list[fi];
+    const at = { figure_index: fi, label: (f && f.label) || null };
+    const fail = (reason, detail) =>
+      failures.push({ surface: 'connective_read', claim: at, reason, detail });
+
+    if (!f || typeof f !== 'object' || typeof f.label !== 'string' || !f.label.trim()) {
+      fail('malformed_figure', 'Every figure needs a label saying what the number is.');
+      continue;
+    }
+    const resolved = comparisonMemberValue(f, results);
+    if (!resolved) {
+      fail('malformed_figure',
+        'Figure ' + f.label + ': value must be a number, or `from` must hold one or two numbers.');
+      continue;
+    }
+    if (!resolved.accepts.has(roundJoy(f.value))) {
+      fail('figure_value_not_derivable', {
+        figure: f.label, stated: f.value, from: resolved.from,
+        accepted: Array.from(resolved.accepts).sort((a, b) => a - b),
+      });
+      continue;
+    }
+    const seated = (results || []).some(res => res.rows.some(row => rowCarriesValues(row, resolved.from)));
+    if (!seated) {
+      fail('figure_not_in_rows', {
+        figure: f.label, numbers: resolved.from,
+        note: 'No returned row carries these numbers. A stated figure must come off a row.',
+      });
+    }
+  }
+
+  return failures;
+}
+
+function checkProseNumbers(readText, evidence, comparisons, figures) {
+  const declared = declaredNumbers(evidence, comparisons, figures);
+  if (!declared.size) return [];
+
+  const list = Array.from(declared);
+  const accounted = new Set(declared);
+  for (let i = 0; i < list.length; i++) {
+    for (let j = i + 1; j < list.length; j++) {
+      accounted.add(roundJoy(Math.abs(list[i] - list[j])));
+    }
+  }
+  // An integer restatement of an accounted value is the same claim, said for
+  // the reader. Added after the differences so "29" covers a 29.1 gap.
+  for (const v of Array.from(accounted)) accounted.add(Math.round(v));
+
+  const failures = [];
+  for (const v of proseNumerals(readText)) {
+    if (accounted.has(roundJoy(v))) continue;
+    failures.push({
+      surface: 'connective_read',
+      claim: { number: v, read: String(readText).slice(0, 200) },
+      reason: 'prose_number_unaccounted',
+      detail: {
+        note: 'The read states this number but never cites it. It is not one of the '
+            + 'numbers carried in evidence, figures or comparisons, and it is not a '
+            + 'difference between two of them. Add a `figures` entry naming the row it '
+            + 'came from, or take the number out of the read.',
+        nearest_declared_differences: Array.from(accounted)
+          .filter(x => Math.abs(x - v) <= 2 && x !== v)
+          .sort((a, b) => Math.abs(a - v) - Math.abs(b - v))
+          .slice(0, 4),
+      },
+    });
+  }
+  return failures;
+}
+
+function decimalPlaces(x) {
+  const s = String(x);
+  const dot = s.indexOf('.');
+  return dot < 0 ? 0 : s.length - dot - 1;
+}
+
+// The most precise value on this row that rounds to `v`.
+//
+// A row that carries both `ji` 74.5 and `ji_raw` 74.5205 is carrying one
+// number twice, once for the reader and once for arithmetic. Given the
+// displayed 74.5 this returns 74.5205: the same measurement, unrounded.
+// Returns `v` unchanged when the row carries no finer copy, which is what
+// makes the caller fail closed rather than guess.
+function preciseOnRow(row, v) {
+  let best = v;
+  for (const f of (row.values || [])) {
+    if (roundJoy(f.num) !== roundJoy(v)) continue;
+    if (decimalPlaces(f.num) > decimalPlaces(best)) best = f.num;
+  }
+  return best;
+}
+
 // A member's value is either read straight off a row or is the plain
 // difference between two numbers read off one row. That is the same arithmetic
 // the read itself is licensed to do, and no more: no ratios, no modelled
 // figures, no shares of a population nobody counted.
-function comparisonMemberValue(m) {
+//
+// Two exact computations are accepted, never a band between them:
+//
+//   1. The difference of the operands AS CITED, which are rounded for display.
+//   2. The difference of the same two measurements UNROUNDED, recovered from
+//      the row that carries both.
+//
+// They disagree by a tenth whenever the operands' rounding pushes them the
+// same way: home cooking's real gap is 74.5205 - 65.8683 = 8.6522, which is
+// 8.7, while the displayed 74.5 and 65.9 subtract to 8.6. Both are correct
+// answers to slightly different questions, and a read that subtracts before
+// rounding is right to say 8.7. Rejecting it cost a true read on a run where
+// every number was correct.
+//
+// What is NOT accepted is anything between or around them. Each candidate is
+// a real subtraction of two real returned values, so a fabricated gap cannot
+// land inside the accepted set by being merely close -- it has to BE one of
+// the two answers. When the investigator returns no unrounded copy there is
+// only one candidate and the check is as tight as it ever was.
+function comparisonMemberValue(m, results) {
   const from = (Array.isArray(m.from) && m.from.length) ? m.from : [m.value];
   const nums = from.map(Number);
   if (!nums.length || nums.some(x => !Number.isFinite(x))) return null;
@@ -1524,29 +1743,17 @@ function comparisonMemberValue(m) {
   if (nums.length !== 2) return null;
 
   const v = roundJoy(Math.abs(nums[0] - nums[1]));
+  const accepts = new Set([v]);
 
-  // The operands are themselves already rounded to one decimal -- the rows
-  // carry ROUND(AVG(...),1) and nothing else, so the guard never sees the
-  // unrounded figure and cannot recompute from it.
-  //
-  // A read that subtracts before rounding is therefore RIGHT to disagree with
-  // this arithmetic by a tenth: home cooking's real gap is 8.6523, which is
-  // 8.7, while the cited 74.5 and 65.9 subtract to 8.6. Rejecting that cost a
-  // true read on a run where every number in it was correct.
-  //
-  // So the accepted set is every value some pair of true operands consistent
-  // with the cited ones could produce. Each cited operand stands for a true
-  // value within half a tenth of it, so their difference moves by at most a
-  // tenth in either direction. That is exact interval arithmetic on the
-  // rounding the SQL already did, not a tolerance chosen to make claims pass.
-  //
-  // It is worth being plain about the cost: it admits three values where one
-  // was admitted before, and a fabricated gap landing inside that tenth is
-  // indistinguishable from a correctly-derived one. The width is the data's
-  // own precision rather than a number picked for convenience, but it is
-  // slack, and a read wanting no slack should cite the gap it subtracted
-  // rather than one it rounded.
-  const accepts = new Set([roundJoy(v - 0.1), v, roundJoy(v + 0.1)]);
+  for (const res of (Array.isArray(results) ? results : [])) {
+    for (const row of res.rows) {
+      if (!rowCarriesValues(row, nums)) continue;
+      const a = preciseOnRow(row, nums[0]);
+      const b = preciseOnRow(row, nums[1]);
+      accepts.add(roundJoy(Math.abs(a - b)));
+    }
+  }
+
   return { value: v, from: nums, accepts };
 }
 
@@ -1618,7 +1825,7 @@ function checkComparison(cmp, results, readText, ci) {
     if (!m || typeof m !== 'object' || typeof m.label !== 'string' || !m.label.trim()) {
       return fail('malformed_comparison', 'Every set member needs a label and a value.');
     }
-    const resolved = comparisonMemberValue(m);
+    const resolved = comparisonMemberValue(m, results);
     if (!resolved) {
       return fail('malformed_comparison',
         'Member ' + m.label + ': value must be a number, or `from` must hold one or two numbers.');
@@ -1893,40 +2100,70 @@ function runConnectiveReadGuard({ connective_read, scratch }) {
     // A claim that names the cohort in item_name instead of in `axis` is
     // read the same way -- it said the thing, the field it said it in does
     // not matter.
-    let claimAxis = normalizeItemName(
-      typeof e.axis === 'string' ? e.axis
-      : typeof e.generation === 'string' ? e.generation
-      : typeof e.mode === 'string' ? e.mode
-      : typeof e.income_bracket === 'string' ? e.income_bracket
-      : ''
-    );
-    if (!claimAxis && bucket.some(r => Object.values(r.axis || {}).includes(itemKey))) {
-      claimAxis = itemKey;
-    }
+    // Every cohort value that came back for this item. Matching the claim
+    // against these, rather than parsing the claim, is what makes a compound
+    // cohort readable without guessing at a separator: the model writes
+    // "Millennial / $200,000 or more" or "Millennial x $200k+" or an array,
+    // and all of them contain the cohort names the rows actually carried.
+    const known = Array.from(new Set(bucket.flatMap(r => Object.values(r.axis || {}))));
 
-    // Named a cohort: only rows from that cohort can back it.
-    // Named none: only rows that belong to no cut can back it. An unqualified
-    // claim matched against a cut row is unverifiable by construction --
-    // which cohort's number is it? -- and that is the hole, not a formality.
-    const candidates = claimAxis
-      ? bucket.filter(r => Object.values(r.axis || {}).includes(claimAxis))
-      : bucket.filter(r => Object.keys(r.axis || {}).length === 0);
+    const claimParts = [];
+    if (Array.isArray(e.axis)) claimParts.push(...e.axis);
+    else if (typeof e.axis === 'string') claimParts.push(e.axis);
+    for (const f of AXIS_FIELDS) if (typeof e[f] === 'string') claimParts.push(e[f]);
+    const claimNamed = claimParts.map(normalizeItemName).filter(Boolean);
+    const claimText = claimNamed.join(' | ');
+
+    const claimAxes = new Set(known.filter(k => claimText.includes(k)));
+    // A cohort named in item_name rather than in a field said the thing; the
+    // field it said it in does not matter.
+    if (!claimAxes.size && known.includes(itemKey)) claimAxes.add(itemKey);
+
+    // A row backs the claim only when the claim names EVERY cut the row sits
+    // in. One dimension is not enough on a two-way cut: the Millennial x
+    // $200k+ cell is not "Millennials", and citing its 69.5 as a generational
+    // figure is the same false attribution one dimension down. Rows outside
+    // any cut need no cohort and accept none.
+    const candidates = bucket.filter(r => {
+      const vals = Object.values(r.axis || {});
+      if (!vals.length) return claimAxes.size === 0;
+      return claimAxes.size > 0 && vals.every(v => claimAxes.has(v));
+    });
 
     if (candidates.length === 0) {
+      // An invented cohort must stay distinguishable from no cohort at all.
+      // "Gen Alpha" matches nothing in `known`, so claimAxes is empty -- but
+      // the read did name a cohort, and reporting that as "unspecified" would
+      // tell a retry to add a cohort it already added. Show it back what it
+      // said so the rejection is legible.
+      const axisShown = claimAxes.size ? Array.from(claimAxes)
+                      : claimNamed.length ? claimNamed
+                      : null;
+      // Distinguish "named nothing" from "named too little". A read that
+      // half-specifies a two-way cell needs to be told the cell has another
+      // dimension, not told its cohort does not exist.
+      const underSpecified = claimAxes.size > 0 && bucket.some(r => {
+        const vals = Object.values(r.axis || {});
+        return vals.length > claimAxes.size && vals.some(v => claimAxes.has(v));
+      });
       failures.push({
         surface: 'connective_read',
-        claim: { item_name: e.item_name, axis: claimAxis || null, score: e.score, n: e.n },
-        reason: claimAxis
-          ? 'connective_read_axis_not_in_allowlist'
-          : 'connective_read_axis_unspecified',
-        detail: claimAxis
-          ? 'No returned row for this item carries that cohort.'
-          : 'Every returned row for this item belongs to a cut. Name the cohort the number came from.',
+        claim: { item_name: e.item_name, axis: axisShown, score: e.score, n: e.n },
+        reason: (!claimAxes.size && !claimNamed.length) ? 'connective_read_axis_unspecified'
+              : underSpecified ? 'connective_read_axis_underspecified'
+              : 'connective_read_axis_not_in_allowlist',
+        detail: (!claimAxes.size && !claimNamed.length)
+          ? 'Every returned row for this item belongs to a cut. Name the cohort the number came from.'
+          : underSpecified
+          ? 'These rows are cut on more than one dimension. Name every cohort the cell belongs to, '
+            + 'not just one: a generation-by-income cell is not a claim about the generation.'
+          : 'No returned row for this item carries that cohort.',
         // The cohorts that did come back, so a retry can name one rather
-        // than guess at it.
+        // than guess at it. Cells first, because on a multi-way cut the whole
+        // combination is what a claim has to name.
         cohorts_available: Array.from(new Set(
-          bucket.flatMap(r => Object.values(r.axis || {}))
-        )).slice(0, 12),
+          bucket.map(r => Object.values(r.axis || {}).join(' + ')).filter(Boolean)
+        )).slice(0, 16),
       });
       continue;
     }
@@ -1942,7 +2179,7 @@ function runConnectiveReadGuard({ connective_read, scratch }) {
     if (!matched) {
       failures.push({
         surface: 'connective_read',
-        claim: { item_name: e.item_name, axis: claimAxis || null, score: e.score, n: e.n },
+        claim: { item_name: e.item_name, axis: Array.from(claimAxes), score: e.score, n: e.n },
         reason: 'connective_read_number_mismatch',
         // The numbers each candidate row actually carried, so a retry can
         // read the correct values off the failure rather than guess at them.
@@ -1977,6 +2214,32 @@ function runConnectiveReadGuard({ connective_read, scratch }) {
             + 'Either carry the full set it ranks over, or state the finding without the comparison.',
     });
   }
+
+  // Numbers the read states plainly, without asserting a relationship.
+  const figures = Array.isArray(cr.figures) ? cr.figures : [];
+  for (const f of checkFigures(figures, results)) failures.push(f);
+
+  // A stated distance needs the subtraction behind it -- from a comparison or
+  // from a two-operand figure, either is a checked arithmetic claim.
+  const carriesDifference = comparisons.length > 0
+    || figures.some(f => f && Array.isArray(f.from) && f.from.length === 2);
+  if (!carriesDifference && DIFFERENCE_RE.test(readText)) {
+    const hit = readText.match(DIFFERENCE_RE);
+    failures.push({
+      surface: 'connective_read',
+      claim: { term: hit && hit[0], read: readText.slice(0, 200) },
+      reason: 'uncarried_difference_claim',
+      detail: 'The read states a distance ("' + (hit && hit[0])
+            + '") but nothing carries the subtraction, so the arithmetic cannot be '
+            + 'checked. Add a `figures` entry whose `from` holds the two numbers it '
+            + 'came from.',
+    });
+  }
+
+  // Numbers the read states but never hands over. Last, and unconditional: a
+  // retry is shown every failure at once, so suppressing this one behind the
+  // others would cost a round trip for no gain.
+  for (const f of checkProseNumbers(readText, evidence, comparisons, figures)) failures.push(f);
 
   return { ok: failures.length === 0, failures };
 }
@@ -2070,6 +2333,8 @@ module.exports = {
   numericFields,
   rowCarriesNumbers,
   checkComparison,
+  checkFigures,
+  checkProseNumbers,
   collectQueryResults,
   COMPARATIVE_RE,
 };
