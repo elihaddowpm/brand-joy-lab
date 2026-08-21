@@ -717,6 +717,49 @@ async function runFramePass(triage, scratch, extraContext) {
   };
 }
 
+// A parse failure is the harness failing to read the model, not the model
+// failing to find a read. Job 43de542d returned a complete, well-formed object
+// -- a real gender direction-flip across the travel arc -- behind a paragraph
+// of prose, and the extractor anchored on the wrong brace and lost all of it.
+// Every other way a read can fail gets a second attempt; this was the one that
+// did not, and it is the one where nothing was wrong with the read.
+//
+// The re-ask says nothing about what to look for. It restates the format and
+// explicitly asks for the same answer back, because a retry that signals it
+// wants a read is a retry that manufactures one.
+const FRAME_FORMAT_RETRY = [
+  'RETRY. Your previous reply could not be parsed. Nothing is wrong with your finding — the harness could not read it.',
+  '',
+  'Return the JSON object and nothing else. No preamble, no reasoning before it, no commentary after it, no code fence. The first character of your reply must be `{` and the last must be `}`.',
+  '',
+  'Give the SAME answer you gave before. If you had a read, return that read unchanged. If you had none, return has_read false with a null read and an empty evidence array. Do not go looking for a different connection, do not strengthen the one you had, and do not produce a read if you did not have one. This is a formatting correction and nothing else.',
+].join('\n');
+
+// One frame pass, re-asked once if the reply would not parse.
+//
+// Scoped to parsing on purpose: it hands back whatever the model said, and the
+// guard downstream is untouched. A read recovered here faces every latch a
+// first-pass read faces, and gets no credit for having been retyped.
+//
+// `call` is injected so the retry policy can be pinned without the network.
+async function runFramePassParsed(triage, scratch, extraContext, call = runFramePass) {
+  const first = await call(triage, scratch, extraContext);
+  if (!first._parse_failed) return first;
+
+  console.warn('[frame] output would not parse; re-asking for the object alone.');
+  // Prepended, not substituted: on the guard-failure path this context already
+  // carries the failure list, and dropping it to ask for better formatting
+  // would trade one lost read for another.
+  const prior = (extraContext && typeof extraContext.__frame_retry_prefix === 'string')
+    ? extraContext.__frame_retry_prefix.trim() : '';
+  const retry = await call(triage, scratch, Object.assign({}, extraContext || {}, {
+    __frame_retry_prefix: prior ? FRAME_FORMAT_RETRY + '\n\n' + prior : FRAME_FORMAT_RETRY,
+  }));
+  return retry._parse_failed
+    ? Object.assign({}, retry, { _parse_retry_exhausted: true })
+    : retry;
+}
+
 // Frame pass + provenance guard, shipped together on purpose. An unguarded
 // frame pass is a confabulation engine pointed at exactly the output a reader
 // most wants to believe: a surprising cross-cutting connection is the claim
@@ -737,11 +780,12 @@ async function runFramePass(triage, scratch, extraContext) {
 // the cap-hit rate unreadable, so each state is named at the point it happens
 // and the name reaches the scratch entry.
 async function runFramePassWithGuard(triage, scratch, extraContext) {
-  const first = await runFramePass(triage, scratch, extraContext);
+  const first = await runFramePassParsed(triage, scratch, extraContext);
   if (!first.has_read) {
     return Object.assign({}, first, first._parse_failed
       ? { frame_outcome: 'parse_failed', frame_warning: 'parse_failed',
-          frame_warning_detail: { stop_reason: first._stop_reason, raw_tail: first._raw_tail } }
+          frame_warning_detail: { stop_reason: first._stop_reason, raw_tail: first._raw_tail,
+                                  parse_retry_exhausted: first._parse_retry_exhausted === true } }
       : { frame_outcome: 'no_corner', frame_warning: null });
   }
 
@@ -770,7 +814,7 @@ async function runFramePassWithGuard(triage, scratch, extraContext) {
     ].join('\n'),
   });
 
-  const retry = await runFramePass(triage, scratch, retryContext);
+  const retry = await runFramePassParsed(triage, scratch, retryContext);
   if (!retry.has_read) {
     // Not the same as "no corner". The model had a read and gave it up after
     // the guard pushed back, which is either the guard working or the guard
@@ -779,6 +823,7 @@ async function runFramePassWithGuard(triage, scratch, extraContext) {
     return Object.assign({}, retry, retry._parse_failed
       ? { frame_outcome: 'parse_failed_on_retry', frame_warning: 'parse_failed',
           frame_warning_detail: { stop_reason: retry._stop_reason, raw_tail: retry._raw_tail,
+                                  parse_retry_exhausted: retry._parse_retry_exhausted === true,
                                   first_pass_failures: firstPass.failures } }
       : {
           frame_outcome: 'declined_after_guard_failure',
@@ -874,14 +919,15 @@ function looksLikeTruncation(stopReason, raw) {
 // Strategy: locate the outermost {...} and slice. Bracket-counting handles
 // nested objects/arrays correctly; strings (with escapes) are skipped so
 // quotes inside response_text don't fool the counter.
-function extractJsonObjectSubstring(raw) {
-  if (!raw || typeof raw !== 'string') return null;
-  const first = raw.indexOf('{');
+// The first balanced {...} in `s`, counting from its first brace. Null when
+// there is no brace, or when the scan runs off the end still open.
+function balancedObjectIn(s) {
+  const first = s.indexOf('{');
   if (first === -1) return null;
   let depth = 0;
   let inString = false;
-  for (let i = first; i < raw.length; i++) {
-    const c = raw[i];
+  for (let i = first; i < s.length; i++) {
+    const c = s[i];
     if (inString) {
       if (c === '\\') { i++; continue; }
       if (c === '"') inString = false;
@@ -891,9 +937,41 @@ function extractJsonObjectSubstring(raw) {
     if (c === '{') depth++;
     else if (c === '}') {
       depth--;
-      if (depth === 0) return raw.slice(first, i + 1);
+      if (depth === 0) return s.slice(first, i + 1);
     }
   }
+  return null;
+}
+
+// A fenced block, ```json or bare. Non-greedy, so the first complete fence
+// wins rather than everything up to the last one in the reply.
+const FENCED_BLOCK = /```(?:json)?[ \t]*\r?\n([\s\S]*?)```/g;
+
+function extractJsonObjectSubstring(raw) {
+  if (!raw || typeof raw !== 'string') return null;
+
+  // A fenced block, when there is one, is where the model said its answer is.
+  // Anchoring on the first brace in the WHOLE reply is right when the reply is
+  // JSON and wrong when the model reasons out loud first: one stray brace or
+  // unpaired quote in a preamble sends the scan to EOF, and the unbalanced
+  // remainder fails to parse even though a complete object sits further down.
+  // That is what lost job 43de542d -- a real read, well-formed, never looked
+  // at -- and lead-in prose is the drift pattern this function was written for
+  // in the first place.
+  //
+  // Selection only. This decides which substring goes to JSON.parse and does
+  // nothing else: no value is read, altered or admitted, and everything the
+  // object claims still faces every check it faced before.
+  for (const m of raw.matchAll(FENCED_BLOCK)) {
+    const fenced = balancedObjectIn(m[1]);
+    if (fenced) return fenced;
+  }
+
+  const whole = balancedObjectIn(raw);
+  if (whole) return whole;
+
+  const first = raw.indexOf('{');
+  if (first === -1) return null;
   // Reached EOF mid-object — truncated. Return the partial buffer from
   // the first { onward so downstream extractors can still pull response_text.
   return raw.slice(first);
@@ -1454,6 +1532,11 @@ async function runSynthesisWithGuard(triage, scratch, extraContext) {
 // -------------------------------------------------------------------------
 // Background handler — Netlify dispatches this with 15-min timeout
 // -------------------------------------------------------------------------
+// Exported for tests. Netlify only ever reads `handler`.
+exports.extractJsonObjectSubstring = extractJsonObjectSubstring;
+exports.runFramePassParsed = runFramePassParsed;
+exports.FRAME_FORMAT_RETRY = FRAME_FORMAT_RETRY;
+
 exports.handler = async (event) => {
   let body, jobId;
   try {
