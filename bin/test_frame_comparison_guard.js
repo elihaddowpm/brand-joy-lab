@@ -100,12 +100,19 @@ function frame(read, comparisons) {
 }
 function reasons(r) { return r.failures.map(f => f.reason); }
 
-// The gap for one mode, as the read computes it: |live music % - home cooking %|.
+// The gap for one mode, as the read computes it: the spread between the live
+// music and home cooking percentages.
+//
+// `from` is ordered and the difference is signed, so a spread -- which is
+// unsigned by construction -- is written larger operand first. That is the
+// rule working, not a workaround: the operand order has to say what the label
+// says, and "spread" says magnitude. Ranking these by `max` then ranks
+// magnitudes, which is what the read claims to do.
 function gapMember(mode) {
   const row = MODES.find(m => m.mode === mode);
-  const from = row.lm_pct === null ? [row.hc_pct] : [row.lm_pct, row.hc_pct];
-  const value = from.length === 1 ? from[0] : Math.round(Math.abs(from[0] - from[1]) * 10) / 10;
-  return { label: mode, value, from };
+  if (row.lm_pct === null) return { label: mode, value: row.hc_pct, from: [row.hc_pct] };
+  const from = row.lm_pct >= row.hc_pct ? [row.lm_pct, row.hc_pct] : [row.hc_pct, row.lm_pct];
+  return { label: mode, value: Math.round((from[0] - from[1]) * 10) / 10, from };
 }
 const FULL_SET = MODES.map(m => gapMember(m.mode));
 
@@ -486,6 +493,170 @@ check('prose: a number on no cited row is rejected even when it is real',
     scratch: PROSE_SCRATCH,
   })).includes('prose_number_unaccounted'));
 
+// ---------------------------------------------------------------------------
+// A rejected subject must show what the choices were.
+//
+// The matching rule is exact and stays exact -- a subject resolved to the
+// nearest-looking member is how a claim gets attached to someone else's
+// number. But live jobs 2436bad7 and e5f3165a both wrote descriptive subjects
+// against sets labelled otherwise, and BOTH retries failed the same way,
+// because the failure named the subject and never named the members. The model
+// was told it guessed wrong without being shown what it was choosing between.
+// ---------------------------------------------------------------------------
+const SUBJ_SET = [
+  { label: 'Midwest', value: 38.9 },
+  { label: 'Northeast', value: 45.6 },
+  { label: 'West', value: 30.2 },
+];
+const subjRun = (subject, extra) => runConnectiveReadGuard({
+  connective_read: {
+    has_read: true, evidence: EVIDENCE, figures: [],
+    read: 'Live music at 67.4 and home cooking at 70.1; the Northeast leads the regions on 45.6.',
+    comparisons: [Object.assign({
+      claim: 'the Northeast leads the regions on 45.6',
+      direction: 'max', subject, set: SUBJ_SET, basis_n: [50, 139],
+    }, extra || {})],
+  },
+  scratch: SCRATCH,
+});
+
+check('subject: a descriptive subject is still rejected',
+  reasons(subjRun('the Midwest regional gap on home-cooked meal'))
+    .includes('comparison_subject_not_in_set'));
+
+check('subject: the rejection now lists every member label',
+  (() => {
+    const f = subjRun('the Midwest regional gap on home-cooked meal')
+      .failures.find(x => x.reason === 'comparison_subject_not_in_set');
+    const got = (f.detail.set_members || []).map(m => m.label);
+    return ['Midwest', 'Northeast', 'West'].every(l => got.includes(l));
+  })());
+
+check('subject: and their values, so the retry can see which one it meant',
+  (() => {
+    const f = subjRun('the Midwest regional gap on home-cooked meal')
+      .failures.find(x => x.reason === 'comparison_subject_not_in_set');
+    const m = (f.detail.set_members || []).find(x => x.label === 'Midwest');
+    return m && m.value === 38.9;
+  })());
+
+check('subject: the rejection says which field was wrong',
+  (() => {
+    const f = subjRun('the Midwest regional gap on home-cooked meal')
+      .failures.find(x => x.reason === 'comparison_subject_not_in_set');
+    return f.detail.field === 'subject' && f.detail.stated === 'the Midwest regional gap on home-cooked meal';
+  })());
+
+check('subject: copying a label verbatim is accepted',
+  !reasons(subjRun('Northeast')).includes('comparison_subject_not_in_set'));
+
+check('subject: matching stays exact -- a near miss is not resolved for you',
+  reasons(subjRun('Midwest region')).includes('comparison_subject_not_in_set'));
+
+check('subject: a wrong `against` is reported as `against`, not as `subject`',
+  (() => {
+    const f = subjRun('Northeast', { direction: 'greater', against: 'the western regions' })
+      .failures.find(x => x.reason === 'comparison_subject_not_in_set');
+    return f && f.detail.field === 'against' && f.detail.stated === 'the western regions';
+  })());
+
+// ---------------------------------------------------------------------------
+// What counts as a numeral the read CLAIMS.
+//
+// Scanning every digit run was over-strict in a way that failed closed on
+// truth. Live job 2436bad7 stated a true, correctly attributed parental gap --
+// Parent 77.4 (n=184) against Non-parent 68.0 (n=289) on a home cooked meal,
+// both from the 2026-08 wave, verified against the database -- and the guard
+// dropped it, because it pulled 2026 and 8 out of the date and demanded the
+// read cite them as figures. There is no row carrying 2026. The read had no
+// legal form.
+//
+// The class is wider than dates: this data has items called '365 by Whole
+// Foods Market' and '30A, Florida', and question ids like q146. None of those
+// digits are quantities.
+//
+// The direction that matters is the second half of each pair below: a
+// standalone fabricated number is still caught. A made-up gap is written
+// "12.7", never welded into a word, so nothing this fix admits is a figure.
+// ---------------------------------------------------------------------------
+const MEAL = 'Having a HOME COOKED meal in your home';
+const WAVE_SCRATCH = [{
+  type: 'query',
+  query: 'SELECT i.item_name, p.parental_status, ROUND(AVG(r.joy_index)::numeric,1) AS ji, '
+       + 'COUNT(*) AS n FROM bjl_responses r JOIN bjl_items i ON i.item_id = r.item_id '
+       + 'JOIN bjl_respondents p ON p.respondent_id = r.respondent_id GROUP BY 1,2',
+  result: [
+    { item_name: MEAL, parental_status: 'Parent',     ji: 77.4, n: 184 },
+    { item_name: MEAL, parental_status: 'Non-parent', ji: 68.0, n: 289 },
+    { item_name: '365 by Whole Foods Market', parental_status: 'Parent', ji: 45.9, n: 58 },
+  ],
+}];
+const WAVE_EVIDENCE = [
+  { item_name: MEAL, parental_status: 'Parent',     score: 77.4, n: 184 },
+  { item_name: MEAL, parental_status: 'Non-parent', score: 68.0, n: 289 },
+];
+const waveRun = (read, evidence) => runConnectiveReadGuard({
+  connective_read: { has_read: true, read, comparisons: [], figures: [],
+    evidence: evidence || WAVE_EVIDENCE },
+  scratch: WAVE_SCRATCH,
+});
+
+check('prose scope: the true read dropped by job 2436bad7 now stands',
+  !reasons(waveRun('Parents score 77.4 (n=184) against non-parents\' 68.0 (n=289) '
+    + 'in the 2026-08 wave.')).includes('prose_number_unaccounted'));
+
+check('prose scope: and its true 9.4-point gap needs no separate declaration',
+  !reasons(waveRun('Parents score 77.4 (n=184) against non-parents\' 68.0 (n=289) '
+    + 'in the 2026-08 wave -- a 9.4-point gap.')).includes('prose_number_unaccounted'));
+
+check('prose scope: STILL CAUGHT -- a fabricated gap in that same sentence',
+  reasons(waveRun('Parents score 77.4 (n=184) against non-parents\' 68.0 (n=289) '
+    + 'in the 2026-08 wave -- a 12.7-point gap.')).includes('prose_number_unaccounted'));
+
+check('prose scope: STILL CAUGHT -- the fabrication is named, not the date',
+  (() => {
+    const f = waveRun('Parents score 77.4 (n=184) against non-parents\' 68.0 (n=289) '
+      + 'in the 2026-08 wave -- a 12.7-point gap.')
+      .failures.filter(x => x.reason === 'prose_number_unaccounted');
+    return f.length === 1 && f[0].claim.number === 12.7;
+  })());
+
+check('prose scope: a full ISO date is not three claims',
+  !reasons(waveRun('Fielded 2026-08-17, parents 77.4 (n=184) to non-parents 68.0 (n=289).'))
+    .includes('prose_number_unaccounted'));
+
+check('prose scope: an item name carrying digits owes no provenance for them',
+  !reasons(waveRun('365 by Whole Foods Market draws 45.9 (n=58) from parents, against '
+    + '77.4 (n=184) for a home cooked meal.', [
+      { item_name: '365 by Whole Foods Market', parental_status: 'Parent', score: 45.9, n: 58 },
+      { item_name: MEAL, parental_status: 'Parent', score: 77.4, n: 184 },
+    ])).includes('prose_number_unaccounted'));
+
+check('prose scope: STILL CAUGHT -- a fabricated number beside that item name',
+  reasons(waveRun('365 by Whole Foods Market draws 45.9 (n=58) from parents, against '
+    + '77.4 (n=184) for a home cooked meal, and 51.2 somewhere else.', [
+      { item_name: '365 by Whole Foods Market', parental_status: 'Parent', score: 45.9, n: 58 },
+      { item_name: MEAL, parental_status: 'Parent', score: 77.4, n: 184 },
+    ])).includes('prose_number_unaccounted'));
+
+check('prose scope: a digit welded to letters is an identifier, not a quantity',
+  !reasons(waveRun('Per q146 and the 30A cell, parents 77.4 (n=184), non-parents 68.0 (n=289).'))
+    .includes('prose_number_unaccounted'));
+
+check('prose scope: STILL CAUGHT -- a negative value keeps its sign and is checked',
+  (() => {
+    const f = waveRun('Parents 77.4 (n=184), non-parents 68.0 (n=289), one cell at -20.0.')
+      .failures.filter(x => x.reason === 'prose_number_unaccounted');
+    return f.length === 1 && f[0].claim.number === -20;
+  })());
+
+check('prose scope: comma grouping reads as one number, not two',
+  (() => {
+    const f = waveRun('Parents 77.4 (n=184), non-parents 68.0 (n=289), base 200,000.')
+      .failures.filter(x => x.reason === 'prose_number_unaccounted');
+    return f.length === 1 && f[0].claim.number === 200000;
+  })());
+
 // A figure is the legal form, and it is checked, not merely accepted.
 check('figures: a fabricated difference declared as a figure is still rejected',
   reasons(runConnectiveReadGuard({
@@ -637,6 +808,164 @@ check('prose: difference wording with nothing behind it is caught as a compariso
     },
     scratch: SCRATCH,
   })).includes('uncarried_comparative_claim'));
+
+// ---------------------------------------------------------------------------
+// Signed differences: `from` is ordered, and the subtraction keeps its sign.
+//
+// Job 19a48b92 wrote four figures of this shape:
+//
+//   {"from":[62.6,72.1],"figure":"home cooked meal gap, retired minus full-time",
+//    "stated":-9.5,"accepted":[9.5]}
+//
+// 62.6 - 72.1 is -9.5. The figure's own label says which way the subtraction
+// runs. The guard took an absolute value, so it demanded +9.5 -- the wrong
+// answer to the question the label asked -- and the read was dropped with
+// every number in it correct. Same fail-closed-on-truth class as the date
+// scanner above.
+//
+// Signing it is a narrowing, not a loosening: `from` order is now a claim, and
+// a gap stated the wrong way round fails where it used to pass. That is the
+// case pinned hardest below, because it is the new protection.
+//
+// Rows are the live pivot the run actually produced, re-pulled 2026-08-20:
+// one row per item carrying both cohorts' rounded and unrounded means. The
+// short-trips row is here because its two admissible answers differ (-4.7
+// displayed, -4.6 unrounded), which is what proves the pair of exact values
+// survived the sign rather than collapsing to one.
+// ---------------------------------------------------------------------------
+const MEAL2 = 'Having a HOME COOKED meal in your home';
+const TRIPS = 'Taking vacations or short trips';
+const EMP = [{
+  type: 'query',
+  query: 'SELECT i.item_name, '
+       + "COUNT(CASE WHEN p.employment_detail = 'Retired' THEN 1 END) AS n_retired, "
+       + "ROUND(AVG(CASE WHEN p.employment_detail = 'Retired' THEN r.joy_index END)::numeric,1) AS ji_retired, "
+       + "AVG(CASE WHEN p.employment_detail = 'Retired' THEN r.joy_index END) AS ji_retired_raw, "
+       + "COUNT(CASE WHEN p.employment_detail = 'Employed full time' THEN 1 END) AS n_fulltime, "
+       + "ROUND(AVG(CASE WHEN p.employment_detail = 'Employed full time' THEN r.joy_index END)::numeric,1) AS ji_fulltime, "
+       + "AVG(CASE WHEN p.employment_detail = 'Employed full time' THEN r.joy_index END) AS ji_fulltime_raw "
+       + 'FROM bjl_responses r JOIN bjl_items i ON i.item_id = r.item_id '
+       + 'JOIN bjl_respondents p ON p.respondent_id = r.respondent_id GROUP BY 1',
+  result: [
+    { item_name: MEAL2,
+      n_retired: 256, ji_retired: 62.6, ji_retired_raw: 62.578125,
+      n_fulltime: 566, ji_fulltime: 72.1, ji_fulltime_raw: 72.12014134275618 },
+    { item_name: TRIPS,
+      n_retired: 144, ji_retired: 24.7, ji_retired_raw: 24.722222222222222,
+      n_fulltime: 382, ji_fulltime: 29.4, ji_fulltime_raw: 29.3717277486911 },
+  ],
+}];
+
+const EMP_EVIDENCE = [
+  { item_name: MEAL2, score: 62.6, n: 256 },
+  { item_name: MEAL2, score: 72.1, n: 566 },
+];
+
+// The read states no numeral of its own, so the only thing under test is the
+// figure. Prose is exercised separately at the end of this block.
+const gap = (label, value, from) => reasons(runConnectiveReadGuard({
+  connective_read: {
+    has_read: true, comparisons: [],
+    read: 'Retired and full-time split on home cooking.',
+    evidence: EMP_EVIDENCE,
+    figures: [{ label, value, from }],
+  },
+  scratch: EMP,
+})).includes('figure_value_not_derivable');
+
+check('signed: the live read dropped by job 19a48b92 now stands',
+  !gap('home cooked meal gap, retired minus full-time', -9.5, [62.6, 72.1]));
+
+check('signed: WRONG DIRECTION -- the same gap stated positive off the same `from` is rejected',
+  gap('home cooked meal gap, retired minus full-time', 9.5, [62.6, 72.1]));
+
+check('signed: the operands written the other way round give the positive gap',
+  !gap('how far full-time sits above retired', 9.5, [72.1, 62.6]));
+
+check('signed: WRONG DIRECTION the other way is rejected too',
+  gap('how far full-time sits above retired', -9.5, [72.1, 62.6]));
+
+check('signed: STILL CAUGHT -- a fabricated gap, correctly signed, is still rejected',
+  gap('home cooked meal gap, retired minus full-time', -12.0, [62.6, 72.1]));
+
+// -4.7 is the displayed subtraction, -4.6 the unrounded one. Both are exact
+// answers; the sign does not turn them into a band, and nothing sits between.
+const trips = (value, from) => reasons(runConnectiveReadGuard({
+  connective_read: {
+    has_read: true, comparisons: [],
+    read: 'Retired and full-time split on short trips.',
+    evidence: [
+      { item_name: TRIPS, score: 24.7, n: 144 },
+      { item_name: TRIPS, score: 29.4, n: 382 },
+    ],
+    figures: [{ label: 'short trips gap, retired minus full-time', value, from }],
+  },
+  scratch: EMP,
+})).includes('figure_value_not_derivable');
+
+check('signed: both exact answers are admitted, negative',
+  !trips(-4.7, [24.7, 29.4]) && !trips(-4.6, [24.7, 29.4]));
+
+check('signed: the positive twins of both are rejected',
+  trips(4.7, [24.7, 29.4]) && trips(4.6, [24.7, 29.4]));
+
+check('signed: still exactly two values, not a band between them',
+  [-4.4, -4.5, -4.8, -4.9].every(v => trips(v, [24.7, 29.4])));
+
+check('signed: reversing `from` reverses both answers together',
+  !trips(4.7, [29.4, 24.7]) && !trips(4.6, [29.4, 24.7]) && trips(-4.7, [29.4, 24.7]));
+
+// A comparison member carrying a `from` pair is subtracted the same way.
+const member = (value, from) => reasons(runConnectiveReadGuard({
+  connective_read: {
+    has_read: true, figures: [],
+    read: 'The retired-to-full-time gap runs further on home cooking than on short trips.',
+    evidence: EMP_EVIDENCE,
+    comparisons: [{
+      direction: 'less',
+      claim: 'The retired-to-full-time gap runs further on home cooking than on short trips',
+      subject: 'home cooking', against: 'short trips',
+      set: [
+        { label: 'home cooking', value, from },
+        { label: 'short trips', value: -4.7, from: [24.7, 29.4] },
+      ],
+    }],
+  },
+  scratch: EMP,
+}));
+
+check('signed: a comparison member takes the signed difference of its `from`',
+  !member(-9.5, [62.6, 72.1]).includes('comparison_value_not_derivable'));
+
+check('signed: WRONG DIRECTION on a comparison member is rejected',
+  member(9.5, [62.6, 72.1]).includes('comparison_value_not_derivable'));
+
+// Ordering is recomputed on the signed values, so between two negative gaps
+// the wider one is the more negative: -9.5 is `less` than -4.7.
+check('signed: the ordering is recomputed on the signed values',
+  !member(-9.5, [62.6, 72.1]).includes('comparison_ordering_false'));
+
+// Prose carries no `from`, so it carries no direction: the accounting set
+// admits a difference either way round. A read that declares the gap as -9.5
+// and then says "9.5 points apart" is saying one thing twice.
+const prose = text => reasons(runConnectiveReadGuard({
+  connective_read: {
+    has_read: true, comparisons: [], evidence: EMP_EVIDENCE,
+    read: text,
+    figures: [{ label: 'home cooked meal gap, retired minus full-time',
+                value: -9.5, from: [62.6, 72.1] }],
+  },
+  scratch: EMP,
+})).includes('prose_number_unaccounted');
+
+check('signed: prose may state the gap unsigned, 9.5 against a declared -9.5',
+  !prose('Retired and full-time sit 9.5 points apart on home cooking, 62.6 against 72.1.'));
+
+check('signed: prose may state it signed as well',
+  !prose('Retired and full-time sit -9.5 points apart on home cooking, 62.6 against 72.1.'));
+
+check('signed: STILL CAUGHT -- prose stating a gap nobody declared',
+  prose('Retired and full-time sit 14.2 points apart on home cooking, 62.6 against 72.1.'));
 
 // ---------------------------------------------------------------------------
 const failed = results.filter(r => !r[1]);

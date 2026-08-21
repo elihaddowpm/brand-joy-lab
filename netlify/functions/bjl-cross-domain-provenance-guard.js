@@ -89,6 +89,39 @@
 // normalization used by run_topic_rescan.py so item names that round-trip
 // through the LLM (which may canonicalize apostrophes and em-dashes) still
 // match the corpus row.
+// Which known cohort values does a claim actually name?
+//
+// Plain substring containment is not safe on these columns, and the failure is
+// silent: it makes the latch pass things it should catch.
+//
+//   1. The value has to sit on a boundary. 'male' appears inside 'female' and
+//      'ca' inside 'chicago'; neither is a mention of that cohort. Without
+//      this, a claim about women is read as naming men as well, and the men's
+//      row becomes an acceptable source for it.
+//   2. Where one matched value contains another, only the longer survives.
+//      'parent' sits inside 'non-parent', so a read saying Non-parent would
+//      otherwise be treated as naming BOTH cohorts -- and the Parent row would
+//      back a Non-parent claim. That is the cohort swap the axis latch exists
+//      to catch, so the widening would have been cosmetic without this.
+//
+// Compound cells still work: 'millennial / $200,000 or more' names two values,
+// neither inside the other, and both survive.
+function matchAxisValues(known, claimText) {
+  const hit = [];
+  for (const k of known) {
+    if (!k) continue;
+    for (let from = 0; ; ) {
+      const at = claimText.indexOf(k, from);
+      if (at < 0) break;
+      const before = at === 0 ? '' : claimText[at - 1];
+      const after = claimText[at + k.length] || '';
+      if (!/[a-z0-9]/.test(before) && !/[a-z0-9]/.test(after)) { hit.push(k); break; }
+      from = at + 1;
+    }
+  }
+  return hit.filter(a => !hit.some(b => b !== a && b.includes(a)));
+}
+
 function normalizeItemName(s) {
   if (typeof s !== 'string') return '';
   return s
@@ -108,7 +141,105 @@ function normalizeItemName(s) {
  * cohort is not decoration on that claim -- it IS the claim. Recording which
  * cohort each returned row belongs to is what lets the guard check it.
  */
-const AXIS_FIELDS = ['mode', 'generation', 'income_bracket'];
+const AXIS_FIELDS = [
+  'mode', 'generation', 'income_bracket',
+  'age_band', 'gender', 'region', 'parental_status', 'children_under_18',
+  'marital_status', 'employment_status', 'hispanic_origin',
+  // High cardinality is not a problem here: the latch matches a claim against
+  // the VALUE its row carried, and never counts levels or assumes an axis is
+  // small. state has 124 levels and occupation 38; each behaves exactly as
+  // generation's five do.
+  'state', 'occupation',
+  // Eight columns sharing one 5-level scale (Sole or primary decision-maker /
+  // Share equally in decision-making / Influence or participate in choosing /
+  // Not involved in choosing / Do not use this product). Held back initially
+  // on the expectation that they were select-all booleans like race_*; they
+  // are not. Each is a coherent single-construct categorical, so a row cut on
+  // one is a cohort row and the claim on it needs checking like any other.
+  'decisionmaker_bank', 'decisionmaker_car', 'decisionmaker_car_insurance',
+  'decisionmaker_groceries', 'decisionmaker_home_furnishing',
+  'decisionmaker_internet', 'decisionmaker_vacation',
+  'decisionmaker_vacation_activities',
+];
+
+/**
+ * The cohort axes a query wrote into COLUMN NAMES instead of column values.
+ *
+ * This is the shape that put the axis latch to sleep. Written as a cut --
+ *
+ *   SELECT i.item_name, AVG(r.joy_index) AS ji FROM ... GROUP BY 1, p.gender
+ *
+ * -- every row carries `gender` as a VALUE, and rowAxisValues records it, and
+ * a claim naming the wrong cohort has nowhere to sit. Written as a pivot --
+ *
+ *   SELECT i.item_name,
+ *          AVG(r.joy_index) FILTER (WHERE p.gender = 'Female') AS ji_female,
+ *          AVG(r.joy_index) FILTER (WHERE p.gender = 'Male')   AS ji_male
+ *   FROM ... GROUP BY 1
+ *
+ * -- the cohort lives in the alias. rowAxisValues finds no axis column, the
+ * row reads as un-cut, and the latch does not fail: it never runs. So zero
+ * axis failures on a pivot run is not evidence that the attributions were
+ * checked. It means nothing checked them, and a read citing 71.3 as men's
+ * number when 71.3 is `ji_female` would have cleared. A cohort swap does not
+ * reject on this shape, which is the definition of an unguarded surface.
+ *
+ * The fix is to forbid the representation rather than chase it. Teaching the
+ * latch to parse cohorts out of FILTER predicates would add a parsing surface
+ * that has to be right to keep the guard honest, and anything that has to be
+ * right is a thing that can be fooled. Refusing rows whose cohort cannot be
+ * matched needs no such parser: a cut written as a cut is checkable, so the
+ * answer is to write it as a cut.
+ *
+ * Detection errs toward detecting. A false positive costs a true read a
+ * rewrite in a shape that verifies; a false negative is the hole above.
+ *
+ * An axis that ALSO appears in the GROUP BY is not a pivot: it is on the row
+ * as a value, the latch can match it, and flagging it would reject the exact
+ * shape this function exists to push the investigator toward.
+ */
+function pivotAxesInSql(sql) {
+  const s = String(sql || '').toLowerCase();
+  if (!s) return [];
+  const gb = s.lastIndexOf('group by');
+  const groupBy = gb === -1 ? '' : s.slice(gb);
+  const hits = new Set();
+  // A window after each pivot keyword, rather than a full expression parse.
+  // The predicate that names the cohort sits immediately inside it.
+  const re = /(?:filter\s*\(\s*where|case\s+when)([\s\S]{0,160})/g;
+  let m;
+  while ((m = re.exec(s)) !== null) {
+    for (const f of AXIS_FIELDS) {
+      if (new RegExp('\\b' + f + '\\b').test(m[1])) hits.add(f);
+    }
+  }
+
+  // The third spelling, and the one the clearing run actually used:
+  //
+  //   WITH female AS (SELECT ... WHERE p.gender = 'Female'),
+  //        male   AS (SELECT ... WHERE p.gender = 'Male')
+  //   SELECT f.item_name, f.ji_f, m.ji_m FROM female f JOIN male m USING (item_name)
+  //
+  // No FILTER, no CASE, and the same result: two cohorts side by side on one
+  // row with the cohort recorded only in the aliases. Keying on the keyword
+  // would have missed it, so the test is on the shape of the predicates --
+  // an axis pinned to two DIFFERENT literals in one query is a query putting
+  // two cohorts next to each other.
+  //
+  // Equality predicates only. A scoping filter writes its literals in one
+  // list -- `WHERE p.gender IN ('Male','Female')` over a whole-population
+  // aggregate -- and that row is honestly un-cut rather than pivoted, so
+  // rejecting it would be a false positive on a legitimate shape.
+  for (const f of AXIS_FIELDS) {
+    const lits = new Set();
+    const eq = new RegExp('\\b' + f + "\\s*=\\s*'([^']*)'", 'g');
+    let e;
+    while ((e = eq.exec(s)) !== null) lits.add(e[1]);
+    if (lits.size >= 2) hits.add(f);
+  }
+
+  return Array.from(hits).filter(f => !new RegExp('\\b' + f + '\\b').test(groupBy));
+}
 
 // The normalized axis values a returned row carried, keyed by column.
 // Empty object for a row that is not part of a cut.
@@ -129,6 +260,23 @@ function roundJoy(x) {
   const n = Number(x);
   if (!Number.isFinite(n)) return null;
   return Math.round(n * 10) / 10;
+}
+
+// A difference, rounded by magnitude and keeping its sign.
+//
+// Differences here are signed: the sign is half of what a gap claim says, and
+// dropping it left a read that correctly wrote "retired minus full-time,
+// -9.5" with no legal form at all -- the guard demanded +9.5, which is the
+// wrong answer to the figure's own label.
+//
+// Rounding the magnitude rather than deferring to roundJoy keeps the two
+// directions of one gap symmetrical. roundJoy rounds a half toward +Infinity,
+// so -9.45 would land on -9.4 while 9.45 lands on 9.5, and a read stating the
+// gap the other way round would fail on a tie it could not see.
+function roundDiff(x) {
+  const n = Number(x);
+  if (!Number.isFinite(n)) return null;
+  return n < 0 ? -roundJoy(-n) : roundJoy(n);
 }
 
 function toInt(x) {
@@ -417,6 +565,7 @@ function buildCardAllowlist(scratch) {
     const pinnedId = pinnedItemId(rawSql);
     const pinned = pinnedItemName(rawSql)
                 || (pinnedId !== null ? (idIndex.get(pinnedId) || null) : null);
+    const pivotAxes = pivotAxesInSql(rawSql);
     const rows = Array.isArray(entry.result) ? entry.result
                : Array.isArray(entry.rows)   ? entry.rows
                : [];
@@ -440,6 +589,14 @@ function buildCardAllowlist(scratch) {
         n:         toInt(nValue),
         source,
         construct: typeof row.construct === 'string' ? row.construct : null,
+        // The item name as the row spelled it, kept unnormalized so a
+        // rejection can show a retry the string to copy rather than the
+        // lowercased key the match ran on.
+        item_name: (typeof row.item_name === 'string' && row.item_name) || pinned || null,
+        // Which cohort axes this row's query wrote into COLUMN NAMES rather
+        // than column values. Non-empty means the cohort on this row is
+        // unmatchable -- see pivotAxesInSql.
+        pivot_axes: pivotAxes,
         // Which cohort of a cut this row is. Empty when the row is not a cut.
         axis,
         // The row's full numeric surface, so a claim can verify against an
@@ -460,6 +617,40 @@ function buildCardAllowlist(scratch) {
     }
   }
   return itemIndex;
+}
+
+/**
+ * The item names the scratch actually returned, as the rows spelled them,
+ * with the ones sharing a word with `claimed` first.
+ *
+ * Legibility for the item latch, which was the one major evidence rejection
+ * that handed back nothing. Its siblings all show their work -- the axis
+ * failure returns `cohorts_available`, the number mismatch returns the values
+ * each candidate row really held, the comparison subject failure returns the
+ * set members -- and this one said only "not in the allowlist". Job cee0bae9
+ * cited `item_name: "everyday"` and `"big_ticket"`, its own category labels;
+ * told those were not items and not told what was, its retry abandoned the
+ * evidence framing entirely and reached for prose, which then died on the
+ * comparative latch. The read was real and the run lost it to a failure that
+ * could not be acted on.
+ *
+ * Showing the names is legibility, not licence. The match is unchanged: an
+ * evidence entry still has to name a row the scratch returned, and a name
+ * copied off this list is verified exactly as one typed from memory is.
+ */
+function allowlistItemNames(itemIndex, claimed, cap = 40) {
+  const seen = new Set();
+  const names = [];
+  for (const bucket of itemIndex.values()) {
+    for (const r of bucket) {
+      if (typeof r.item_name !== 'string' || !r.item_name || seen.has(r.item_name)) continue;
+      seen.add(r.item_name);
+      names.push(r.item_name);
+    }
+  }
+  const words = new Set(normalizeItemName(claimed).split(' ').filter(w => w.length > 2));
+  const shares = n => normalizeItemName(n).split(' ').some(w => words.has(w));
+  return names.filter(shares).concat(names.filter(n => !shares(n))).slice(0, cap);
 }
 
 /**
@@ -1498,6 +1689,13 @@ function collectQueryResults(scratch) {
   const out = [];
   for (const entry of (Array.isArray(scratch) ? scratch : [])) {
     if (!entry || typeof entry !== 'object' || entry.type !== 'query') continue;
+    // A pivot result is not a seat. Its rows hold several cohorts' numbers
+    // side by side under aliased column names, so seating a member or a figure
+    // on one proves the number was returned and nothing about whose it is --
+    // and a cohort swap between two columns of the same row does not reject.
+    // Withheld here rather than checked downstream, so all three arithmetic
+    // latches inherit the same rule from one place. See pivotAxesInSql.
+    if (pivotAxesInSql(entry.query).length) continue;
     const rows = (Array.isArray(entry.result) ? entry.result : [])
       .filter(r => r && typeof r === 'object')
       .map(r => ({ raw: r, values: numericFields(r) }));
@@ -1522,11 +1720,79 @@ function rowCarriesValues(row, nums) {
   return true;
 }
 
-// Every numeral that appears in a piece of prose, as numbers. Used to check
-// that a disclosed base actually reaches the reader instead of only the guard.
-function proseNumerals(text) {
+// Dates carry digits that are not quantities. Masked before anything else so
+// the scanner never sees the halves of one as two separate numbers.
+const DATE_SHAPED = /\b\d{4}[-/]\d{1,2}(?:[-/]\d{1,2})?\b/g;
+
+// Every numeral a piece of prose actually CLAIMS, as numbers.
+//
+// The naive reading of this is /\d+(\.\d+)?/g, and it was wrong in a way that
+// failed closed on truth. A live run (2436bad7) stated a true, correctly
+// attributed 9.4-point parental gap "in the 2026-08 wave" and was dropped,
+// because the scanner pulled 2026 and 8 out of the date and demanded the read
+// cite them as figures. They are not quantities; there is no row to cite.
+//
+// The class is wider than dates. Digits appear in labels all over this data --
+// item names like '365 by Whole Foods Market' and '30A, Florida', wave labels,
+// question ids like q146 -- and none of them are arithmetic. A numeral is a
+// claim only when it stands as its own numeric token:
+//
+//   - a digit run touching a letter is part of an identifier, not a quantity
+//     ('30A', 'q146'), so it is not a claim;
+//   - a date-shaped token is a label, not two numbers;
+//   - comma grouping is read as one number, so '200,000' is 200000 rather
+//     than a 200 and a 000 that no row could ever account for.
+//
+// This is a scope correction, not a loosening. Every standalone numeral is
+// still checked exactly as before, and a fabricated figure is standalone by
+// construction -- a made-up gap is written "28.5", not welded into a word.
+// Nothing that was caught before stops being caught.
+function proseNumerals(text, labels) {
+  let s = String(text || '').replace(DATE_SHAPED, m => ' '.repeat(m.length));
+
+  // Labels the read is entitled to name. Their digits belong to the name, not
+  // to any claim: an item called '365 by Whole Foods Market' has no row
+  // carrying 365, so scanning it would demand provenance for a word. Masked
+  // longest-first so a short label cannot eat part of a longer one.
+  for (const label of (labels || []).slice().sort((a, b) => b.length - a.length)) {
+    if (!label || label.length < 2) continue;
+    let at = s.toLowerCase().indexOf(label.toLowerCase());
+    while (at >= 0) {
+      s = s.slice(0, at) + ' '.repeat(label.length) + s.slice(at + label.length);
+      at = s.toLowerCase().indexOf(label.toLowerCase(), at + label.length);
+    }
+  }
+
   const out = new Set();
-  for (const m of String(text || '').match(/\d+(?:\.\d+)?/g) || []) out.add(Number(m));
+  const isAlnum = ch => /[A-Za-z0-9]/.test(ch || '');
+  for (const m of s.matchAll(/-?\d[\d,]*(?:\.\d+)?/g)) {
+    let text_ = m[0];
+    let start = m.index;
+    // A hyphen between two digits is a separator, not a sign: in '50-75' the
+    // second number is 75, not -75. A leading minus anywhere else is the sign
+    // of a real value -- joy indices go negative, and dropping the sign would
+    // let a claimed -20.0 pass as a checked 20.0.
+    if (text_[0] === '-' && isAlnum(s[start - 1])) { text_ = text_.slice(1); start += 1; }
+    if (isAlnum(s[start - 1])) continue;
+    if (isAlnum(s[start + text_.length])) continue;
+    const clean = text_.replace(/,/g, '').replace(/\.$/, '');
+    const n = Number(clean);
+    if (Number.isFinite(n)) out.add(n);
+  }
+  return out;
+}
+
+// The labels a read may name without owing a number for their digits: the
+// items it cited and the cohorts it attributed them to.
+function proseLabels(evidence) {
+  const out = [];
+  for (const e of (Array.isArray(evidence) ? evidence : [])) {
+    if (!e || typeof e !== 'object') continue;
+    if (typeof e.item_name === 'string') out.push(e.item_name);
+    if (Array.isArray(e.axis)) out.push(...e.axis.filter(a => typeof a === 'string'));
+    else if (typeof e.axis === 'string') out.push(e.axis);
+    for (const f of AXIS_FIELDS) if (typeof e[f] === 'string') out.push(e[f]);
+  }
   return out;
 }
 
@@ -1683,7 +1949,8 @@ function checkFigures(figures, results, evidence) {
         if (seats[a].value !== want[0]) continue;
         for (let b = 0; b < seats.length; b++) {
           if (b === a || seats[b].value !== want[1]) continue;
-          crossSeated.push(roundJoy(Math.abs(seats[a].precise - seats[b].precise)));
+          // Same `from` order as the same-row path above: seats[a] is from[0].
+          crossSeated.push(roundDiff(seats[a].precise - seats[b].precise));
         }
       }
     }
@@ -1692,10 +1959,17 @@ function checkFigures(figures, results, evidence) {
     // same-row one: two computations, never a band between them.
     for (const v of crossSeated) resolved.accepts.add(v);
 
-    if (!resolved.accepts.has(roundJoy(f.value))) {
+    // roundDiff, not roundJoy, so the stated value is normalised by the same
+    // rule as the computed ones. roundJoy rounds a half toward +Infinity, so
+    // mixing them would compare two magnitudes rounded different ways once the
+    // values can be negative. Identical for anything non-negative.
+    if (!resolved.accepts.has(roundDiff(f.value))) {
       fail('figure_value_not_derivable', {
         figure: f.label, stated: f.value, from: resolved.from,
         accepted: Array.from(resolved.accepts).sort((a, b) => a - b),
+        note: 'A two-operand figure is `from[0]` minus `from[1]`, sign kept. If the '
+            + 'accepted value has the opposite sign to yours, swap the two entries in '
+            + '`from` so they run the way your label reads.',
       });
       continue;
     }
@@ -1719,11 +1993,20 @@ function checkProseNumbers(readText, evidence, comparisons, figures) {
   const declared = declaredNumbers(evidence, comparisons, figures);
   if (!declared.size) return [];
 
+  // Both directions of every pair, unlike the figure and comparison latches
+  // above. There is no `from` here to carry an order: `declared` is a set, and
+  // signing its pairs by iteration index would make the accepted number depend
+  // on the order the read happened to list its evidence, which is not a claim
+  // anyone made. Direction is latched where a label states one; this site only
+  // asks whether a number in the prose is a real difference of real cited
+  // numbers, and -9.5 and 9.5 are the same answer to that question.
   const list = Array.from(declared);
   const accounted = new Set(declared);
   for (let i = 0; i < list.length; i++) {
     for (let j = i + 1; j < list.length; j++) {
-      accounted.add(roundJoy(Math.abs(list[i] - list[j])));
+      const d = roundDiff(list[i] - list[j]);
+      accounted.add(d);
+      accounted.add(-d);
     }
   }
   // An integer restatement of an accounted value is the same claim, said for
@@ -1731,7 +2014,7 @@ function checkProseNumbers(readText, evidence, comparisons, figures) {
   for (const v of Array.from(accounted)) accounted.add(Math.round(v));
 
   const failures = [];
-  for (const v of proseNumerals(readText)) {
+  for (const v of proseNumerals(readText, proseLabels(evidence))) {
     if (accounted.has(roundJoy(v))) continue;
     failures.push({
       surface: 'connective_read',
@@ -1797,6 +2080,15 @@ function preciseOnRow(row, v) {
 // land inside the accepted set by being merely close -- it has to BE one of
 // the two answers. When the investigator returns no unrounded copy there is
 // only one candidate and the check is as tight as it ever was.
+//
+// Both subtractions run in `from` order: from[0] - from[1], sign kept. The
+// order of `from` is therefore a claim, and it is checked like every other
+// one. A gap labelled "retired minus full-time" off [62.6, 72.1] is -9.5, and
+// stating it as 9.5 now fails -- which is the point. The sign says which way
+// the gap runs, direction is the substance of a comparative read, and taking
+// an absolute value meant the one guard whose job is direction was not
+// checking it. There is no absolute-value fallback: a read that wants the
+// positive number writes the operands the other way round and says so.
 function comparisonMemberValue(m, results) {
   const from = (Array.isArray(m.from) && m.from.length) ? m.from : [m.value];
   const nums = from.map(Number);
@@ -1807,7 +2099,7 @@ function comparisonMemberValue(m, results) {
   }
   if (nums.length !== 2) return null;
 
-  const v = roundJoy(Math.abs(nums[0] - nums[1]));
+  const v = roundDiff(nums[0] - nums[1]);
   const accepts = new Set([v]);
 
   for (const res of (Array.isArray(results) ? results : [])) {
@@ -1815,7 +2107,7 @@ function comparisonMemberValue(m, results) {
       if (!rowCarriesValues(row, nums)) continue;
       const a = preciseOnRow(row, nums[0]);
       const b = preciseOnRow(row, nums[1]);
-      accepts.add(roundJoy(Math.abs(a - b)));
+      accepts.add(roundDiff(a - b));
     }
   }
 
@@ -1895,7 +2187,7 @@ function checkComparison(cmp, results, readText, ci) {
       return fail('malformed_comparison',
         'Member ' + m.label + ': value must be a number, or `from` must hold one or two numbers.');
     }
-    if (!resolved.accepts.has(roundJoy(m.value))) {
+    if (!resolved.accepts.has(roundDiff(m.value))) {
       return fail('comparison_value_not_derivable', {
         member: m.label, stated: m.value, from: resolved.from, difference: resolved.value,
         accepted: Array.from(resolved.accepts).sort((a, b) => a - b),
@@ -1908,14 +2200,38 @@ function checkComparison(cmp, results, readText, ci) {
   if (labels.size !== members.length) {
     return fail('malformed_comparison', 'Set members must have distinct labels.');
   }
+  // The subject has to BE one of the members, matched on the label. Nothing
+  // fuzzy: a subject resolved to the nearest-looking member is how a claim
+  // gets attached to a number that is not its own, which is the whole class of
+  // failure this file exists to stop.
+  //
+  // So the rejection has to be actionable instead. Live jobs 2436bad7 and
+  // e5f3165a both wrote descriptive subjects -- "Midwest parental gap on
+  // home-cooked meal", "TREATING YOURSELF -- Midwest Parent" -- against sets
+  // labelled otherwise, and both retries failed the same way, because the
+  // failure said only that the subject was wrong and never said what the
+  // members were. The model was told it had guessed wrong without being shown
+  // what it was choosing between. Every other latch here hands back the real
+  // options; this one did not.
+  //
+  // Showing the members is legibility, not licence: the matching rule is
+  // unchanged, and a subject still has to be copied from a label rather than
+  // approximated.
+  const memberChoices = members.map(m => ({ label: m.label, value: m.value }));
+  const notInSet = (field, value) => fail('comparison_subject_not_in_set', {
+    field,
+    stated: value,
+    set_members: memberChoices,
+    note: `\`${field}\` must be copied verbatim from one of the \`set\` labels above. `
+        + 'It names which member the claim is about, so it has to be one of them, '
+        + 'not a description of it.',
+  });
+
   const subjectKey = normalizeItemName(cmp.subject);
-  if (!labels.has(subjectKey)) {
-    return fail('comparison_subject_not_in_set', 'subject "' + cmp.subject + '" is not one of the set members.');
-  }
+  if (!labels.has(subjectKey)) return notInSet('subject', cmp.subject);
+
   const againstKey = needsAgainst ? normalizeItemName(cmp.against) : null;
-  if (needsAgainst && !labels.has(againstKey)) {
-    return fail('comparison_subject_not_in_set', 'against "' + cmp.against + '" is not one of the set members.');
-  }
+  if (needsAgainst && !labels.has(againstKey)) return notInSet('against', cmp.against);
 
   // 2 + 3. Provenance, and -- for superlatives only -- completeness.
   //
@@ -2149,6 +2465,10 @@ function runConnectiveReadGuard({ connective_read, scratch }) {
         surface: 'connective_read',
         claim: { item_name: e.item_name },
         reason: 'connective_read_item_not_in_allowlist',
+        detail: 'No returned row carries that item name. `item_name` is copied verbatim '
+              + 'from a scratch row, not a label for a group of items: a read about a '
+              + 'category cites the rows it rests on, one entry each.',
+        items_available: allowlistItemNames(itemIndex, e.item_name),
       });
       continue;
     }
@@ -2179,7 +2499,7 @@ function runConnectiveReadGuard({ connective_read, scratch }) {
     const claimNamed = claimParts.map(normalizeItemName).filter(Boolean);
     const claimText = claimNamed.join(' | ');
 
-    const claimAxes = new Set(known.filter(k => claimText.includes(k)));
+    const claimAxes = new Set(matchAxisValues(known, claimText));
     // A cohort named in item_name rather than in a field said the thing; the
     // field it said it in does not matter.
     if (!claimAxes.size && known.includes(itemKey)) claimAxes.add(itemKey);
@@ -2189,11 +2509,38 @@ function runConnectiveReadGuard({ connective_read, scratch }) {
     // $200k+ cell is not "Millennials", and citing its 69.5 as a generational
     // figure is the same false attribution one dimension down. Rows outside
     // any cut need no cohort and accept none.
-    const candidates = bucket.filter(r => {
+    // Rows whose cohort was written into a column NAME carry no value for the
+    // check below to match, so they read as un-cut and clear any claim that
+    // names no cohort -- while the prose names one. Dropped before the match
+    // rather than after it, so nothing seats on a row whose attribution
+    // cannot be verified. See pivotAxesInSql.
+    const seatable = bucket.filter(r => !(r.pivot_axes && r.pivot_axes.length));
+
+    const candidates = seatable.filter(r => {
       const vals = Object.values(r.axis || {});
       if (!vals.length) return claimAxes.size === 0;
       return claimAxes.size > 0 && vals.every(v => claimAxes.has(v));
     });
+
+    // Every row for this item came back from a pivot. There is no cohort to
+    // check the claim against and there is no honest way to invent one, so the
+    // rejection names the shape and asks for the cut instead of the pivot.
+    if (candidates.length === 0 && seatable.length === 0) {
+      const axes = Array.from(new Set(bucket.flatMap(r => r.pivot_axes || [])));
+      failures.push({
+        surface: 'connective_read',
+        claim: { item_name: e.item_name, score: e.score, n: e.n },
+        reason: 'connective_read_cohort_in_column_name',
+        detail: 'The query that returned this row put ' + axes.join(', ')
+              + ' in the column NAMES (a FILTER or CASE pivot), so each row holds several '
+              + 'cohorts side by side and no returned value says which cohort it belongs to. '
+              + 'A cohort claim on such a row cannot be checked, so it is not accepted. '
+              + 'Re-run the cut as GROUP BY ' + axes.join(', ')
+              + ' so each cohort is its own row, and cite that row.',
+        pivot_axes: axes,
+      });
+      continue;
+    }
 
     if (candidates.length === 0) {
       // An invented cohort must stay distinguishable from no cohort at all.
@@ -2392,6 +2739,7 @@ module.exports = {
   buildAudienceDistributionsAllowlist,
   // Exported for tests + reuse.
   normalizeItemName,
+  pivotAxesInSql,
   roundJoy,
   buildAllowlist,
   inferSourceTable,
