@@ -71,6 +71,8 @@ A number stated with no ordering behind it belongs in `figures`. That is what ma
 
 Each figure must sit on a returned row, and a `from` of two numbers is checked by subtraction — so declaring a wrong gap as a figure does not launder it. That is deliberate: `figures` is where you show the arithmetic, not where you hide it.
 
+**`from` is ordered, and the difference keeps its sign: `from[0]` minus `from[1]`.** Write the operands the way your label reads them. A figure labelled *"the retired-to-full-time gap on home cooking"*, where retired is 62.6 and full-time 72.1, is `{ "value": -9.5, "from": [62.6, 72.1] }`. Stating `9.5` off that same `from` is rejected, because 62.6 − 72.1 is not 9.5 and a gap's sign is half of what it says. If you want the positive number, say it the other way round in both places — `{ "label": "how far full-time sits above retired", "value": 9.5, "from": [72.1, 62.6] }` — so the label and the arithmetic agree. Same rule for a `from` pair on a `comparisons` member.
+
 **A gap between two different items must cite both of them in `evidence`.** Two items sit on two rows, so there is no single row the check can read the pair off; it reads them off the rows you cited instead. *"Snacking at home 73.9 against a beer at 50.4 — a 23.5 point gap"* needs both an `evidence` entry for snacking and one for beer, and then `{ "value": 23.5, "from": [73.9, 50.4] }`. Cite only one of them and the figure is rejected, however true the gap is.
 
 This is not bookkeeping either. On the run this rule comes from, 73.9 came back on **two** rows — 'Snacking at home' at n=252 and 'Taking a VACATION' at n=9892. A gap that seats on whichever row happens to carry the number is a true figure under a false label, which is the same failure as every other one on this page. Naming the rows is what tells the check which 73.9 you meant.
@@ -102,6 +104,18 @@ Use `rank` with `k` for a specific place — *"relational is second"* is `direct
 **A pairwise claim — `greater`, `less`, `equal` — carries only its two members**, and they may come from different queries. Comparing a number from one query against a number from another is the whole point of this pass; it is not asked to drag in every other row those queries returned.
 
 Each member's numbers must come off one returned row, and each member must stand on its own row. A member's `value` is either a number on that row or the plain difference between two numbers on that row — the same arithmetic allowed above, and no more.
+
+**A claim that one cohort sits above another is a pairwise comparison, and it must be written as one.** This is the most common shape a connective read takes and the one most often left undeclared. *"Women lead on anticipating a vacation, men on flying to it"* is two pairwise claims, not description — **lead**, **above**, **ahead of**, **higher**, **outpaces** and **trails** all assert an ordering, and a two-cohort ordering is the cheapest comparison there is to carry. It needs two members and nothing else:
+
+```
+{ "claim": "Women lead on anticipating a vacation",
+  "direction": "greater", "subject": "Female", "against": "Male",
+  "set": [ { "label": "Female", "value": 70.1 },
+           { "label": "Male",   "value": 64.3 } ],
+  "basis_n": [993, 732] }
+```
+
+Job cee0bae9 is why this paragraph exists. It found a real gender direction-flip across the travel arc, every number correct and every row real, and it wrote the whole thing as prose with `comparisons: []`. The check read *"lead"* in the sentence, found no ordering behind it, and dropped a true read that was one object away from shipping. Two members. Do not leave a direction claim undeclared.
 
 **If you cannot carry the set, drop the comparative word and say the smaller true thing.** This is always available and it is never a failure:
 
@@ -143,9 +157,9 @@ Return a single JSON object. No prose outside it, no code fences.
   "comparisons": [
     { "claim": "quote the exact clause of the read this backs",
       "direction": "max | min | rank | top | greater | less | equal",
-      "subject": "the member the claim is about",
+      "subject": "the member the claim is about — copied verbatim from one of the `set` labels below",
       "k": 2,
-      "against": "the other member — required for greater, less and equal; omit otherwise",
+      "against": "the other member, also verbatim from a `set` label — required for greater, less and equal; omit otherwise",
       "set": [
         { "label": "playful", "value": 34.0, "from": [52, 18] },
         { "label": "hedonic", "value": 39.8, "from": [69.8, 30] }
@@ -167,11 +181,15 @@ Field rules, all enforced by a post-generation check that reads the actual rows:
 - **`score` must match that row's value to one decimal. `n` must match exactly.** These are checked against the rows, not against your memory of them. If you are unsure of a number, do not cite the row.
 - **If the row came from a cut, `axis` must name the cohort it came from.** A row returned by a query that grouped by generation, mode, or income bracket belongs to one cohort, and the check now matches your number against that cohort's row only. Citing a cut row without naming its cohort is rejected, and so is naming the wrong one. This is not bookkeeping: on a cross-cutting read the cohort is the claim. "Live music scores 62.1 on n=310" is a different sentence depending on whether that is Gen Z or Boomers, and one of the two is false.
 - **When a row sits in more than one cut, `axis` must name every one of them.** A query that grouped by generation *and* income bracket returns cells, not cohorts, and a cell is not a claim about either dimension. The Millennial × $200,000-or-more cell's 69.5 is not what Millennials score; it is what rich Millennials score, on a base a fraction the size. Naming one dimension and dropping the other is the same false attribution one level down, and the check rejects it as underspecified. Use an array — `["Millennial", "$200,000 or more"]` — and say both in the read too. If the compound cell is too narrow to say plainly, that is a signal the read should stand on a one-way cut instead.
-- **Any comparative or superlative wording in `read` requires a `comparisons` entry.** The check reads the prose. A ranking with no set behind it is rejected; so is a set that covers only some of the rows its result returned; so is a ranking that the set does not actually support.
+- **Any comparative or superlative wording in `read` requires a `comparisons` entry.** The check reads the prose. A ranking with no set behind it is rejected; so is a set that covers only some of the rows its result returned; so is a ranking that the set does not actually support. **A two-cohort direction claim — one group above another — is a `greater` or `less` entry with those two as its members.** There is no shape of comparative sentence that needs no entry.
+
+- **Cite rows from a cut, not from a pivot.** A row that carries its cohort as a value — `gender: "Female"` beside the score — can be checked. A row from a query that wrote the cohort into the column names instead, `AVG(...) FILTER (WHERE gender = 'Female') AS ji_female`, holds several cohorts side by side and no returned value says which is which, so nothing on it can be attributed and every claim citing it is rejected. If the only rows you have for a cohort comparison came back in that shape, you do not have the evidence for the read. Say the smaller thing, or return `has_read: false`.
 - **`claim` must be quoted from `read`.** A comparison cannot back a sentence the reader never sees.
+- **`subject` and `against` must be copied verbatim from a `set` label.** They say *which member* the claim is about, so they have to be one of the members — not a description of one. `"subject": "Midwest parental gap on home-cooked meal"` against a set labelled `"Midwest"` and `"South"` is rejected, because nothing can tell which member it meant without guessing, and a subject resolved to the nearest-looking member is exactly how a claim ends up attached to a number that is not its own. Write `"subject": "Midwest"`. If no label says what you mean, relabel the members — the labels are yours to choose, so long as the two fields quote them exactly.
 - **`basis_n` must appear in the read.** Stating it here only does not count.
 - **Every numeral in `read` must be accounted for** by `evidence`, `figures` or `comparisons`, or be a plain difference between two numbers those declare. An integer restatement of a declared value is fine — "the 29-point gap" for 29.1 — but a number that appears nowhere but the sentence is rejected, and so is a difference that does not come out to what you said.
 - **`figures` entries must sit on a returned row**, and a `from` pair is checked by subtraction. Rows now carry an unrounded `_raw` column beside the rounded one where the investigator returned it, so both the displayed subtraction and the exact one are accepted. Nothing between them is.
+- **`from` is ordered and the difference is signed: `from[0]` minus `from[1]`.** Order the operands to match the label, and let the value be negative when the subtraction is. `{ "value": 9.5, "from": [62.6, 72.1] }` is rejected; the answer there is `-9.5`. There is no absolute-value fallback — if the failure shows an accepted value with the opposite sign to yours, swap the two entries in `from`.
 - **A `from` pair spanning two items must have both items in `evidence`.** One row carrying both numbers is the other legal form — a mode row's two percentages, say. A pair that is neither is rejected, and the failure lists the values you did cite so you can see what was missing.
 - **When `has_read` is false, `read` must be null and `evidence` must be empty.** Do not smuggle a claim into `why_not`. `why_not` describes the search, not a finding.
 

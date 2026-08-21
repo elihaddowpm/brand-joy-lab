@@ -437,6 +437,36 @@ This costs nothing and it settles an argument that is otherwise unsettleable. A 
 
 Round for the reader in `ji`. Keep the full precision in `ji_raw`. Do not round `_raw`, and do not cast it to text.
 
+### Cohort cuts: GROUP BY the cohort, do not pivot it into column names
+
+When you compare cohorts — gender, generation, income bracket, region, any of them — put the cohort in the GROUP BY so it comes back as a **value on the row**:
+
+```sql
+SELECT i.item_name, p.gender,
+       ROUND(AVG(r.joy_index)::numeric, 1) AS ji,
+       AVG(r.joy_index)                    AS ji_raw,
+       COUNT(*)                            AS n
+FROM   bjl_responses r
+JOIN   bjl_items i       ON i.item_id = r.item_id
+JOIN   bjl_respondents p ON p.respondent_id = r.respondent_id
+WHERE  p.gender IN ('Male','Female')
+GROUP  BY 1, p.gender
+```
+
+Do **not** write the same cut as a pivot:
+
+```sql
+-- rejected downstream
+AVG(r.joy_index) FILTER (WHERE p.gender = 'Female') AS ji_female,
+AVG(r.joy_index) FILTER (WHERE p.gender = 'Male')   AS ji_male
+```
+
+The pivot is more readable at a glance and that is exactly its cost. It puts several cohorts side by side on one row with the cohort recorded nowhere but the alias, so no returned value says which number belongs to whom. Every check downstream matches a claim against the cohort its row carried; on a pivot row there is nothing to match, so the attribution is not merely unverified, it is unverifiable — and a read that swaps the two cohorts looks identical to one that does not. Rows in that shape are refused, and a finding resting on them cannot be carried forward.
+
+One row per cohort. It is the same aggregate and it costs nothing.
+
+This applies to `CASE WHEN p.<cohort> = '...' THEN ... END` too — same shape, same problem. `FILTER` on something that is not a cohort (a score threshold, a tag membership) is fine and is unaffected.
+
 ### Brand-not-in-data handling
 
 If a specific brand isn't in the data, identify the closest 1-2 proxy items in the same category within your first 3 queries, then do all subsequent analysis on those proxies. Don't keep searching for the original brand once you've established it's absent.
