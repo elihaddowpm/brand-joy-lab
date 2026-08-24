@@ -105,18 +105,42 @@ After the Haiku retag, `primary_topic` and `subtags` are reliable for filtering 
 
 **Population status:** populated by an initial Haiku tagging pass on 2026-05-13 (37 of 446 questions tagged with at least one concept). Default for un-tagged questions is `ARRAY[]::text[]`. Tags expand over time as new strategic territories are surfaced.
 
-### `bjl_respondent_usage` — category usage screener results (~44,816 rows)
+### `bjl_respondent_usage` — category usage screener results (45,217 rows, 25 categories)
 
 One row per (respondent, category) combination. Built from screener questions that ask whether or how often respondents engage with a category.
 
 | Column | Notes |
 |---|---|
 | respondent_id | FK |
-| category | alcohol / orange_juice / hot_dogs / yogurt / snacks / nonalcoholic_beverages / home_internet / knows_isp / casinos / auto_racing / horse_racing / gambling / exercise / vitamins_supplements / dr_teals / travel_leisure / travel_domestic / travel_international / travel_business / planning_kennedy_space / planning_orlando / travel_planning_horizon / news_engagement / outlook_2026 |
-| usage_level | varies by category — for alcohol: Heavy / Frequent / Moderate / Light / Never |
+| category | 25 values — see the scale families below. `wine` is one of them and was previously missing from this list. |
+| usage_level | **Not one scale. Six.** See below — the values are only comparable inside a family, and often only inside a category. |
 | source_question_id | which screener provided this |
 
-**Use this table for consumer filtering on consumption-style questions.** When asking about beer joy or casino joy or any product category, `JOIN bjl_respondent_usage` and filter by appropriate usage_level.
+#### `usage_level` is six different scales sharing one column
+
+This column was documented as a frequency scale with alcohol's five levels given as the example. That is one family out of six, and reading the column as if the example generalised is the error this section exists to stop. `usage_level` is not ordered, not uniform, and in three of the six families is not a frequency at all. Values verified against the live table 2026-08-24.
+
+| Family | Levels (high → low where ordered) | Categories |
+|---|---|---|
+| Frequency, 5-level | Heavy / Frequent / Moderate / Light / Never | alcohol, auto_racing, casinos, exercise, gambling, horse_racing, orange_juice, vitamins_supplements |
+| Frequency, 4-level **no Heavy** | Frequent / Moderate / Light / Never | hot_dogs, wine |
+| Frequency, 4-level **no Frequent** | Heavy / Moderate / Light / Never | travel_business |
+| Yes / No / Unsure — *not a frequency* | Yes / No / Unsure | dr_teals, home_internet, knows_isp |
+| Direction of change — *not a level* | Increasing(_Strong) / Stable / Decreasing(_Strong) | travel_leisure (5), travel_domestic (3), travel_international (3) |
+| Category-specific, unordered | Last_Minute / Standard_Lead / Long_Lead | travel_planning_horizon |
+| | Not_Planning / Planning_Future / Planning_Soon | planning_kennedy_space, planning_orlando |
+| | Optimistic / Neutral / Uncertain / Pessimistic | outlook_2026 |
+| | Engaging_More / Engaging_Slightly_More / Stable / Disengaging_Slightly / Disengaging | news_engagement |
+| Presence only — **one level** | Consumer | nonalcoholic_beverages, snacks |
+| Presence + never | Consumer / Never | yogurt |
+
+Three traps follow from this, and all three produce a confident wrong number rather than an error:
+
+- **Never pool or compare `usage_level` across categories.** `'Heavy'` in alcohol means daily drinking; `'Heavy'` in travel_business means a different question's top box. `GROUP BY usage_level` across the whole table averages a frequency, a yes/no, a direction and a planning horizon into one meaningless column.
+- **`'Never'` does not exist in every category, and `'Heavy'` exists in only nine of twenty-five.** A filter on either silently returns nothing for the categories that lack it, which reads as "no joy data" rather than "wrong scale".
+- **A join to this table is a filter on the denominator.** nonalcoholic_beverages, snacks and yogurt carry only `Consumer` (plus `Never` for yogurt), so joining drops every respondent who was never screened for that category. The mean you get back is the mean among screened consumers, not the population mean, and nothing downstream says so.
+
+**Use this table to isolate a usage cohort, not as a default join.** Filter by an explicit `category` AND an explicit `usage_level` from that category's family above — `WHERE u.category = 'casinos' AND u.usage_level IN ('Heavy','Frequent')` — and state in the finding that the number is a usage-cohort mean. If the question does not actually turn on usage, do not join: joining costs the population denominator and buys nothing. There is no `beer` category; alcohol is `alcohol`, and wine is separate.
 
 ### `bjl_scale_labels` — canonical ordering for label distributions (~49 rows)
 
