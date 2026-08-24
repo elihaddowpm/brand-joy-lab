@@ -44,7 +44,7 @@
  */
 
 const path = require('path');
-const { runConnectiveReadGuard } = require(
+const { runConnectiveReadGuard, pinnedAxesInSql } = require(
   path.join(__dirname, '..', 'netlify', 'functions', 'bjl-cross-domain-provenance-guard'));
 
 const results = [];
@@ -429,6 +429,122 @@ check('two-way: a compound cohort written as one string still reads',
 check('two-way: LONGEST WINS inside a compound -- non-parent does not pull in parent',
   !read([{ item_name: 'Christmas', axis: 'Millennial / Non-parent', score: 79.1, n: 141 },
          BOOMER_CELL], TWO_WAY).ok);
+
+// ---------------------------------------------------------------------------
+// The pinned cohort -- a WHERE clause instead of a cut.
+//
+// The third shape in this family and the quietest. A pivot at least puts
+// several cohorts on the row; a pinned query puts none:
+//
+//     ... WHERE p.gender = 'Female' GROUP BY 1
+//
+// Every row is a woman's number and no returned value says so. Characterized
+// against live 2026-08-24: `known` is built from the values the ROWS carried,
+// so on this shape it came back EMPTY -- the latch had no vocabulary, a
+// declared cohort was DISCARDED rather than checked, and an undeclared claim
+// took the un-cut branch and seated on anything. A read saying "Women sit at
+// 64.3 and 47.9" over a query pinned to 'Male' returned ok:true with every
+// number real, byte-identical to the true read.
+//
+// The rule now: a pinned cohort counts as a value the rows carried, so a
+// subpopulation read must NAME its subpopulation. That kills three reads and
+// keeps one:
+//
+//   - prose says "Women", claim declares nothing  -> reject (the natural swap)
+//   - claim declares Female over Male-pinned rows -> reject (the declared swap)
+//   - claim declares nothing at all               -> reject (a partial number
+//                                                    presented as a whole one)
+//   - claim declares Female over Female-pinned    -> PASSES
+//
+// It only ever narrows: before, an undeclared claim seated on any pinned row.
+// No claim gains a seat it did not already have, so a false positive costs a
+// rewrite and can never buy a fabrication a way through.
+//
+// Live rows, 2026-08-24.
+// ---------------------------------------------------------------------------
+const ANT = 'ANTICIPATING your vacation';
+const FLY = 'FLYING (on a commercial airline) to a vacation destination';
+
+const pinnedScratch = (g, rows) => [{
+  type: 'query',
+  query: 'SELECT i.item_name, ROUND(AVG(r.joy_index)::numeric,1) AS ji, COUNT(*) AS n '
+       + 'FROM bjl_responses r JOIN bjl_items i ON i.item_id = r.item_id '
+       + 'JOIN bjl_respondents p ON p.respondent_id = r.respondent_id '
+       + `WHERE p.gender = '${g}' GROUP BY 1`,
+  result: rows,
+}];
+
+const PINNED_F = pinnedScratch('Female', [
+  { item_name: ANT, ji: 70.1, n: 993 },
+  { item_name: FLY, ji: 39.0, n: 2572 },
+]);
+const PINNED_M = pinnedScratch('Male', [
+  { item_name: ANT, ji: 64.3, n: 732 },
+  { item_name: FLY, ji: 47.9, n: 2122 },
+]);
+
+// The female numbers, undeclared -- the shape the true read used to take.
+const F_UNDECLARED = [{ item_name: ANT, score: 70.1, n: 993 },
+                      { item_name: FLY, score: 39.0, n: 2572 }];
+// The male numbers, undeclared. Against PINNED_M these are all true; the lie
+// lives entirely in the prose, which is why nothing structural caught it.
+const M_UNDECLARED = [{ item_name: ANT, score: 64.3, n: 732 },
+                      { item_name: FLY, score: 47.9, n: 2122 }];
+const declared = ev => ev.map(r => Object.assign({ gender: 'Female' }, r));
+
+check('pinned: the declared true read seats on the cohort its query pinned',
+  read(declared(F_UNDECLARED), PINNED_F).ok);
+
+check('pinned: THE SWAP -- prose says Women, every number is a man\'s',
+  reasons(read(M_UNDECLARED, PINNED_M))
+    .includes('connective_read_cohort_pinned_in_filter'));
+
+check('pinned: the declared swap -- Female claimed on Male-pinned rows',
+  reasons(read(declared(M_UNDECLARED), PINNED_M))
+    .includes('connective_read_cohort_pinned_in_filter'));
+
+check('pinned: an undeclared read of pinned rows is a partial number sold as a whole one',
+  reasons(read(F_UNDECLARED, PINNED_F))
+    .includes('connective_read_cohort_pinned_in_filter'));
+
+// Read through an empty failure list rather than off the end of it: under a
+// revert this assertion must report a legible FAIL, not throw and take the
+// count with it.
+const detailOf = v => (v.failures || []).map(f => f.detail || '').join(' ');
+check('pinned: the rejection names the pin and offers the cut',
+  /group by gender/i.test(detailOf(read(F_UNDECLARED, PINNED_F)))
+  && /gender = female/i.test(detailOf(read(F_UNDECLARED, PINNED_F))));
+
+check('pinned: an invented cohort on pinned rows is still rejected',
+  !read(F_UNDECLARED.map(r => Object.assign({ gender: 'Gen Alpha' }, r)), PINNED_F).ok);
+
+// Detector precision. Each of these is a shape that must NOT read as a pin,
+// because calling it one would reject an honest read.
+check('pinned detector: one equality literal is a pin',
+  pinnedAxesInSql(PINNED_F[0].query).gender === 'female');
+
+check('pinned detector: a single-member IN-list is the same pin written longer',
+  pinnedAxesInSql("SELECT 1 FROM t JOIN bjl_respondents p ON 1=1 "
+    + "WHERE p.gender IN ('Female') GROUP BY 1").gender === 'female');
+
+check('pinned detector: a multi-member IN-list is a scoping filter, not a pin',
+  pinnedAxesInSql("SELECT 1 FROM t JOIN bjl_respondents p ON 1=1 "
+    + "WHERE p.gender IN ('Male','Female') GROUP BY 1").gender === undefined);
+
+check('pinned detector: an axis in the GROUP BY is on the row already, not pinned',
+  pinnedAxesInSql("SELECT i.item_name, p.gender FROM t "
+    + "WHERE p.gender = 'Female' GROUP BY 1, p.gender").gender === undefined);
+
+check('pinned detector: two equality literals is the pivot rule, not a pin',
+  pinnedAxesInSql("SELECT 1 FROM t WHERE p.gender = 'Female' OR p.gender = 'Male' "
+    + 'GROUP BY 1').gender === undefined);
+
+check('pinned: a genuinely un-cut query still needs no cohort',
+  read([{ item_name: ANT, score: 70.1, n: 993 }, { item_name: FLY, score: 39.0, n: 2572 }],
+    [{ type: 'query',
+       query: 'SELECT i.item_name, ROUND(AVG(r.joy_index)::numeric,1) AS ji, COUNT(*) AS n '
+            + 'FROM bjl_responses r JOIN bjl_items i ON i.item_id = r.item_id GROUP BY 1',
+       result: [{ item_name: ANT, ji: 70.1, n: 993 }, { item_name: FLY, ji: 39.0, n: 2572 }] }]).ok);
 
 // ---------------------------------------------------------------------------
 // Not a regression: the uncut case is untouched.

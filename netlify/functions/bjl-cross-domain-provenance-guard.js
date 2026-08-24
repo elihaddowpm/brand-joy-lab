@@ -257,6 +257,67 @@ function pivotAxesInSql(sql) {
   return Array.from(hits).filter(f => !new RegExp('\\b' + f + '\\b').test(groupBy));
 }
 
+/**
+ * The cohorts a query PINNED in its WHERE clause, keyed by column.
+ *
+ * The third shape in this family, and the worst of the three. A pivot at least
+ * puts several cohorts on the row; a pinned query puts none:
+ *
+ *   SELECT i.item_name, ROUND(AVG(r.joy_index)::numeric,1) AS ji, COUNT(*) AS n
+ *   FROM   ... WHERE p.gender = 'Female' GROUP BY 1
+ *
+ * Every row is a woman's number and no returned value says so. `known` in the
+ * evidence loop is built from the values the ROWS carried, so on this shape it
+ * comes back EMPTY -- the latch has no vocabulary at all. A claim declaring
+ * `gender: 'Female'` is therefore not checked and not rejected; it is silently
+ * DISCARDED, and the undeclared claim takes the un-cut branch and seats on
+ * anything. Characterized against live 2026-08-24: a read saying "Women sit at
+ * 64.3 and 47.9" over a query pinned to 'Male' returned ok:true with every
+ * number real, indistinguishable from the true read.
+ *
+ * Recording the pin gives the latch its vocabulary back, and that is all it
+ * does. It is not the FILTER-predicate parser this file refused to build for
+ * the pivot: there the cohort has to be mapped to the right COLUMN and a
+ * mis-map misattributes a number, whereas here there is exactly one cohort and
+ * it applies to every row, so there is no mapping to get wrong. And the rule
+ * only ever narrows -- before it, an undeclared claim seated on any pinned row;
+ * after it, a claim must name the pinned cohort to seat at all. No claim gains
+ * a seat it did not already have, so a false positive costs a rewrite and can
+ * never buy a fabrication a way through.
+ *
+ * EXACTLY ONE literal. Two or more via `=` is the pivot rule above; two or more
+ * in an IN-list is a scoping filter over a pooled aggregate, which is honestly
+ * un-cut and must keep passing. An axis in the GROUP BY is on the row as a
+ * value already and is not pinned.
+ */
+function pinnedAxesInSql(sql) {
+  const s = String(sql || '').toLowerCase();
+  const out = {};
+  if (!s) return out;
+  const gb = s.lastIndexOf('group by');
+  const groupBy = gb === -1 ? '' : s.slice(gb);
+
+  for (const f of AXIS_FIELDS) {
+    if (new RegExp('\\b' + f + '\\b').test(groupBy)) continue;
+    const lits = new Set();
+    const eq = new RegExp('\\b' + f + "\\s*=\\s*'([^']*)'", 'g');
+    let e;
+    while ((e = eq.exec(s)) !== null) lits.add(e[1]);
+    // `IN ('Female')` is the same pin written longer. `IN` with more than one
+    // member is the scoping filter and drops out on the size test below.
+    const inList = new RegExp('\\b' + f + "\\s+in\\s*\\(([^)]*)\\)", 'g');
+    let i;
+    while ((i = inList.exec(s)) !== null) {
+      for (const m of i[1].matchAll(/'([^']*)'/g)) lits.add(m[1]);
+    }
+    if (lits.size === 1) {
+      const only = normalizeItemName(Array.from(lits)[0]);
+      if (only) out[f] = only;
+    }
+  }
+  return out;
+}
+
 // The normalized axis values a returned row carried, keyed by column.
 // Empty object for a row that is not part of a cut.
 function rowAxisValues(row) {
@@ -582,6 +643,7 @@ function buildCardAllowlist(scratch) {
     const pinned = pinnedItemName(rawSql)
                 || (pinnedId !== null ? (idIndex.get(pinnedId) || null) : null);
     const pivotAxes = pivotAxesInSql(rawSql);
+    const pinnedAxes = pinnedAxesInSql(rawSql);
     const rows = Array.isArray(entry.result) ? entry.result
                : Array.isArray(entry.rows)   ? entry.rows
                : [];
@@ -613,6 +675,10 @@ function buildCardAllowlist(scratch) {
         // than column values. Non-empty means the cohort on this row is
         // unmatchable -- see pivotAxesInSql.
         pivot_axes: pivotAxes,
+        // The cohort this row's query pinned in its WHERE clause. Not on the
+        // row as a value, but true of every row it returned, so the latch
+        // treats it as one. See pinnedAxesInSql.
+        pinned_axes: pinnedAxes,
         // Which cohort of a cut this row is. Empty when the row is not a cut.
         axis,
         // The row's full numeric surface, so a claim can verify against an
@@ -2506,7 +2572,14 @@ function runConnectiveReadGuard({ connective_read, scratch }) {
     // cohort readable without guessing at a separator: the model writes
     // "Millennial / $200,000 or more" or "Millennial x $200k+" or an array,
     // and all of them contain the cohort names the rows actually carried.
-    const known = Array.from(new Set(bucket.flatMap(r => Object.values(r.axis || {}))));
+    // Pinned cohorts count as values the rows carried. They are not printed on
+    // the row, but they are true of every row the query returned, and leaving
+    // them out is what left `known` empty on a pinned query -- no vocabulary,
+    // so nothing to match, so a declared cohort was discarded rather than
+    // checked. See pinnedAxesInSql.
+    const rowCohorts = r => Object.values(r.axis || {})
+      .concat(Object.values(r.pinned_axes || {}));
+    const known = Array.from(new Set(bucket.flatMap(rowCohorts)));
 
     const claimParts = [];
     if (Array.isArray(e.axis)) claimParts.push(...e.axis);
@@ -2532,8 +2605,13 @@ function runConnectiveReadGuard({ connective_read, scratch }) {
     // cannot be verified. See pivotAxesInSql.
     const seatable = bucket.filter(r => !(r.pivot_axes && r.pivot_axes.length));
 
+    // A pinned cohort is one of those cuts. It is not printed on the row, but
+    // every row the query returned is inside it, so a claim that does not name
+    // it is a subpopulation number presented as a whole one -- the same false
+    // attribution as citing the Boomer row as Gen Z, one step quieter. In one
+    // line: a subpopulation read must name its subpopulation.
     const candidates = seatable.filter(r => {
-      const vals = Object.values(r.axis || {});
+      const vals = rowCohorts(r);
       if (!vals.length) return claimAxes.size === 0;
       return claimAxes.size > 0 && vals.every(v => claimAxes.has(v));
     });
@@ -2554,6 +2632,37 @@ function runConnectiveReadGuard({ connective_read, scratch }) {
               + 'Re-run the cut as GROUP BY ' + axes.join(', ')
               + ' so each cohort is its own row, and cite that row.',
         pivot_axes: axes,
+      });
+      continue;
+    }
+
+    // Every row for this item came from a query pinned to one cohort in its
+    // WHERE clause, and the claim did not name that cohort -- either it named
+    // none (a subpopulation number read as the whole population) or it named a
+    // different one (a swap). Both are unseatable for the same reason, so they
+    // get the same rejection, which names the pin and offers the two honest
+    // ways out. See pinnedAxesInSql.
+    const pinnedOnly = seatable.length > 0 && seatable.every(r =>
+      !Object.values(r.axis || {}).length
+      && Object.keys(r.pinned_axes || {}).length);
+    if (candidates.length === 0 && pinnedOnly) {
+      const pins = {};
+      for (const r of seatable) Object.assign(pins, r.pinned_axes || {});
+      const cols = Object.keys(pins);
+      failures.push({
+        surface: 'connective_read',
+        claim: { item_name: e.item_name, score: e.score, n: e.n },
+        reason: 'connective_read_cohort_pinned_in_filter',
+        detail: 'The query that returned this row filtered its WHERE clause to '
+              + cols.map(c => c + ' = ' + pins[c]).join(', ')
+              + ', so every number it returned is that cohort\'s and no returned value '
+              + 'says so. This read either names no cohort -- reporting a '
+              + 'subpopulation figure as if it were the whole population -- or names a '
+              + 'different one. Either re-run as GROUP BY ' + cols.join(', ')
+              + ' with the filter dropped, so the cohort is a value on the row and the '
+              + 'comparison is visible, or say plainly that the finding is about '
+              + cols.map(c => pins[c]).join(' / ') + ' so the claim matches the filter.',
+        pinned_axes: pins,
       });
       continue;
     }
@@ -2756,6 +2865,7 @@ module.exports = {
   // Exported for tests + reuse.
   normalizeItemName,
   pivotAxesInSql,
+  pinnedAxesInSql,
   roundJoy,
   buildAllowlist,
   inferSourceTable,

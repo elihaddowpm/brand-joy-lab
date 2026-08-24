@@ -467,6 +467,16 @@ One row per cohort. It is the same aggregate and it costs nothing.
 
 This applies to `CASE WHEN p.<cohort> = '...' THEN ... END` too — same shape, same problem. `FILTER` on something that is not a cohort (a score threshold, a tag membership) is fine and is unaffected.
 
+The same goes for pinning one cohort in the WHERE and leaving it out of the GROUP BY:
+
+```sql
+-- rejected downstream unless the finding names the cohort
+WHERE p.gender = 'Female'
+GROUP BY 1
+```
+
+Every row that comes back is a woman's number and nothing on the row says so, so a finding written off it reads as a statement about everyone. Two legal ways to write it. If you want the comparison, drop the filter and `GROUP BY 1, p.gender` — that is the shape above and it is strictly more informative. If you genuinely want one subpopulation and no comparison, keep the filter and **say so in the finding**: name the cohort in the entry, spelled as the column spells it, so the claim and the filter match. A subpopulation read must name its subpopulation. Note that `IN ('Male','Female')` alongside a `GROUP BY` on that column is scoping, not pinning, and is fine.
+
 ### Brand-not-in-data handling
 
 If a specific brand isn't in the data, identify the closest 1-2 proxy items in the same category within your first 3 queries, then do all subsequent analysis on those proxies. Don't keep searching for the original brand once you've established it's absent.
