@@ -238,6 +238,55 @@ check('employment_status: full-time cannot borrow part-time\'s row',
          STUDENT_OK], EMPLOY.scratch).ok);
 
 // ---------------------------------------------------------------------------
+// employment_detail -- the successor column, added as an axis 2026-08-24.
+//
+// Not a duplicate of employment_status and not in conflict with it. Verified
+// against live: of 14,548 respondents, 1,756 carry employment_status (fielded
+// 2024-06 to 2024-10), 8,010 carry employment_detail (2024-10 onward), and
+// ZERO carry both. Same construct, re-asked with ten levels instead of eight,
+// on disjoint populations. So there is no respondent on whom the two columns
+// could disagree, and each is a real cut in its own right.
+//
+// The cohort pair chosen here is the hard one, and it is the reason this block
+// is not just a sixth copy of the pin. 'Employed full time' sits INSIDE
+// 'Self-employed full time' -- and on a token boundary, because the character
+// before it is a hyphen. So a claim naming the self-employed cohort matches
+// BOTH values by containment, claimAxes comes back too large, and the
+// employed-full-time row joins the candidate set as a legal source. That is
+// the parent/non-parent failure again, one column over: it fails OPEN. Only
+// longest-match-wins keeps the two apart, so the swap below is the assertion
+// that proves the widening is real rather than cosmetic.
+// ---------------------------------------------------------------------------
+const DETAIL_ROWS = [
+  ['Employed full time', 73.2, 402], ['Employed part time', 66.1, 82],
+  ['Not employed and not looking for work', 50.0, 14],
+  ['Not employed, but looking for work', 65.4, 26],
+  ['Not employed, unable to work due to a disability or illness', 61.6, 38],
+  ['Retired', 51.7, 144], ['Self-employed full time', 66.3, 32],
+  ['Self-employed part time', 50.5, 21],
+  ['Stay-at-home spouse or partner', 62.1, 29], ['Student', 77.5, 24],
+];
+
+const DETAIL = pin('employment_detail', 'employment_detail', 'A Beach Trip', DETAIL_ROWS,
+  'Self-employed full time', 'Employed full time');
+
+const DETAIL_STUDENT_OK = {
+  item_name: 'A Beach Trip', employment_detail: 'Student', score: 77.5, n: 24,
+};
+
+// The part-time twin of the same containment trap.
+check('employment_detail: self-employed part time cannot stand on employed part time',
+  !read([{ item_name: 'A Beach Trip', employment_detail: 'Self-employed part time',
+           score: 66.1, n: 82 }, DETAIL_STUDENT_OK], DETAIL.scratch).ok);
+
+// The two 'Not employed' levels differ only after the comma. Neither contains
+// the other, so this is the boundary rule rather than longest-wins, but a read
+// that blurs them is claiming the opposite thing about looking for work.
+check('employment_detail: the two not-employed levels are not interchangeable',
+  !read([{ item_name: 'A Beach Trip', employment_detail: 'Not employed and not looking for work',
+           score: 65.4, n: 26 }, DETAIL_STUDENT_OK], DETAIL.scratch).ok);
+
+// ---------------------------------------------------------------------------
 // hispanic_origin -- two-level, and the labels are the bare tokens 'Yes'/'No'.
 // ---------------------------------------------------------------------------
 pin('hispanic_origin', 'hispanic_origin', 'A day at a THEME PARK or amusement park', [

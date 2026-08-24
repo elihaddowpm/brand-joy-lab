@@ -827,38 +827,51 @@ check('prose: difference wording with nothing behind it is caught as a compariso
 // a gap stated the wrong way round fails where it used to pass. That is the
 // case pinned hardest below, because it is the new protection.
 //
-// Rows are the live pivot the run actually produced, re-pulled 2026-08-20:
-// one row per item carrying both cohorts' rounded and unrounded means. The
-// short-trips row is here because its two admissible answers differ (-4.7
-// displayed, -4.6 unrounded), which is what proves the pair of exact values
-// survived the sign rather than collapsing to one.
+// Job 19a48b92 produced these rows as a CASE-WHEN pivot, and this fixture was
+// originally written that way. It cannot be any more: employment_detail became
+// an axis field on 2026-08-24, which makes that query a detected pivot, and a
+// pivot's rows are withheld from every arithmetic latch. Left as it was, the
+// block did not fail loudly -- it went QUIET. The helpers below test for
+// `figure_value_not_derivable`, and a withheld row returns
+// `figure_not_in_rows` instead, so eight of these ten assertions would have
+// passed while testing nothing at all. That is worse than a red test.
+//
+// So the fixture is re-expressed as the cut the guard now asks for, with the
+// same numbers re-pulled from live 2026-08-24 to confirm they are unchanged:
+// four rows, one per item per cohort, employment_detail carried as a value.
+// The arithmetic under test is identical -- what moved is the shape it sits
+// on, and the evidence entries now have to name the cohort they cite, which is
+// the point of the axis being an axis.
+//
+// The short-trips rows are here because their two admissible answers differ
+// (-4.7 displayed, -4.6 unrounded), which is what proves the pair of exact
+// values survived the sign rather than collapsing to one.
 // ---------------------------------------------------------------------------
 const MEAL2 = 'Having a HOME COOKED meal in your home';
 const TRIPS = 'Taking vacations or short trips';
 const EMP = [{
   type: 'query',
-  query: 'SELECT i.item_name, '
-       + "COUNT(CASE WHEN p.employment_detail = 'Retired' THEN 1 END) AS n_retired, "
-       + "ROUND(AVG(CASE WHEN p.employment_detail = 'Retired' THEN r.joy_index END)::numeric,1) AS ji_retired, "
-       + "AVG(CASE WHEN p.employment_detail = 'Retired' THEN r.joy_index END) AS ji_retired_raw, "
-       + "COUNT(CASE WHEN p.employment_detail = 'Employed full time' THEN 1 END) AS n_fulltime, "
-       + "ROUND(AVG(CASE WHEN p.employment_detail = 'Employed full time' THEN r.joy_index END)::numeric,1) AS ji_fulltime, "
-       + "AVG(CASE WHEN p.employment_detail = 'Employed full time' THEN r.joy_index END) AS ji_fulltime_raw "
+  query: 'SELECT i.item_name, p.employment_detail, COUNT(*) AS n, '
+       + 'ROUND(AVG(r.joy_index)::numeric,1) AS ji, AVG(r.joy_index) AS ji_raw '
        + 'FROM bjl_responses r JOIN bjl_items i ON i.item_id = r.item_id '
-       + 'JOIN bjl_respondents p ON p.respondent_id = r.respondent_id GROUP BY 1',
+       + 'JOIN bjl_respondents p ON p.respondent_id = r.respondent_id '
+       + "WHERE p.employment_detail IN ('Retired','Employed full time') "
+       + 'GROUP BY 1, p.employment_detail',
   result: [
-    { item_name: MEAL2,
-      n_retired: 256, ji_retired: 62.6, ji_retired_raw: 62.578125,
-      n_fulltime: 566, ji_fulltime: 72.1, ji_fulltime_raw: 72.12014134275618 },
-    { item_name: TRIPS,
-      n_retired: 144, ji_retired: 24.7, ji_retired_raw: 24.722222222222222,
-      n_fulltime: 382, ji_fulltime: 29.4, ji_fulltime_raw: 29.3717277486911 },
+    { item_name: MEAL2, employment_detail: 'Retired',
+      n: 256, ji: 62.6, ji_raw: 62.578125 },
+    { item_name: MEAL2, employment_detail: 'Employed full time',
+      n: 566, ji: 72.1, ji_raw: 72.12014134275618 },
+    { item_name: TRIPS, employment_detail: 'Retired',
+      n: 144, ji: 24.7, ji_raw: 24.722222222222222 },
+    { item_name: TRIPS, employment_detail: 'Employed full time',
+      n: 382, ji: 29.4, ji_raw: 29.3717277486911 },
   ],
 }];
 
 const EMP_EVIDENCE = [
-  { item_name: MEAL2, score: 62.6, n: 256 },
-  { item_name: MEAL2, score: 72.1, n: 566 },
+  { item_name: MEAL2, employment_detail: 'Retired',            score: 62.6, n: 256 },
+  { item_name: MEAL2, employment_detail: 'Employed full time', score: 72.1, n: 566 },
 ];
 
 // The read states no numeral of its own, so the only thing under test is the
@@ -895,8 +908,8 @@ const trips = (value, from) => reasons(runConnectiveReadGuard({
     has_read: true, comparisons: [],
     read: 'Retired and full-time split on short trips.',
     evidence: [
-      { item_name: TRIPS, score: 24.7, n: 144 },
-      { item_name: TRIPS, score: 29.4, n: 382 },
+      { item_name: TRIPS, employment_detail: 'Retired',            score: 24.7, n: 144 },
+      { item_name: TRIPS, employment_detail: 'Employed full time', score: 29.4, n: 382 },
     ],
     figures: [{ label: 'short trips gap, retired minus full-time', value, from }],
   },

@@ -144,7 +144,23 @@ function normalizeItemName(s) {
 const AXIS_FIELDS = [
   'mode', 'generation', 'income_bracket',
   'age_band', 'gender', 'region', 'parental_status', 'children_under_18',
-  'marital_status', 'employment_status', 'hispanic_origin',
+  'marital_status', 'hispanic_origin',
+  // Two columns, one construct, two fielding eras -- and NOT a duplicate pair
+  // on any respondent. Verified 2026-08-24: of 14,548 respondents, 1,756 carry
+  // employment_status (5 fieldings, 2024-06 to 2024-10), 8,010 carry
+  // employment_detail (19 fieldings, 2024-10 onward), and ZERO carry both. The
+  // newer column asks the same question with ten levels instead of eight and
+  // backs 521k joy responses against the older one's small tail, so both are
+  // real cohort columns and neither can contradict the other on a person.
+  //
+  // They do share value spellings -- 'Retired' and 'Student' are identical
+  // strings in both -- which is harmless here, because the latch matches a
+  // claim against the value its own row carried and both spellings mean what
+  // they say. What it does NOT make safe is comparing a cohort drawn from one
+  // column against a cohort drawn from the other: those are disjoint
+  // populations from different waves. Nothing in this guard checks that, and
+  // it is logged rather than fixed here.
+  'employment_status', 'employment_detail',
   // High cardinality is not a problem here: the latch matches a claim against
   // the VALUE its row carried, and never counts levels or assumes an axis is
   // small. state has 124 levels and occupation 38; each behaves exactly as
