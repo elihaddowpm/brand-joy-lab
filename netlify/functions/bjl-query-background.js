@@ -351,6 +351,114 @@ async function readPriorTurns(sessionId) {
   }
 }
 
+// Read side of the figures ledger.
+//
+// WHY THIS EXISTS
+//
+// readPriorTurns above removed a lossy hop, but it did not change what KIND
+// of thing the synthesizer is asked to remember from, because the
+// synthesizer was never given prior turns at all. Traced 2026-08-25:
+// storedTurns reaches runTriage and runDecomposer; runSynthesis takes
+// (triage, scratch, extraContext) and nothing else. The stage that authors
+// the answer has no view of earlier turns, and no view of the cards those
+// turns published.
+//
+// So cards were write-only. Every stat_item is verified against scratch,
+// saved, and never read back. A follow-up asking "what was that community
+// number again" could only be served by re-querying it, or by a figure
+// surviving as prose through triage's plan -- and prose is where 58.0
+// arrived as a community expectation.
+//
+// Handing back the stored bindings is not a new claim and not new trust.
+// These rows were authored at synthesis, checked by the provenance guard,
+// and seated on a scratch row whose cohort the cards guard confirmed. The
+// model is being given back, exactly, what it already proved. The failure
+// class this removes is RECONSTRUCTION: there is nothing to reconstruct
+// from remembered shape when the binding itself is on the page.
+//
+// Deduplicated on the binding, not the row. A figure republished across
+// four turns is one fact, and showing it four times spends context to make
+// the same point while inviting the model to read repetition as emphasis.
+// Order is first-published, so the digest reads in the order the
+// conversation established things.
+// Identity of a figure is the BINDING, not the row: item + value + construct
+// + cohort. Score is compared numerically because the ledger column is
+// numeric and 58.0 comes back as 58 -- a string key would treat those as two
+// different facts and print the same binding twice.
+function dedupeFigureBindings(rows) {
+  const seen = new Set();
+  const out = [];
+  for (const f of (Array.isArray(rows) ? rows : [])) {
+    if (!f || typeof f.item_name !== 'string') continue;
+    const score = Number(f.score);
+    if (!Number.isFinite(score)) continue;
+    const key = [
+      f.item_name.trim().toLowerCase(),
+      score,
+      (f.construct || '').toLowerCase(),
+      f.cohort ? JSON.stringify(f.cohort) : '',
+    ].join('|');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(f);
+  }
+  return out;
+}
+
+async function readSessionFigures(sessionId) {
+  if (!sessionId) return [];
+  try {
+    const { data, error } = await supabase
+      .from('bjl_session_figures')
+      .select('item_name, score, n, construct, source, question_id, cohort, created_at')
+      .eq('session_id', sessionId)
+      .order('created_at', { ascending: true });
+    if (error) {
+      console.error('[bjl-query-background] session figures read failed:', error);
+      return [];
+    }
+    return dedupeFigureBindings(data);
+  } catch (e) {
+    // Best-effort, matching every other context read: losing the digest
+    // costs recall, it must never wedge the job.
+    console.error('[bjl-query-background] readSessionFigures threw:', e);
+    return [];
+  }
+}
+
+// Render the ledger as the block the synthesizer sees.
+//
+// One line per binding, with the item and the number inseparable on it. The
+// construct is printed next to the score for the same reason the column is
+// NOT NULL in the table: 58.0 as a safety barrier and 62.0 as a joy index
+// are both real and neither is an expectation share, so a digest that
+// printed bare numbers would hand back the ambiguity it exists to remove.
+// A cohort figure names its cohort inline -- an unqualified line means the
+// figure is true of the whole sample, which the cards cohort latch now
+// enforces at write time rather than assumes.
+function formatSessionFigures(figures) {
+  if (!Array.isArray(figures) || figures.length === 0) return '';
+  const lines = figures.map(f => {
+    const bits = [];
+    if (f.construct) bits.push(String(f.construct));
+    if (f.n != null) bits.push('n=' + f.n);
+    if (f.source) bits.push(String(f.source));
+    if (f.question_id != null) bits.push('q' + f.question_id);
+    const cohort = (f.cohort && typeof f.cohort === 'object')
+      ? Object.entries(f.cohort).map(([k, v]) => k + '=' + v).join(', ')
+      : '';
+    return '- "' + f.item_name + '" = ' + f.score
+      + (bits.length ? ' (' + bits.join(', ') + ')' : '')
+      + (cohort ? ' [cohort: ' + cohort + ']' : ' [whole sample]');
+  });
+  return '[VERIFIED FIGURES FROM EARLIER IN THIS CONVERSATION]\n'
+    + 'These bindings were published and verified in earlier turns of this same\n'
+    + 'conversation. Each line is one figure attached to the item it was measured\n'
+    + 'on. Recall them from here rather than from memory of earlier prose, and\n'
+    + 'copy them exactly. See the RECALLED FIGURES rules in your instructions.\n\n'
+    + lines.join('\n');
+}
+
 function getSessionIdFromJob(job) {
   if (!job || !job.extra_context || typeof job.extra_context !== 'object') return null;
   const raw = job.extra_context._session_id;
@@ -1238,6 +1346,14 @@ async function runSynthesis(triage, scratch, extraContext) {
       : JSON.stringify(extraContext.waldoContext).slice(0, 2000);
     parts.push('[WALDO INTELLIGENCE]\n' + wc);
   }
+  // Verified figures from earlier turns, ahead of this turn's scratch. The
+  // ordering is deliberate: scratch is what was measured NOW and is the only
+  // thing that may ground a card, so it sits closest to the instruction to
+  // produce output. The digest is background the model may quote in prose.
+  if (extraContext && typeof extraContext.__session_figures === 'string'
+      && extraContext.__session_figures.trim()) {
+    parts.push(extraContext.__session_figures.trim());
+  }
   parts.push(`Investigator scratch (${scratch.length} entries):\n${JSON.stringify(scratch, null, 2)}\n\nProduce the response now as JSON: {"response_text": "...", "followup_chips": ["...", "...", "..."]}`);
   // Guard-retry prefix: when the cross-domain provenance guard fails the
   // first pass, runSynthesisWithGuard re-invokes runSynthesis with an
@@ -1706,6 +1822,8 @@ async function runSynthesisWithGuard(triage, scratch, extraContext) {
 // -------------------------------------------------------------------------
 // Exported for tests. Netlify only ever reads `handler`.
 exports.buildFigureRows = buildFigureRows;
+exports.formatSessionFigures = formatSessionFigures;
+exports.dedupeFigureBindings = dedupeFigureBindings;
 exports.extractJsonObjectSubstring = extractJsonObjectSubstring;
 exports.runFramePassParsed = runFramePassParsed;
 exports.FRAME_FORMAT_RETRY = FRAME_FORMAT_RETRY;
@@ -1926,7 +2044,19 @@ exports.handler = async (event) => {
     // retries once on failure with a strict allowlist digest, and drops the
     // sidecar (empty threads + null home_topic + synth_warning) if the retry
     // still doesn't verify.
-    const synth = await runSynthesisWithGuard(triage, scratch, job.extra_context);
+    // Figures this conversation already published and verified. Read here so
+    // both the first pass and the guard retry see the same digest.
+    const sessionFigures = await readSessionFigures(sessionId);
+    const figureDigest = formatSessionFigures(sessionFigures);
+    if (sessionFigures.length) {
+      console.log('[bjl-query-background] figures digest: ' + sessionFigures.length
+        + ' binding(s), ' + figureDigest.length + ' chars');
+    }
+    const synthContext = figureDigest
+      ? Object.assign({}, job.extra_context || {}, { __session_figures: figureDigest })
+      : job.extra_context;
+
+    const synth = await runSynthesisWithGuard(triage, scratch, synthContext);
     const {
       response_text,
       followup_chips,
