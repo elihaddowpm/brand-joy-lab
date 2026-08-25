@@ -180,6 +180,93 @@ async function writeAssistantTurn(sessionId, content, contextObj) {
 }
 
 // ============================================================
+// The figures ledger write.
+//
+// Persists the stat_items that ALREADY survived card provenance
+// verification -- item_name, score, and n verbatim from a scratch row, one
+// source and one construct per card (see verifyCards in the provenance
+// guard). This adds no new trust. It stops discarding a binding that was
+// computed, checked, and then thrown away at the end of every turn.
+//
+// The binding is the whole point. On 2026-08-21 a turn published "58% of
+// hostel guests expect community": 58.0% is real and belongs to the SAFETY
+// BARRIER, community expectation is 17.6%. Asking "does 58 appear in
+// context" cannot catch that, and gets weaker as context grows -- measured
+// against the full session history, that check passes 58% and 62% and only
+// fails 71% because 70.4 rounds to 70. Asking "is 58 bound to community"
+// catches it. That question needs the binding stored, which is this.
+//
+// A figure missing score, source, or construct is NOT written. Construct is
+// non-negotiable: 62.0 is a hotel Joy Index and it shipped as a percentage
+// of respondents, so a ledger row that records the value and the item but
+// not what KIND of number it is would confirm the figure and still let it
+// be relabeled. Recording an unbindable figure is worse than recording
+// nothing, because the ledger's structure vouches for whatever is in it.
+// Skips are counted and logged rather than passed over silently.
+//
+// Best-effort, matching the other session writes: a failed ledger write
+// costs a future check, it must never roll back the strategist's job.
+function buildFigureRows(sessionId, jobId, cards) {
+  const rows = [];
+  let skipped = 0;
+  if (!Array.isArray(cards)) return { rows, skipped };
+
+  for (const card of cards) {
+    const statItems = Array.isArray(card && card.stat_items) ? card.stat_items : [];
+    for (const s of statItems) {
+      if (!s || typeof s !== 'object' || typeof s.item_name !== 'string') { skipped++; continue; }
+      // `score` is the v2 shape, `joy_index` the v1/legacy alias -- same
+      // aliasing the guard applies when it verifies these.
+      const score     = Number(s.score != null ? s.score : s.joy_index);
+      const construct = typeof s.construct === 'string' ? s.construct.trim() : '';
+      const source    = typeof s.source === 'string' ? s.source.trim() : '';
+      const itemName  = s.item_name.trim();
+      if (!itemName || !Number.isFinite(score) || !construct || !source) { skipped++; continue; }
+      const nRaw = Number(s.n);
+      rows.push({
+        session_id:  sessionId,
+        job_id:      jobId,
+        item_name:   itemName,
+        score,
+        n:           Number.isFinite(nRaw) ? Math.trunc(nRaw) : null,
+        construct:   construct.toLowerCase(),
+        source:      source.toLowerCase(),
+        question_id: Number.isFinite(Number(s.question_id)) ? Math.trunc(Number(s.question_id)) : null,
+        // Only recorded when the card carries it. Left null rather than
+        // inferred -- a guessed cohort misattributes exactly the way a
+        // guessed item does.
+        cohort:      (s.cohort && typeof s.cohort === 'object') ? s.cohort : null,
+      });
+    }
+  }
+
+  return { rows, skipped };
+}
+
+async function writeSessionFigures(sessionId, jobId, cards) {
+  if (!sessionId || !jobId) return;
+
+  const { rows, skipped } = buildFigureRows(sessionId, jobId, cards);
+
+  if (skipped > 0) {
+    console.warn('[bjl-query-background] figures ledger: skipped ' + skipped
+      + ' stat_item(s) lacking item_name/score/source/construct');
+  }
+  if (rows.length === 0) return;
+
+  try {
+    const { error } = await supabase.from('bjl_session_figures').insert(rows);
+    if (error) {
+      console.error('[bjl-query-background] figures ledger insert failed:', error);
+      return;
+    }
+    console.log('[bjl-query-background] figures ledger: wrote ' + rows.length + ' figure(s)');
+  } catch (e) {
+    console.error('[bjl-query-background] writeSessionFigures threw:', e);
+  }
+}
+
+// ============================================================
 // The read that mirrors writeAssistantTurn.
 //
 // writeAssistantTurn above stores every finding at FULL length, and until
@@ -1594,6 +1681,7 @@ async function runSynthesisWithGuard(triage, scratch, extraContext) {
 // Background handler — Netlify dispatches this with 15-min timeout
 // -------------------------------------------------------------------------
 // Exported for tests. Netlify only ever reads `handler`.
+exports.buildFigureRows = buildFigureRows;
 exports.extractJsonObjectSubstring = extractJsonObjectSubstring;
 exports.runFramePassParsed = runFramePassParsed;
 exports.FRAME_FORMAT_RETRY = FRAME_FORMAT_RETRY;
@@ -1901,6 +1989,12 @@ exports.handler = async (event) => {
       query_count:    queryCount,
       hit_max_turns:  !!hit_max_turns,
     });
+
+    // The figures this turn established, kept as bindings rather than as
+    // sentences. `cards` here is post-guard: anything that failed card
+    // provenance was already dropped above, so this persists only what was
+    // verified against scratch. See writeSessionFigures.
+    await writeSessionFigures(sessionId, jobId, cards);
 
     return { statusCode: 200, body: JSON.stringify({ ok: true, status: 'complete', job_id: jobId }) };
 
