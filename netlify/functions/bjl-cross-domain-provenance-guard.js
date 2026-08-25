@@ -1513,10 +1513,141 @@ function runAudienceDistributionsGuard({ audience_distributions, scratch }) {
 }
 
 /**
+ * Which cohort a card's stat_item claims, and which rows it may seat on.
+ *
+ * This is the connective_read axis latch, applied to cards. It is factored out
+ * rather than reimplemented because the two surfaces have to agree: a figure
+ * that cannot be attributed on one is not attributable on the other, and two
+ * copies of this reasoning would drift into two different answers to the same
+ * question.
+ *
+ * Cards ran without it until 2026-08-25. runCardsGuard matched on score, n,
+ * source and construct and never looked at the cohort, so a bucket holding
+ * every generation's row cleared any of those numbers presented as the item's
+ * number. Measured against live saved cards: 5 of 191 stat_items resolve to a
+ * cut row, and one of them cites Gen Z's 72.2 (n=129) under the headline
+ * "consistent across all generations" while the pooled figure is 71.5
+ * (n=1,245). Every number in it is real. It passed clean.
+ *
+ * The claim is matched against the cohort values the ROWS carried rather than
+ * parsed out of the claim, which is what lets a compound cohort be written any
+ * way the model likes without a separator convention to get wrong.
+ *
+ * A cohort is only read off the stat_item itself -- its `cohort` field, an
+ * axis field on it, or an item_name that IS a cohort value. Deliberately not
+ * off the card's headline or `why`: the stat_item is the thing that carries
+ * the number and the thing the ledger stores, and a cohort mentioned in
+ * neighbouring prose does not bind to this figure. Prose saying "Gen Z" beside
+ * a pooled number is the failure, not the fix for it.
+ */
+function cardCohortSeating(bucket, s) {
+  // Pinned cohorts count as values the rows carried. They are not printed on
+  // the row, but they are true of every row the query returned. See
+  // pinnedAxesInSql.
+  const rowCohorts = r => Object.values(r.axis || {})
+    .concat(Object.values(r.pinned_axes || {}));
+  const known = Array.from(new Set(bucket.flatMap(rowCohorts)));
+
+  const claimParts = [];
+  const declared = s.cohort;
+  if (Array.isArray(declared)) {
+    claimParts.push(...declared.filter(x => typeof x === 'string'));
+  } else if (typeof declared === 'string') {
+    claimParts.push(declared);
+  } else if (declared && typeof declared === 'object') {
+    for (const v of Object.values(declared)) if (typeof v === 'string') claimParts.push(v);
+  }
+  for (const f of AXIS_FIELDS) if (typeof s[f] === 'string') claimParts.push(s[f]);
+  const claimNamed = claimParts.map(normalizeItemName).filter(Boolean);
+
+  const claimAxes = new Set(matchAxisValues(known, claimNamed.join(' | ')));
+  // A cohort named in item_name rather than in a field said the thing; the
+  // field it said it in does not matter.
+  const itemKey = normalizeItemName(s.item_name);
+  if (!claimAxes.size && known.includes(itemKey)) claimAxes.add(itemKey);
+
+  // Rows whose cohort was written into a column NAME carry no value to match,
+  // so they would read as un-cut and clear a claim that names no cohort.
+  // Dropped before the match rather than after it, so nothing seats on a row
+  // whose attribution cannot be verified. See pivotAxesInSql.
+  const seatable = bucket.filter(r => !(r.pivot_axes && r.pivot_axes.length));
+
+  // A row backs the claim only when the claim names EVERY cut the row sits in.
+  // One dimension is not enough on a two-way cut: the Millennial x $200k+ cell
+  // is not "Millennials". Rows outside any cut need no cohort and accept none,
+  // which is the half that makes a subpopulation figure fail when it is
+  // presented as a whole-population one.
+  const candidates = seatable.filter(r => {
+    const vals = rowCohorts(r);
+    if (!vals.length) return claimAxes.size === 0;
+    return claimAxes.size > 0 && vals.every(v => claimAxes.has(v));
+  });
+
+  return { known, claimAxes, claimNamed, seatable, candidates };
+}
+
+/**
+ * The cohort each surviving stat_item is actually true of, read off the row
+ * the guard matched it to.
+ *
+ * Not asked of the model. The cohort comes from the same row whose score and n
+ * were verified, so recording it extends no trust that the provenance check
+ * did not already establish. This is what fills bjl_session_figures.cohort;
+ * without it that column is uniformly NULL, and a NULL cohort reads as "true
+ * of everyone" -- which is precisely the misattribution the ledger exists to
+ * make checkable, written down and vouched for by the ledger's own structure.
+ *
+ * Returns one entry per stat_item that seats on a row, with cohort null when
+ * the matched row is genuinely un-cut. A stat_item that seats on nothing is
+ * omitted rather than recorded with an unknown cohort.
+ */
+function resolveCardCohorts({ cards, scratch }) {
+  const out = [];
+  const list = Array.isArray(cards) ? cards : [];
+  if (list.length === 0) return out;
+  const itemIndex = buildCardAllowlist(scratch);
+  if (itemIndex.size === 0) return out;
+
+  for (let ci = 0; ci < list.length; ci++) {
+    const card = list[ci];
+    const statItems = Array.isArray(card && card.stat_items) ? card.stat_items : [];
+    for (let si = 0; si < statItems.length; si++) {
+      const s = statItems[si];
+      if (!s || typeof s !== 'object' || typeof s.item_name !== 'string') continue;
+      const bucket = itemIndex.get(normalizeItemName(s.item_name));
+      if (!bucket || bucket.length === 0) continue;
+
+      const { candidates } = cardCohortSeating(bucket, s);
+      const claimJoy       = roundJoy(s.score != null ? s.score : s.joy_index);
+      const claimN         = toInt(s.n);
+      const claimSource    = typeof s.source === 'string' ? s.source.toLowerCase() : null;
+      const claimConstruct = typeof s.construct === 'string' ? s.construct.toLowerCase() : null;
+
+      const row = candidates.find(r => {
+        const nums        = rowCarriesNumbers(r, claimJoy, claimN);
+        const sourceOk    = claimSource === null || claimSource === r.source;
+        const constructOk = claimConstruct === null || r.construct === null
+                         || claimConstruct === (r.construct || '').toLowerCase();
+        return nums.ok && sourceOk && constructOk;
+      });
+      if (!row) continue;
+
+      const cohort = Object.assign({}, row.axis || {}, row.pinned_axes || {});
+      out.push({
+        card_index: ci,
+        stat_index: si,
+        cohort: Object.keys(cohort).length ? cohort : null,
+      });
+    }
+  }
+  return out;
+}
+
+/**
  * Card provenance guard. Applies the four checks (item, joy_index, n, source)
- * to each stat_item, and enforces the single-source rule (all stat_items in
- * one card share a source). Returns a bare failures array; the unified
- * guard tags them with surface='cards'.
+ * to each stat_item, plus the cohort latch above, and enforces the
+ * single-source rule (all stat_items in one card share a source). Returns a
+ * bare failures array; the unified guard tags them with surface='cards'.
  */
 function runCardsGuard({ cards, scratch }) {
   const failures = [];
@@ -1572,6 +1703,88 @@ function runCardsGuard({ cards, scratch }) {
         continue;
       }
 
+      // Which rows this stat_item is allowed to seat on, once the cohort is
+      // taken into account. Applied BEFORE the number match, so a figure can
+      // never be authorized by a row belonging to a cohort the card does not
+      // name. See cardCohortSeating.
+      const seat = cardCohortSeating(bucket, s);
+      if (seat.candidates.length === 0) {
+        const baseCohortClaim = { card_index: ci, item_name: s.item_name, score: s.score, n: s.n };
+
+        // Every row for this item came back from a pivot. There is no cohort
+        // to check against and no honest way to invent one, so the rejection
+        // names the shape and asks for the cut instead.
+        if (seat.seatable.length === 0) {
+          const axes = Array.from(new Set(bucket.flatMap(r => r.pivot_axes || [])));
+          failures.push({
+            claim: baseCohortClaim,
+            reason: 'card_cohort_in_column_name',
+            detail: 'The query that returned this row put ' + axes.join(', ')
+                  + ' in the column NAMES (a FILTER or CASE pivot), so each row holds several '
+                  + 'cohorts side by side and no returned value says which cohort it belongs to. '
+                  + 'A cohort claim on such a row cannot be checked, so it is not accepted. '
+                  + 'Re-run the cut as GROUP BY ' + axes.join(', ')
+                  + ' so each cohort is its own row, and cite that row.',
+            pivot_axes: axes,
+          });
+          continue;
+        }
+
+        // Every seatable row came from a query pinned to one cohort in its
+        // WHERE clause, and the card did not name that cohort.
+        const pinnedOnly = seat.seatable.every(r =>
+          !Object.values(r.axis || {}).length
+          && Object.keys(r.pinned_axes || {}).length);
+        if (pinnedOnly) {
+          const pins = {};
+          for (const r of seat.seatable) Object.assign(pins, r.pinned_axes || {});
+          const cols = Object.keys(pins);
+          failures.push({
+            claim: baseCohortClaim,
+            reason: 'card_cohort_pinned_in_filter',
+            detail: 'The query that returned this row filtered its WHERE clause to '
+                  + cols.map(c => c + ' = ' + pins[c]).join(', ')
+                  + ', so every number it returned is that cohort\'s and no returned value '
+                  + 'says so. This card either names no cohort -- reporting a subpopulation '
+                  + 'figure as if it were the whole population -- or names a different one. '
+                  + 'Either re-run as GROUP BY ' + cols.join(', ')
+                  + ' with the filter dropped, or set cohort on this stat_item to '
+                  + cols.map(c => pins[c]).join(' / ') + ' so the claim matches the filter.',
+            pinned_axes: pins,
+          });
+          continue;
+        }
+
+        // An invented cohort must stay distinguishable from no cohort at all,
+        // and naming one dimension of a two-way cell from naming none.
+        const underSpecified = seat.claimAxes.size > 0 && bucket.some(r => {
+          const vals = Object.values(r.axis || {});
+          return vals.length > seat.claimAxes.size && vals.some(v => seat.claimAxes.has(v));
+        });
+        const axisShown = seat.claimAxes.size ? Array.from(seat.claimAxes)
+                        : seat.claimNamed.length ? seat.claimNamed
+                        : null;
+        failures.push({
+          claim: Object.assign({}, baseCohortClaim, { cohort: axisShown }),
+          reason: (!seat.claimAxes.size && !seat.claimNamed.length) ? 'card_cohort_unspecified'
+                : underSpecified ? 'card_cohort_underspecified'
+                : 'card_cohort_not_in_allowlist',
+          detail: (!seat.claimAxes.size && !seat.claimNamed.length)
+            ? 'Every returned row for this item belongs to a cut, so this figure is one '
+              + 'cohort\'s and the card presents it as the item\'s. Set cohort on this '
+              + 'stat_item to the cohort the number came from, or cite a pooled row.'
+            : underSpecified
+            ? 'These rows are cut on more than one dimension. Name every cohort the cell '
+              + 'belongs to, not just one: a generation-by-income cell is not a claim about '
+              + 'the generation.'
+            : 'No returned row for this item carries that cohort.',
+          cohorts_available: Array.from(new Set(
+            bucket.map(r => Object.values(r.axis || {}).join(' + ')).filter(Boolean)
+          )).slice(0, 16),
+        });
+        continue;
+      }
+
       // Accept `score` (v2 shape) as an alias for `joy_index` (v1/legacy).
       const claimScoreRaw  = s.score != null ? s.score : s.joy_index;
       const claimJoy       = roundJoy(claimScoreRaw);
@@ -1599,7 +1812,7 @@ function runCardsGuard({ cards, scratch }) {
       // matters because the reason is what a retry is sent after.
       let anyNums = false, anySource = false, anyConstruct = false;
       let closest = { joy: null, n: null, source: null, construct: null };
-      for (const row of bucket) {
+      for (const row of seat.candidates) {
         const nums        = rowCarriesNumbers(row, claimJoy, claimN);
         const sourceOk    = claimSource === null || claimSource === row.source;
         const constructOk = claimConstruct === null || row.construct === null || claimConstruct === (row.construct || '').toLowerCase();
@@ -1620,6 +1833,43 @@ function runCardsGuard({ cards, scratch }) {
       }
       if (!matched) {
         const baseClaim = { card_index: ci, item_name: s.item_name };
+
+        // Before blaming a number: do these numbers sit, exactly, on a row
+        // this claim was NOT allowed to seat on for cohort reasons? Then the
+        // figure is real and its attribution is what is wrong, and saying
+        // "score mismatch" would send a retry to change a correct number.
+        // This is the live shape -- a Gen Z figure cited as the item's, where
+        // a pooled row for the same item also exists, so `candidates` is
+        // non-empty and the cohort latch above never fires.
+        const excluded = seat.seatable.filter(r => !seat.candidates.includes(r));
+        const offCohort = excluded.find(r => {
+          const nums        = rowCarriesNumbers(r, claimJoy, claimN);
+          const sourceOk    = claimSource === null || claimSource === r.source;
+          const constructOk = claimConstruct === null || r.construct === null
+                           || claimConstruct === (r.construct || '').toLowerCase();
+          return nums.ok && sourceOk && constructOk;
+        });
+        if (offCohort) {
+          const rowCohort = Object.assign({}, offCohort.axis || {}, offCohort.pinned_axes || {});
+          failures.push({
+            claim: Object.assign({}, baseClaim, {
+              score: claimScoreRaw, n: s.n,
+              cohort: seat.claimAxes.size ? Array.from(seat.claimAxes) : null,
+            }),
+            reason: seat.claimAxes.size ? 'card_cohort_mismatch' : 'card_cohort_unspecified',
+            detail: 'These numbers are real, and they belong to '
+                  + Object.entries(rowCohort).map(([k, v]) => k + ' = ' + v).join(', ')
+                  + '. The card '
+                  + (seat.claimAxes.size
+                      ? 'attributes them to ' + Array.from(seat.claimAxes).join(' / ') + ' instead.'
+                      : 'names no cohort, so it reports one cohort\'s figure as the item\'s.')
+                  + ' Set cohort on this stat_item to the cohort the number came from, or cite '
+                  + 'the pooled row instead.',
+            row_cohort: rowCohort,
+          });
+          continue;
+        }
+
         if (!anyNums && closest.joy) {
           failures.push({
             claim: Object.assign({}, baseClaim, { score: claimScoreRaw }),
@@ -1653,7 +1903,7 @@ function runCardsGuard({ cards, scratch }) {
           failures.push({
             claim: Object.assign({}, baseClaim, { score: claimScoreRaw, n: s.n, source: s.source }),
             reason: 'card_no_single_row_match',
-            detail: bucket.slice(0, 4).map(row => ({
+            detail: seat.candidates.slice(0, 4).map(row => ({
               source: row.source,
               numbers: (row.values || []).map(v => v.field + '=' + v.num).join(', '),
             })),
@@ -2857,6 +3107,8 @@ module.exports = {
   runConnectiveReadGuard,
   buildRetryAllowlistDigest,
   buildCardAllowlist,
+  resolveCardCohorts,
+  cardCohortSeating,
   buildSignatureAllowlist,
   buildAudienceAffinityAllowlist,
   buildAudienceProfileAllowlist,

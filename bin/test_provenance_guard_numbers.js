@@ -38,6 +38,7 @@ const path = require('path');
 const {
   runProvenanceGuard,
   runConnectiveReadGuard,
+  resolveCardCohorts,
 } = require(path.join(__dirname, '..', 'netlify', 'functions', 'bjl-cross-domain-provenance-guard'));
 
 const results = [];
@@ -140,15 +141,26 @@ check('read: non-numeric columns are not match surface',
 // ---------------------------------------------------------------------------
 // cards -- the surface where the same defect ran the other way
 // ---------------------------------------------------------------------------
+// These fixture rows are a generation cut, so a card citing them must say
+// which generation -- the same requirement the read assertions above have
+// carried since the axis latch landed there. Cards ran without it until
+// 2026-08-25: the bucket held every generation's row and the number match
+// accepted any of them, so Boomers' 59.2 cleared as the item's figure. The
+// four assertions below used to pass with no cohort named, and that is the
+// hole, not a feature to preserve. Each now names its cohort; the assertion
+// immediately after this block pins the rejection when it does not.
+const GENX = { generation: 'Gen X' };
+
 check('cards: aliased column verifies when copied verbatim',
-  cardStats({ item_name: LM, score: 72.9, n: 93, source: 'bjl_responses' }, ALIASED).length === 0);
+  cardStats({ item_name: LM, score: 72.9, n: 93, source: 'bjl_responses', cohort: GENX }, ALIASED)
+    .length === 0);
 
 check('cards: fabricated score on an aliased row is rejected',
-  cardStats({ item_name: LM, score: 88.4, n: 93, source: 'bjl_responses' }, ALIASED)
+  cardStats({ item_name: LM, score: 88.4, n: 93, source: 'bjl_responses', cohort: GENX }, ALIASED)
     .some(f => f.reason === 'card_score_mismatch'));
 
 check('cards: score spliced from another row of the same item is rejected',
-  cardStats({ item_name: LM, score: 59.2, n: 93, source: 'bjl_responses' }, ALIASED)
+  cardStats({ item_name: LM, score: 59.2, n: 93, source: 'bjl_responses', cohort: GENX }, ALIASED)
     .some(f => f.reason === 'card_score_mismatch'));
 
 check('cards: canonical score column still verifies',
@@ -156,8 +168,137 @@ check('cards: canonical score column still verifies',
     .length === 0);
 
 check('cards: wrong source still rejected',
-  cardStats({ item_name: LM, score: 72.9, n: 93, source: 'bjl_scores' }, ALIASED)
+  cardStats({ item_name: LM, score: 72.9, n: 93, source: 'bjl_scores', cohort: GENX }, ALIASED)
     .some(f => f.reason === 'card_source_mismatch'));
+
+// The hole itself, pinned. A real number off a real row, presented as the
+// item's rather than the cohort's, with nothing wrong except the attribution.
+check('cards: a cut row cited without its cohort is rejected',
+  cardStats({ item_name: LM, score: 72.9, n: 93, source: 'bjl_responses' }, ALIASED)
+    .some(f => f.reason === 'card_cohort_unspecified'));
+
+// The live shape, and the one that decides whether the rejection is useful: a
+// POOLED row for the item exists alongside the cut rows. Job 86fa8bbd cited
+// "Listening to MUSIC" at 72.2 (n=129) -- Gen Z's row -- under the headline
+// "consistent across all generations", while the pooled figure was 71.5
+// (n=1,245). Because a pooled row exists, the claim seats on it and the early
+// cohort latch never fires; without the off-cohort check the rejection comes
+// back as 'card_score_mismatch' and a retry is sent to change a number that is
+// perfectly correct. The rejection has to name the ATTRIBUTION.
+const MIXED = [
+  { type: 'query',
+    query: 'SELECT i.item_name, ROUND(AVG(r.joy_index)::numeric,1) AS ji, COUNT(*) AS n '
+         + 'FROM bjl_responses r JOIN bjl_items i ON i.item_id = r.item_id GROUP BY 1',
+    result: [{ item_name: LM, ji: 71.5, n: 1245 }] },
+  { type: 'query',
+    query: 'SELECT i.item_name, p.generation, ROUND(AVG(r.joy_index)::numeric,1) AS ji, COUNT(*) AS n '
+         + 'FROM bjl_responses r JOIN bjl_items i ON i.item_id = r.item_id GROUP BY 1,2',
+    result: [{ item_name: LM, generation: 'Gen Z', ji: 72.2, n: 129 },
+             { item_name: LM, generation: 'Boomer', ji: 70.5, n: 207 }] },
+];
+
+check('cards: the pooled figure still verifies with no cohort named',
+  cardStats({ item_name: LM, score: 71.5, n: 1245, source: 'bjl_responses' }, MIXED).length === 0);
+
+check('cards: a cohort figure cited as the pooled one is rejected',
+  cardStats({ item_name: LM, score: 72.2, n: 129, source: 'bjl_responses' }, MIXED)
+    .some(f => f.reason === 'card_cohort_unspecified'));
+
+check('cards: the rejection reports the cohort the number really belongs to',
+  cardStats({ item_name: LM, score: 72.2, n: 129, source: 'bjl_responses' }, MIXED)
+    .some(f => f.row_cohort && f.row_cohort.generation === 'gen z'));
+
+check('cards: the rejection does NOT blame the number, which is correct',
+  cardStats({ item_name: LM, score: 72.2, n: 129, source: 'bjl_responses' }, MIXED)
+    .every(f => f.reason !== 'card_score_mismatch' && f.reason !== 'card_n_mismatch'));
+
+check('cards: naming the cohort makes the same figure verify',
+  cardStats({ item_name: LM, score: 72.2, n: 129, source: 'bjl_responses',
+              cohort: { generation: 'Gen Z' } }, MIXED).length === 0);
+
+check('cards: naming the WRONG cohort on that figure is a swap',
+  cardStats({ item_name: LM, score: 72.2, n: 129, source: 'bjl_responses',
+              cohort: { generation: 'Boomer' } }, MIXED)
+    .some(f => f.reason === 'card_cohort_mismatch'));
+
+check('cards: citing one cohort while naming another is rejected as a swap',
+  cardStats({ item_name: LM, score: 59.2, n: 96, source: 'bjl_responses', cohort: GENX }, ALIASED)
+    .some(f => f.reason === 'card_cohort_mismatch'));
+
+check('cards: an invented cohort is rejected and not read as no cohort',
+  cardStats({ item_name: LM, score: 72.9, n: 93, source: 'bjl_responses',
+              cohort: { generation: 'Gen Alpha' } }, ALIASED)
+    .some(f => f.reason === 'card_cohort_not_in_allowlist'));
+
+// A pivot writes the cohort into the column NAME, so the row carries no value
+// saying which cohort each number belongs to. Such a row must be dropped
+// BEFORE the match, not after: it carries no axis value, so it would otherwise
+// read as un-cut and clear a card that names no cohort -- while every number
+// on it is one cohort's. Forbid the shape rather than parse the alias.
+const PIVOT = [{
+  type: 'query',
+  query: "SELECT i.item_name, "
+       + "AVG(r.joy_index) FILTER (WHERE p.gender = 'Female') AS ji_f, "
+       + "COUNT(*) FILTER (WHERE p.gender = 'Female') AS n_f, "
+       + "AVG(r.joy_index) FILTER (WHERE p.gender = 'Male') AS ji_m, "
+       + "COUNT(*) FILTER (WHERE p.gender = 'Male') AS n_m "
+       + "FROM bjl_responses r JOIN bjl_items i ON i.item_id = r.item_id GROUP BY 1",
+  result: [{ item_name: LM, ji_f: 71.3, n_f: 480, ji_m: 58.2, n_m: 512 }],
+}];
+
+check('cards: a pivoted row is refused rather than read as un-cut',
+  cardStats({ item_name: LM, score: 71.3, n: 480, source: 'bjl_responses' }, PIVOT)
+    .some(f => f.reason === 'card_cohort_in_column_name'));
+
+check('cards: naming the cohort does not rescue a pivoted row',
+  cardStats({ item_name: LM, score: 71.3, n: 480, source: 'bjl_responses',
+              cohort: { gender: 'Female' } }, PIVOT)
+    .some(f => f.reason === 'card_cohort_in_column_name'));
+
+check('cards: the pivot rejection names the axis to re-cut on',
+  cardStats({ item_name: LM, score: 71.3, n: 480, source: 'bjl_responses' }, PIVOT)
+    .some(f => Array.isArray(f.pivot_axes) && f.pivot_axes.includes('gender')));
+
+// The same query written as a cut is checkable, and must pass. This is the
+// rewrite the rejection above asks for, so it has to actually work.
+check('cards: the same figure verifies once the pivot is written as a cut',
+  cardStats({ item_name: LM, score: 71.3, n: 480, source: 'bjl_responses',
+              cohort: { gender: 'Female' } }, [{
+    type: 'query',
+    query: 'SELECT i.item_name, p.gender, ROUND(AVG(r.joy_index)::numeric,1) AS ji, COUNT(*) AS n '
+         + 'FROM bjl_responses r JOIN bjl_items i ON i.item_id = r.item_id GROUP BY 1,2',
+    result: [{ item_name: LM, gender: 'Female', ji: 71.3, n: 480 },
+             { item_name: LM, gender: 'Male',   ji: 58.2, n: 512 }],
+  }]).length === 0);
+
+// A pooled row needs no cohort and must accept none: the un-cut path is the
+// one every ordinary card takes, and tightening the cut path must not narrow
+// it. 177 of 191 live stat_items resolve to a pooled row.
+check('cards: a pooled row still verifies with no cohort named',
+  cardStats({ item_name: 'Going out to eat', score: 66.0, n: 1292, source: 'bjl_corpus_search' },
+            CANONICAL).length === 0);
+
+// The cohort the guard resolves is the one the ledger stores, so it has to be
+// read off the matched row rather than off the card's say-so.
+check('cards: the resolved cohort comes from the matched row',
+  (() => {
+    const r = resolveCardCohorts({
+      cards: [{ headline: 'h', stat_items: [
+        { item_name: LM, score: 72.9, n: 93, source: 'bjl_responses', cohort: GENX }] }],
+      scratch: ALIASED,
+    });
+    return r.length === 1 && r[0].cohort && r[0].cohort.generation === 'gen x';
+  })());
+
+check('cards: a pooled figure resolves to a null cohort, not a guessed one',
+  (() => {
+    const r = resolveCardCohorts({
+      cards: [{ headline: 'h', stat_items: [
+        { item_name: 'Going out to eat', score: 66.0, n: 1292, source: 'bjl_corpus_search' }] }],
+      scratch: CANONICAL,
+    });
+    return r.length === 1 && r[0].cohort === null;
+  })());
 
 // ---------------------------------------------------------------------------
 // Cut queries. These group by a cut and never select item_name, so the rows
@@ -178,16 +319,34 @@ const CUT = [{
 }];
 const PARK = 'Visiting a THEME PARK or amusement park';
 
+// Cut on income_bracket, so the bracket is the cohort and a card citing one
+// bracket's number has to name that bracket. Same amendment as the generation
+// fixtures above, for the same reason.
+const RICH = { income_bracket: '$150,000 to $199,999' };
+
 check('cut query: rows inherit the item the WHERE clause pinned',
-  cardStats({ item_name: PARK, score: 63.7, n: 323, source: 'bjl_responses' }, CUT).length === 0);
+  cardStats({ item_name: PARK, score: 63.7, n: 323, source: 'bjl_responses', cohort: RICH }, CUT)
+    .length === 0);
 
 check('cut query: a fabricated number on an inherited row is still rejected',
-  cardStats({ item_name: PARK, score: 77.7, n: 323, source: 'bjl_responses' }, CUT)
+  cardStats({ item_name: PARK, score: 77.7, n: 323, source: 'bjl_responses', cohort: RICH }, CUT)
     .some(f => f.reason === 'card_score_mismatch'));
 
+// Score from the $150k row, n from the "Less than $25,000" row. Naming the
+// cohort narrows the candidates to one row, so the splice now lands as an n
+// mismatch rather than as an ambiguous score failure -- a sharper answer than
+// the pre-latch guard could give, because it knows which row was meant.
 check('cut query: splicing across two cuts is still rejected',
-  cardStats({ item_name: PARK, score: 63.7, n: 1096, source: 'bjl_responses' }, CUT)
-    .some(f => f.reason === 'card_score_mismatch' || f.reason === 'card_no_single_row_match'));
+  cardStats({ item_name: PARK, score: 63.7, n: 1096, source: 'bjl_responses', cohort: RICH }, CUT)
+    .some(f => f.reason === 'card_n_mismatch'
+            || f.reason === 'card_score_mismatch'
+            || f.reason === 'card_no_single_row_match'));
+
+// An income figure sold as the theme park's figure. This is the live shape the
+// latch exists for, one axis over from the generation case.
+check('cut query: an income-bracket figure cited without its bracket is rejected',
+  cardStats({ item_name: PARK, score: 63.7, n: 323, source: 'bjl_responses' }, CUT)
+    .some(f => f.reason === 'card_cohort_unspecified'));
 
 // Ambiguous pins must NOT be inherited: several items named, rows identifying
 // none, so no row can be said to belong to any one of them.
@@ -219,7 +378,8 @@ const ID_CUT = [ID_LOOKUP, {
 }];
 
 check('id pin: a single item_id resolves to its name and grounds the cut',
-  cardStats({ item_name: PARK, score: 63.7, n: 323, source: 'bjl_responses' }, ID_CUT).length === 0);
+  cardStats({ item_name: PARK, score: 63.7, n: 323, source: 'bjl_responses', cohort: RICH }, ID_CUT)
+    .length === 0);
 
 check('id pin: a fabricated number on an id-resolved row is still rejected',
   cardStats({ item_name: PARK, score: 77.7, n: 323, source: 'bjl_responses' }, ID_CUT)

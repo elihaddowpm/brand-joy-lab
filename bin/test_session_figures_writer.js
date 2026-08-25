@@ -169,16 +169,82 @@ const HOSTEL_CARD = {
     rows[0].construct === 'pct_selected' && rows[0].source === 'bjl_responses');
   check('n is null, not zero, when the card omits it', rows[0].n === null);
 }
+// ---------------------------------------------------------------------------
+// Cohort. Same argument as construct: a figure true of one subpopulation must
+// not be recallable as a general one. What is stored is the cohort the GUARD
+// resolved off the matched scratch row, not the cohort the card asserted about
+// itself -- a card's own claim is the thing being checked, so it cannot also
+// be the record of what was found.
+// ---------------------------------------------------------------------------
+{
+  const cards = [{ stat_items: [
+    { item_name: 'A sense of community', score: 22.4, n: 118,
+      source: 'bjl_responses', construct: 'pct_selected',
+      cohort: { generation: 'Gen Z' } },
+  ]}];
+  const { rows } = buildFigureRows(SESSION, JOB, cards,
+    [{ card_index: 0, stat_index: 0, cohort: { generation: 'gen z' } }]);
+  check('records the cohort the guard resolved',
+    rows[0].cohort && rows[0].cohort.generation === 'gen z');
+}
+{
+  // The card asserts Gen Z; the row it actually matched was Boomer. The guard
+  // rejects this outright, so it should never arrive -- but if it ever does,
+  // the ledger must record the ROW, not the assertion. A ledger that copies
+  // the claim it was supposed to check vouches for the misattribution.
+  const cards = [{ stat_items: [
+    { item_name: 'Listening to MUSIC', score: 70.5, n: 207,
+      source: 'bjl_responses', construct: 'joy', cohort: { generation: 'Gen Z' } },
+  ]}];
+  const { rows } = buildFigureRows(SESSION, JOB, cards,
+    [{ card_index: 0, stat_index: 0, cohort: { generation: 'boomer' } }]);
+  check('the resolved cohort overrides what the card claimed',
+    rows[0].cohort?.generation === 'boomer');
+}
+{
+  // Un-cut figure. null must mean "the matched row was pooled", which the
+  // guard now enforces, rather than "nobody looked".
+  const { rows } = buildFigureRows(SESSION, JOB, [HOSTEL_CARD],
+    [{ card_index: 0, stat_index: 0, cohort: null },
+     { card_index: 0, stat_index: 1, cohort: null }]);
+  check('a pooled figure records a null cohort', rows.every(r => r.cohort === null));
+}
+{
+  // Indices must line up per stat_item, not per card: two figures on one card
+  // can come off rows with different cohorts.
+  const cards = [{ stat_items: [
+    { item_name: 'Listening to MUSIC', score: 72.2, n: 129,
+      source: 'bjl_responses', construct: 'joy' },
+    { item_name: 'Listening to MUSIC', score: 70.5, n: 207,
+      source: 'bjl_responses', construct: 'joy' },
+  ]}];
+  const { rows } = buildFigureRows(SESSION, JOB, cards, [
+    { card_index: 0, stat_index: 0, cohort: { generation: 'gen z' } },
+    { card_index: 0, stat_index: 1, cohort: { generation: 'boomer' } },
+  ]);
+  check('cohorts are matched per stat_item, not per card',
+    rows[0].cohort?.generation === 'gen z' && rows[1].cohort?.generation === 'boomer');
+}
+{
+  // A skipped stat_item must not shift the indices of the ones after it.
+  const cards = [{ stat_items: [
+    { item_name: 'Unbindable', score: 1, source: 'bjl_responses' },   // no construct
+    { item_name: 'Listening to MUSIC', score: 72.2, n: 129,
+      source: 'bjl_responses', construct: 'joy' },
+  ]}];
+  const { rows, skipped } = buildFigureRows(SESSION, JOB, cards,
+    [{ card_index: 0, stat_index: 1, cohort: { generation: 'gen z' } }]);
+  check('a dropped sibling does not shift cohort indices',
+    skipped === 1 && rows.length === 1 && rows[0].cohort?.generation === 'gen z');
+}
 {
   const { rows } = build([{ stat_items: [
     { item_name: 'A sense of community', score: 22.4, n: 118,
       source: 'bjl_responses', construct: 'pct_selected',
       cohort: { generation: 'Gen Z' } },
   ]}]);
-  // Same argument as construct: a figure true of one subpopulation must not
-  // be recallable as a general one.
-  check('records a cohort when the card names one',
-    rows[0].cohort && rows[0].cohort.generation === 'Gen Z');
+  check('with no resolution supplied the cohort is null, not the card\'s claim',
+    rows[0].cohort === null);
 }
 
 // ---------------------------------------------------------------------------

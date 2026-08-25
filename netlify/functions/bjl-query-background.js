@@ -112,6 +112,7 @@ const {
   runProvenanceGuard,
   runConnectiveReadGuard,
   buildRetryAllowlistDigest,
+  resolveCardCohorts,
 } = require('./bjl-cross-domain-provenance-guard');
 
 // ============================================================
@@ -206,14 +207,22 @@ async function writeAssistantTurn(sessionId, content, contextObj) {
 //
 // Best-effort, matching the other session writes: a failed ledger write
 // costs a future check, it must never roll back the strategist's job.
-function buildFigureRows(sessionId, jobId, cards) {
+function buildFigureRows(sessionId, jobId, cards, cohorts) {
   const rows = [];
   let skipped = 0;
   if (!Array.isArray(cards)) return { rows, skipped };
 
-  for (const card of cards) {
+  // Keyed card_index:stat_index, as resolveCardCohorts returns them.
+  const cohortAt = new Map();
+  for (const c of (Array.isArray(cohorts) ? cohorts : [])) {
+    cohortAt.set(c.card_index + ':' + c.stat_index, c.cohort);
+  }
+
+  for (let ci = 0; ci < cards.length; ci++) {
+    const card = cards[ci];
     const statItems = Array.isArray(card && card.stat_items) ? card.stat_items : [];
-    for (const s of statItems) {
+    for (let si = 0; si < statItems.length; si++) {
+      const s = statItems[si];
       if (!s || typeof s !== 'object' || typeof s.item_name !== 'string') { skipped++; continue; }
       // `score` is the v2 shape, `joy_index` the v1/legacy alias -- same
       // aliasing the guard applies when it verifies these.
@@ -232,10 +241,14 @@ function buildFigureRows(sessionId, jobId, cards) {
         construct:   construct.toLowerCase(),
         source:      source.toLowerCase(),
         question_id: Number.isFinite(Number(s.question_id)) ? Math.trunc(Number(s.question_id)) : null,
-        // Only recorded when the card carries it. Left null rather than
-        // inferred -- a guessed cohort misattributes exactly the way a
-        // guessed item does.
-        cohort:      (s.cohort && typeof s.cohort === 'object') ? s.cohort : null,
+        // Read off the scratch row the provenance guard matched this figure
+        // to -- NOT off what the card said about itself. The card's own
+        // `cohort` is a claim, and the guard has already used it to decide
+        // which row the figure may seat on; what belongs in the ledger is the
+        // cohort that row actually carried. null means the matched row was
+        // genuinely un-cut, which the guard now enforces rather than assumes:
+        // a figure off a cut row cannot reach here without naming its cohort.
+        cohort:      cohortAt.get(ci + ':' + si) || null,
       });
     }
   }
@@ -243,10 +256,21 @@ function buildFigureRows(sessionId, jobId, cards) {
   return { rows, skipped };
 }
 
-async function writeSessionFigures(sessionId, jobId, cards) {
+async function writeSessionFigures(sessionId, jobId, cards, scratch) {
   if (!sessionId || !jobId) return;
 
-  const { rows, skipped } = buildFigureRows(sessionId, jobId, cards);
+  let cohorts = [];
+  try {
+    cohorts = resolveCardCohorts({ cards, scratch });
+  } catch (e) {
+    // A figure whose cohort could not be resolved is still written, with a
+    // null cohort, exactly as it would have been before this existed. That is
+    // the pre-existing behaviour and not a new risk -- but it is the quiet
+    // kind, so it is logged rather than swallowed.
+    console.error('[bjl-query-background] cohort resolution threw:', e);
+  }
+
+  const { rows, skipped } = buildFigureRows(sessionId, jobId, cards, cohorts);
 
   if (skipped > 0) {
     console.warn('[bjl-query-background] figures ledger: skipped ' + skipped
@@ -1994,7 +2018,11 @@ exports.handler = async (event) => {
     // sentences. `cards` here is post-guard: anything that failed card
     // provenance was already dropped above, so this persists only what was
     // verified against scratch. See writeSessionFigures.
-    await writeSessionFigures(sessionId, jobId, cards);
+    //
+    // `scratch` rather than `finalScratch`: the cohort is read back off the
+    // same rows the guard matched these figures against, so the resolver must
+    // see exactly what the guard saw.
+    await writeSessionFigures(sessionId, jobId, cards, scratch);
 
     return { statusCode: 200, body: JSON.stringify({ ok: true, status: 'complete', job_id: jobId }) };
 
