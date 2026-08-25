@@ -2666,14 +2666,33 @@ const IntelligenceMode = ({
 
     const priorContext = isFollowup ? buildPriorConversationContext(prevTurns) : null;
 
+    // A top-box query starts a new conversation, and that has to include the
+    // session. Every other part of this function already treats it as a fresh
+    // start -- the transcript is cleared above, priorContext is null -- but
+    // the session id was passed through regardless, so the server kept
+    // appending to the same row. That is how one session reached 160 turns
+    // across 22 days and drifted from a tourism account to Coca-Cola while
+    // the pane showed an empty conversation each time.
+    //
+    // It was survivable while the client was the only source of history: a
+    // fresh question sent no prior context, so the stale session was invisible
+    // to the model. It stops being survivable now that the worker reads the
+    // stored turns for the session (see readPriorTurns), because a question
+    // typed into the top box would silently inherit the entire history the
+    // user believes they just cleared. The two changes ship together for
+    // exactly this reason.
+    //
+    // Sending null selects the server's create-a-new-session path
+    // (bjl-query.js case (c)); the new id comes back in onDone.session_id.
+    const outgoingSessionId = isFollowup ? sessionId : null;
+    if (!isFollowup && sessionId) setSessionId(null);
+
     await investigateQuery({
       question: promptText.trim(),
       intent: intent || null,
       strategistContext: strategistContext || null,
       priorConversationContext: priorContext,
-      // v7: pass the active session id (null on a fresh conversation;
-      // the server creates a session and returns its id in onDone.session_id).
-      sessionId: sessionId,
+      sessionId: outgoingSessionId,
       onStatus: ({ phase }) => setPhase(phase),
       onNote: ({ note }) => setNotes(prev => [...prev, note]),
       onEvidence: ({ rows }) => setEvidenceRows(rows || []),

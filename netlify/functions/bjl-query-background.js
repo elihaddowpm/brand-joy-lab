@@ -179,6 +179,67 @@ async function writeAssistantTurn(sessionId, content, contextObj) {
   }
 }
 
+// ============================================================
+// The read that mirrors writeAssistantTurn.
+//
+// writeAssistantTurn above stores every finding at FULL length, and until
+// now nothing ever read it back into a prompt. Every select against
+// bjl_session_messages was either seq (to number the next row) or the UI's
+// session-restore endpoint. So the pipeline wrote perfect fidelity to the
+// database and then, on the next turn, threw it away in favour of whatever
+// the client sent -- which the pane truncates to 381 characters.
+//
+// That truncation is what produced the relabeled numbers. Characterized
+// 2026-08-25 on session 6a7ca25c: the source turn carried 69 statistics in
+// 4,880 characters; the context the model got back carried ONE, and that one
+// was the '100%' inside the sentence "percentages sum to more than 100%".
+// What survived the cut was the PREAMBLE -- "Here are the full quantitative
+// distributions ... (n=482-484)" -- so the model was told in its own voice
+// that it held three complete expectation batteries and handed none of the
+// values. Two turns later it was asked for a lead stat and reconstructed
+// from the shape it remembered: 58.0 (the safety barrier) came back as a
+// community expectation, 70.4 (purchase intent) as 71% togetherness. Real
+// magnitudes, severed item bindings.
+//
+// Reading the stored turns instead is not a new capability, it is the
+// removal of a lossy hop. The rows are already written, already scoped to
+// the session, and already reset by starting a new one.
+//
+// Returns the [{ role, content }] shape runTriage and runDecomposer already
+// accept, so neither needs to change. Returns [] when there is no session
+// (bypass / unauthenticated mode), and callers then fall back to the client
+// context exactly as before.
+async function readPriorTurns(sessionId) {
+  if (!sessionId) return [];
+  try {
+    const { data, error } = await supabase
+      .from('bjl_session_messages')
+      .select('seq, role, content')
+      .eq('session_id', sessionId)
+      .order('seq', { ascending: true });
+    if (error) {
+      console.error('[bjl-query-background] prior-turn read failed:', error);
+      return [];
+    }
+    const turns = (data || [])
+      .filter(m => m && typeof m.content === 'string' && m.content.trim())
+      .filter(m => m.role === 'user' || m.role === 'assistant')
+      .map(m => ({ role: m.role, content: m.content }));
+
+    // bjl-query.js writes THIS turn's user message at enqueue time, before
+    // the worker runs. It arrives here as the last row, and runTriage appends
+    // the same text again as "Current user question", so leaving it in would
+    // show the model its own question twice. Drop it -- and only it.
+    if (turns.length && turns[turns.length - 1].role === 'user') turns.pop();
+    return turns;
+  } catch (e) {
+    // Best-effort, matching the write side: a failed read costs context, it
+    // must never wedge the job.
+    console.error('[bjl-query-background] readPriorTurns threw:', e);
+    return [];
+  }
+}
+
 function getSessionIdFromJob(job) {
   if (!job || !job.extra_context || typeof job.extra_context !== 'object') return null;
   const raw = job.extra_context._session_id;
@@ -1575,8 +1636,23 @@ exports.handler = async (event) => {
     .eq('job_id', jobId);
 
   try {
+    // Prefer the full turns this pipeline already stored over the summary the
+    // client sends back. Same conversation, unabridged: the pane truncates
+    // each assistant turn to 381 characters, which reliably decapitates a data
+    // turn -- preamble survives, every figure in the table does not. See
+    // readPriorTurns. Falls back to the client context when there is no
+    // session to read (bypass / unauthenticated), which is the only case where
+    // the client copy is the sole record of the conversation.
+    const storedTurns = await readPriorTurns(getSessionIdFromJob(job));
+    const priorContext = storedTurns.length ? storedTurns : job.prior_conversation_context;
+    console.log('[bjl-query-background] prior context:',
+      storedTurns.length
+        ? 'session store, ' + storedTurns.length + ' turns, '
+          + storedTurns.reduce((n, t) => n + t.content.length, 0) + ' chars'
+        : 'client-supplied (no session)');
+
     // Stage 1: Triage
-    const triage = await runTriage(job.prompt, job.prior_conversation_context, job.extra_context);
+    const triage = await runTriage(job.prompt, priorContext, job.extra_context);
     console.log('[bjl-query-background] triage returned:',
       'needs_clarification=' + JSON.stringify(triage.needs_clarification),
       'early_exit=' + JSON.stringify(triage.early_exit),
@@ -1645,7 +1721,7 @@ exports.handler = async (event) => {
     // system prompt so Step 1 reads home_items from the plan, and travels
     // to the synthesizer as a scratch meta entry so the confirmation pass
     // can keep territories the arms backed and drop the rest.
-    const decomposer = await runDecomposer(triage, job.prompt, job.prior_conversation_context, job.extra_context);
+    const decomposer = await runDecomposer(triage, job.prompt, priorContext, job.extra_context);
     console.log('[bjl-query-background] decomposer returned:',
       'territories=' + (Array.isArray(decomposer.territories) ? decomposer.territories.length : 0),
       'home_items=' + (Array.isArray(decomposer.home_items) ? decomposer.home_items.length : 0),
