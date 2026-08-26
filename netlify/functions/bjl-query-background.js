@@ -1655,8 +1655,48 @@ async function runSynthesis(triage, scratch, extraContext) {
 // a failing card doesn't take the threads sidecar down with it — and a
 // synth_warning is attached. response_text is re-authored on the retry so a
 // dropped structured field doesn't leave prose asserting the failed claims.
+// Retry telemetry.
+//
+// A first-pass guard failure followed by a successful retry left NO trace
+// anywhere except a console.warn. Only a SECOND failure persisted anything
+// (synth_warning), so the ordinary case was invisible after the fact. That
+// became a problem on 2026-08-25: job 72c64a2b ran 826s against a median of
+// 318s across comparable jobs, and the obvious suspect -- a retry re-running
+// the whole synthesis -- could be neither confirmed nor ruled out from the
+// database. A retry roughly doubles the expensive part of a turn, which makes
+// it the single most useful thing to be able to see afterwards.
+//
+// Timings wrap the synthesis calls only, so the number attributes cleanly
+// instead of absorbing investigation time.
+function synthTelemetry(fields) {
+  return Object.assign({
+    retried: false,
+    first_pass_ok: null,
+    first_pass_reasons: null,
+    second_pass_ok: null,
+    dropped_surfaces: null,
+    synth_ms: null,
+    retry_ms: null,
+  }, fields || {});
+}
+
+// Reasons, counted -- not the whole failure objects. Full detail is already
+// persisted on the second-failure path via synth_warning_detail. What this
+// has to answer is "did a retry happen, and what triggered it", cheaply
+// enough to be worth carrying on every turn.
+function countReasons(failures) {
+  const out = {};
+  for (const f of (Array.isArray(failures) ? failures : [])) {
+    const k = (f && f.reason) || 'unknown';
+    out[k] = (out[k] || 0) + 1;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 async function runSynthesisWithGuard(triage, scratch, extraContext) {
+  const t0 = Date.now();
   const initial = await runSynthesis(triage, scratch, extraContext);
+  const synthMs = Date.now() - t0;
 
   const structured = {
     threads:                Array.isArray(initial.cross_domain_threads) ? initial.cross_domain_threads : [],
@@ -1671,7 +1711,13 @@ async function runSynthesisWithGuard(triage, scratch, extraContext) {
   // Nothing to guard against unless the synthesizer emitted structured
   // claims. Bail out fast in the common case.
   const anyStructured = Object.values(structured).some(a => a.length > 0);
-  if (!anyStructured) return initial;
+  if (!anyStructured) {
+    // Nothing to guard, but the timing is still worth having: it is the
+    // baseline every retried turn gets compared against.
+    return Object.assign({}, initial, {
+      guard_telemetry: synthTelemetry({ synth_ms: synthMs }),
+    });
+  }
 
   const firstPass = runProvenanceGuard({
     threads:                    structured.threads,
@@ -1686,7 +1732,11 @@ async function runSynthesisWithGuard(triage, scratch, extraContext) {
     home_topic:                 initial.home_topic,
     scratch,
   });
-  if (firstPass.ok) return initial;
+  if (firstPass.ok) {
+    return Object.assign({}, initial, {
+      guard_telemetry: synthTelemetry({ first_pass_ok: true, synth_ms: synthMs }),
+    });
+  }
 
   console.warn('[guard] provenance failed on first pass. failures:',
     JSON.stringify(firstPass.failures).slice(0, 800));
@@ -1722,7 +1772,19 @@ async function runSynthesisWithGuard(triage, scratch, extraContext) {
   // The retry re-runs the full synthesis with the digest prepended to the
   // user message. runSynthesis is unchanged; the prefix is threaded through
   // extraContext and picked up in the userMessage build.
+  const t1 = Date.now();
   const retry = await runSynthesis(triage, scratch, retryContext);
+  const retryMs = Date.now() - t1;
+  const baseTelemetry = {
+    retried: true,
+    first_pass_ok: false,
+    first_pass_reasons: countReasons(firstPass.failures),
+    synth_ms: synthMs,
+    retry_ms: retryMs,
+  };
+  console.warn('[guard] retry cost ' + retryMs + 'ms on top of ' + synthMs
+    + 'ms first pass. triggered by: ' + JSON.stringify(baseTelemetry.first_pass_reasons));
+
   const retryStructured = {
     threads:                Array.isArray(retry.cross_domain_threads) ? retry.cross_domain_threads : [],
     cards:                  Array.isArray(retry.cards) ? retry.cards : [],
@@ -1747,7 +1809,11 @@ async function runSynthesisWithGuard(triage, scratch, extraContext) {
     home_topic:                 retry.home_topic,
     scratch,
   });
-  if (secondPass.ok) return retry;
+  if (secondPass.ok) {
+    return Object.assign({}, retry, {
+      guard_telemetry: synthTelemetry(Object.assign({}, baseTelemetry, { second_pass_ok: true })),
+    });
+  }
 
   console.warn('[guard] provenance failed on retry. dropping offending surfaces. failures:',
     JSON.stringify(secondPass.failures).slice(0, 800));
@@ -1814,6 +1880,10 @@ async function runSynthesisWithGuard(triage, scratch, extraContext) {
     blocks: Array.isArray(retry.blocks) ? retry.blocks : null,
     synth_warning: 'provenance_failed',
     synth_warning_detail: secondPass.failures,
+    guard_telemetry: synthTelemetry(Object.assign({}, baseTelemetry, {
+      second_pass_ok: false,
+      dropped_surfaces: Array.from(failedSurfaces),
+    })),
   };
 }
 
@@ -2074,6 +2144,7 @@ exports.handler = async (event) => {
       blocks,
       synth_warning,
       synth_warning_detail,
+      guard_telemetry,
     } = synth;
 
     // Structured artifacts persist as a meta entry on scratch so the sidecar
@@ -2084,7 +2155,12 @@ exports.handler = async (event) => {
     // claims.
     const anyStructured = [cross_domain_threads, cards, signature, cross_domain_items, audience_affinity, audience_profile, audience_selects, audience_distributions, blocks]
       .some(a => Array.isArray(a) && a.length > 0);
-    const guardMeta = (anyStructured || home_topic || audience_size !== null || synth_warning)
+    // guard_telemetry is in the emit condition on purpose: a turn that emitted
+    // no structured output at all still needs its synthesis timing recorded,
+    // because an unretried turn is the baseline a retried one is compared
+    // against. Without the baseline the retry cost is a number with nothing
+    // to sit beside.
+    const guardMeta = (anyStructured || home_topic || audience_size !== null || synth_warning || guard_telemetry)
       ? [{
           type: 'structured_synth_output',
           blocks:                 Array.isArray(blocks) ? blocks : [],
@@ -2101,6 +2177,7 @@ exports.handler = async (event) => {
           home_topic:             home_topic || null,
           synth_warning:          synth_warning || null,
           synth_warning_detail:   synth_warning_detail || null,
+          guard_telemetry:        guard_telemetry || null,
         }]
       : [];
 
