@@ -782,6 +782,12 @@ function buildAudienceAffinityAllowlist(scratch) {
   //   v1 uses audience_ji / general_ji
   // v2 also carries the reportable boolean (rel_lift >= materiality_floor);
   // absent on v1 rows, defaults to true so v1 guard behavior is unchanged.
+  //
+  // audience_thin marks a row whose whole audience fell below min_aud_n, so
+  // the per-item floor was relaxed to let it through at all. Absent on v1
+  // rows and on any scratch predating the thin band, where it defaults to
+  // false -- those rows cleared the full floor, so treating them as
+  // not-thin is the truthful default and leaves old behavior unchanged.
   const rows = collectRowsFromFn(scratch, ['bjl_audience_affinity_v2', 'bjl_audience_affinity']);
   const byItem = new Map();
   for (const r of rows) {
@@ -798,6 +804,7 @@ function buildAudienceAffinityAllowlist(scratch) {
       primary_topic: typeof r.primary_topic === 'string' ? r.primary_topic : null,
       construct:     typeof r.construct === 'string' ? r.construct : null,
       reportable:    typeof r.reportable === 'boolean' ? r.reportable : true,
+      audience_thin: typeof r.audience_thin === 'boolean' ? r.audience_thin : false,
     });
   }
   return byItem;
@@ -1243,6 +1250,7 @@ function runAudienceAffinityGuard({ audience_affinity, scratch }) {
     // value the synth emits must match the row's reportable flag. Rows are
     // never re-tagged in prose; the DB function is the source of truth.
     const claimReportable = typeof m.reportable === 'boolean' ? m.reportable : null;
+    const claimThin = typeof m.audience_thin === 'boolean' ? m.audience_thin : null;
     let matched = false;
     let matchedRow = null;
     let closest = { lift: null, ji: null, gen: null, n: null };
@@ -1275,6 +1283,30 @@ function runAudienceAffinityGuard({ audience_affinity, scratch }) {
         claim: { item_name: m.item_name, reportable: claimReportable },
         reason: 'audience_reportable_mismatch',
         detail: { claim: claimReportable, allowlist: matchedRow.reportable, rel_lift: matchedRow.rel_lift },
+      });
+    }
+    // Thin-audience rule. A thin row only exists because the per-item floor
+    // was relaxed for an audience that could not clear min_aud_n, so it MUST
+    // arrive declared thin -- a thin finding stripped of its warning reads
+    // exactly like one that cleared the full bar, which is the specific
+    // failure the thin band would otherwise introduce.
+    //
+    // Deliberately asymmetric: a NOT-thin row need not carry the flag, so v1
+    // rows and every pre-thin-band scratch keep passing untouched. Only the
+    // dangerous direction is required.
+    if (matchedRow && matchedRow.audience_thin === true && claimThin !== true) {
+      failures.push({
+        claim: { item_name: m.item_name, audience_thin: claimThin },
+        reason: 'audience_thin_undeclared',
+        detail: 'this row comes from an audience below min_aud_n and survived only because the per-item floor was relaxed; the entry must carry audience_thin: true so the reader is told the base is thin.',
+      });
+    } else if (claimThin !== null && matchedRow
+               && typeof matchedRow.audience_thin === 'boolean'
+               && claimThin !== matchedRow.audience_thin) {
+      failures.push({
+        claim: { item_name: m.item_name, audience_thin: claimThin },
+        reason: 'audience_thin_mismatch',
+        detail: { claim: claimThin, allowlist: matchedRow.audience_thin },
       });
     }
     // Both raw scores (audience_score AND general_score) must be present on
