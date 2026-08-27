@@ -1,0 +1,66 @@
+-- =====================================================================
+-- bjl_responses_joy_cover -- the covering partial index for joy_index reads
+--
+-- WHY THIS EXISTS
+--
+-- Every investigator query that scores items reads the same shape: pull
+-- joy_index per (item_id, respondent_id) and aggregate. bjl_responses is
+-- 2,293,889 rows / 769 MB, and joy_index is NOT NULL on only 1,072,190 of
+-- them (46.7%). With no usable index the planner had one option -- scan
+-- the whole 769 MB heap -- and paid for the 53% of rows that could never
+-- contribute, on every query, in every turn.
+--
+-- Profiling job c2acaf5d (2026-08-27, a 619s turn that blew the client's
+-- 600s cap) put ~124s of its runtime in Postgres across six heavy queries.
+-- Not one of them was slow for its own reasons. All six had the same root
+-- cause, which is why five of them move together.
+--
+-- WHAT IT MEASURED
+--
+-- Built in a transaction and rolled back, then each query re-run:
+--
+--   q3   20.2s -> 3.6s    (5.6x)
+--   q5   17.4s -> 2.5s    (6.9x)
+--   q6   22.8s -> 1.3s   (17.0x)
+--   q8   20.5s -> 4.1s    (5.1x)
+--   q10  16.7s -> 3.1s    (5.4x)
+--   q7   26.5s -> 25.7s   (1.0x, unmoved)
+--   ---------------------------------
+--   total 124.1s -> 40.3s (-83.8s)
+--
+-- q7 is bjl_audience_affinity_v2 and is NOT a heap-scan problem -- it
+-- returns 0 rows after 25.7s because two of the five item names it is
+-- handed do not exist in bjl_items. That is a separate defect and this
+-- index is correctly no help to it. Recording the non-result here so the
+-- next person does not re-measure it hoping for six.
+--
+-- WHY THIS SHAPE
+--
+-- (item_id, respondent_id) is the access order every scoring query uses.
+-- INCLUDE (joy_index) carries the payload so the aggregate never visits
+-- the heap at all -- this is what turns a 769 MB scan into a 32 MB index
+-- scan, and dropping the INCLUDE gives back most of the win.
+--
+-- WHERE joy_index IS NOT NULL is what keeps it at 32 MB. The 53% of rows
+-- with a null joy_index cannot satisfy any of these queries, so indexing
+-- them would double the size to buy nothing. It also makes the index
+-- honest about its own scope: it can only serve queries that already
+-- filter on joy_index IS NOT NULL, which every scoring query does.
+--
+-- RISK
+--
+-- Additive and droppable. It creates no constraint, changes no row, and
+-- alters no result -- the five queries above returned byte-identical
+-- output before and after. If it ever turns out to mislead the planner,
+-- DROP INDEX CONCURRENTLY bjl_responses_joy_cover; costs nothing and
+-- restores the previous behaviour exactly.
+--
+-- CONCURRENTLY so the build does not take a write lock. Build measured at
+-- ~5s. Note that CREATE INDEX CONCURRENTLY cannot run inside a
+-- transaction block -- run this file with autocommit on.
+-- =====================================================================
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS bjl_responses_joy_cover
+  ON bjl_responses (item_id, respondent_id)
+  INCLUDE (joy_index)
+  WHERE joy_index IS NOT NULL;
