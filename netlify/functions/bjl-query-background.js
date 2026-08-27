@@ -1675,6 +1675,7 @@ function synthTelemetry(fields) {
     first_pass_reasons: null,
     second_pass_ok: null,
     dropped_surfaces: null,
+    recovered_surfaces: null,
     synth_ms: null,
     retry_ms: null,
   }, fields || {});
@@ -1691,6 +1692,106 @@ function countReasons(failures) {
     out[k] = (out[k] || 0) + 1;
   }
   return Object.keys(out).length ? out : null;
+}
+
+// Decide what ships after a retry that also failed the guard.
+//
+// Resolution is per surface, and each surface has three cases:
+//
+//   retry verified          -> the retry's version
+//   retry failed, pass 1 ok -> the FIRST PASS's version   (recovery)
+//   both failed             -> empty                      (strip)
+//
+// Before this existed the middle case emptied the surface, which threw away
+// verified output because a LATER attempt was worse. Job 729a0be3 on
+// 2026-08-26 shipped with no cards for exactly that reason: the first pass
+// failed only on cross_domain_*, its cards were clean, and the retry
+// returned cards failing `card_source_mismatch`. Nothing was wrong with the
+// cards the user lost.
+//
+// Recovery never ships anything unverified — a recovered surface is served
+// from the pass the guard cleared. The cost is that response_text comes from
+// the retry and may not discuss a recovered entry. That is a smaller harm
+// than deleting a true finding, and smaller than prose citing a dropped
+// number, which the strip path has always permitted.
+//
+// Pure and exported so the decision can be tested without an API call.
+const HOME_TOPIC_COUPLED_SURFACES = ['threads', 'cross_domain_items'];
+const GUARDED_SURFACES = [
+  'threads', 'cards', 'signature', 'cross_domain_items',
+  'audience_affinity', 'audience_profile', 'audience_selects', 'audience_distributions',
+];
+
+function resolveSurfacesAfterRetry({ first, second }) {
+  const firstStructured  = (first && first.structured) || {};
+  const secondStructured = (second && second.structured) || {};
+  const firstFailures    = Array.isArray(first && first.failures) ? first.failures : [];
+  const secondFailures   = Array.isArray(second && second.failures) ? second.failures : [];
+
+  const arr = (m, k) => (Array.isArray(m[k]) ? m[k] : []);
+  const firstFailed  = new Set(firstFailures.map(f => f && f.surface));
+  const secondFailed = new Set(secondFailures.map(f => f && f.surface));
+  // A surface is recoverable only if it carried entries AND nothing in it
+  // failed. An empty surface has nothing to recover.
+  const cleanOnFirstPass = new Set(
+    GUARDED_SURFACES.filter(k => arr(firstStructured, k).length > 0 && !firstFailed.has(k))
+  );
+
+  // `threads` and `cross_domain_items` are checked AGAINST home_topic — the
+  // exclusion rule compares each entry's primary_topic to it. Recovering
+  // either is sound only if both passes named the same home_topic; otherwise
+  // the recovered entries would sit beside a home_topic no guard ever paired
+  // them with, and the exclusion check they passed is no longer the check
+  // that applies. Both passes read identical scratch and should agree, but
+  // "should" is not a verification. When they disagree, decline the recovery
+  // and strip — an unverifiable combination is worse than a missing sidecar.
+  const firstHome  = (first && first.home_topic) || null;
+  const secondHome = (second && second.home_topic) || null;
+  const homeTopicAgrees = firstHome === secondHome;
+  if (!homeTopicAgrees) {
+    console.warn('[guard] home_topic differs between passes ('
+      + JSON.stringify(firstHome) + ' vs ' + JSON.stringify(secondHome)
+      + '); declining first-pass recovery of ' + HOME_TOPIC_COUPLED_SURFACES.join('/'));
+  }
+
+  const recovered = [];
+  const surfaces = {};
+  for (const name of GUARDED_SURFACES) {
+    if (!secondFailed.has(name)) { surfaces[name] = arr(secondStructured, name); continue; }
+    const recoverable = cleanOnFirstPass.has(name)
+      && (homeTopicAgrees || !HOME_TOPIC_COUPLED_SURFACES.includes(name));
+    if (recoverable) {
+      recovered.push(name);
+      surfaces[name] = arr(firstStructured, name);
+      continue;
+    }
+    if (name === 'cards') {
+      // Cards fail per entry when the guard reports a card_index. Keep the
+      // ones that verified. A failure without an index is a whole-list
+      // problem, so the list goes.
+      const globalCardFail = secondFailures.some(f =>
+        f && f.surface === 'cards' && (!f.claim || typeof f.claim.card_index !== 'number')
+      );
+      if (globalCardFail) { surfaces.cards = []; continue; }
+      const failedIdx = new Set(
+        secondFailures
+          .filter(f => f && f.surface === 'cards' && f.claim && typeof f.claim.card_index === 'number')
+          .map(f => f.claim.card_index)
+      );
+      surfaces.cards = arr(secondStructured, 'cards').filter((_, i) => !failedIdx.has(i));
+      continue;
+    }
+    surfaces[name] = [];
+  }
+
+  // Drop home_topic only when everything that referenced it came back empty.
+  // Whenever a coupled surface was recovered the two passes agreed, so
+  // either value is the same value.
+  const home_topic = (surfaces.threads.length === 0 && surfaces.cross_domain_items.length === 0)
+    ? null
+    : secondHome;
+
+  return { surfaces, home_topic, recovered };
 }
 
 async function runSynthesisWithGuard(triage, scratch, extraContext) {
@@ -1741,6 +1842,23 @@ async function runSynthesisWithGuard(triage, scratch, extraContext) {
   console.warn('[guard] provenance failed on first pass. failures:',
     JSON.stringify(firstPass.failures).slice(0, 800));
 
+  // Which surfaces were actually the problem, and which verified clean.
+  //
+  // The guard reports failures per surface, but the retry regenerates the
+  // WHOLE response, so a surface that verified on the first pass gets
+  // re-rolled for no reason and can come back broken. That is not
+  // hypothetical: on 2026-08-26 job 729a0be3 failed the first pass only on
+  // cross_domain_* and had clean cards; the retry fixed cross-domain and
+  // returned cards that failed `card_source_mismatch`, so the turn shipped
+  // with no cards at all. The first pass had cards that were fine. Two
+  // consequences follow, and both are handled: tell the model which
+  // surfaces not to touch, and if it touches them anyway and breaks them,
+  // fall back to the first pass rather than to nothing.
+  const firstFailedSurfaces = new Set(firstPass.failures.map(f => f.surface));
+  const cleanOnFirstPass = new Set(
+    Object.keys(structured).filter(k => structured[k].length > 0 && !firstFailedSurfaces.has(k))
+  );
+
   // One retry with the allowlist digest laid out explicitly and a rewrite
   // instruction. The digest groups threads by thread_tag with their exact
   // numbers, so the model can reproduce a strict subset with confidence.
@@ -1759,6 +1877,14 @@ async function runSynthesisWithGuard(triage, scratch, extraContext) {
     '6. followup_chips remain from triage.',
     '7. Length follows the question and the signal. Default to a tight brief. When the data offers depth the question needs, give it full treatment rather than compressing to fit. Never pad, and never thin a finding that changes the recommendation.',
     '',
+    ...(cleanOnFirstPass.size
+      ? [
+          'THESE SURFACES ALREADY VERIFIED — REPRODUCE THEM UNCHANGED: '
+            + Array.from(cleanOnFirstPass).join(', ') + '.',
+          'Nothing in them failed. Copy each entry across exactly as you wrote it and spend your effort on the surfaces listed in the failures above. If you rewrite a verified surface and the rewrite does not verify, your earlier version is what ships — so a rewrite can only cost you.',
+          '',
+        ]
+      : []),
     'ALLOWLIST DIGEST (the only cross-domain claims you may make):',
     JSON.stringify(digest, null, 2),
     '',
@@ -1815,43 +1941,44 @@ async function runSynthesisWithGuard(triage, scratch, extraContext) {
     });
   }
 
-  console.warn('[guard] provenance failed on retry. dropping offending surfaces. failures:',
+  console.warn('[guard] provenance failed on retry. resolving offending surfaces. failures:',
     JSON.stringify(secondPass.failures).slice(0, 800));
 
-  // Second failure. Drop the specific surface(s) that failed, keep the ones
-  // that verified. Each surface fails independently — a bad audience_profile
-  // row shouldn't cost us the cross_domain_items sidecar, and so on.
+  // Second failure. Resolve each surface independently — a bad
+  // audience_profile row shouldn't cost us the cross_domain_items sidecar,
+  // and so on. Three cases per surface:
+  //
+  //   retry verified          -> take the retry's version
+  //   retry failed, pass 1 ok -> take the FIRST PASS's version
+  //   both failed             -> empty
+  //
+  // The middle case is the recovery. Its output is provenance-clean by the
+  // same guard that cleared it the first time, so nothing unverified ships;
+  // the only cost is that response_text came from the retry and may not
+  // discuss a recovered entry. An unmentioned true card is a far smaller
+  // harm than a silently deleted one, and strictly smaller than the prose
+  // citing a dropped number — which is what the surrounding strip has
+  // always been willing to do.
+  const resolved = resolveSurfacesAfterRetry({
+    first:  { structured, home_topic: initial.home_topic, failures: firstPass.failures },
+    second: { structured: retryStructured, home_topic: retry.home_topic, failures: secondPass.failures },
+  });
   const failedSurfaces = new Set(secondPass.failures.map(f => f.surface));
-  const outThreads               = failedSurfaces.has('threads')                ? [] : retryStructured.threads;
-  const outSignature             = failedSurfaces.has('signature')              ? [] : retryStructured.signature;
-  const outCrossDomainItems      = failedSurfaces.has('cross_domain_items')     ? [] : retryStructured.cross_domain_items;
-  const outAudienceAffinity      = failedSurfaces.has('audience_affinity')      ? [] : retryStructured.audience_affinity;
-  const outAudienceProfile       = failedSurfaces.has('audience_profile')       ? [] : retryStructured.audience_profile;
-  const outAudienceSelects       = failedSurfaces.has('audience_selects')       ? [] : retryStructured.audience_selects;
-  const outAudienceDistributions = failedSurfaces.has('audience_distributions') ? [] : retryStructured.audience_distributions;
-  // home_topic is coupled to threads + cross_domain_items — drop it only
-  // when everything that referenced it failed.
-  const outHomeTopic = (failedSurfaces.has('threads') && failedSurfaces.has('cross_domain_items'))
-    ? null
-    : retry.home_topic;
+  const recoveredSurfaces = resolved.recovered;
+  const outThreads               = resolved.surfaces.threads;
+  const outSignature             = resolved.surfaces.signature;
+  const outCrossDomainItems      = resolved.surfaces.cross_domain_items;
+  const outAudienceAffinity      = resolved.surfaces.audience_affinity;
+  const outAudienceProfile       = resolved.surfaces.audience_profile;
+  const outAudienceSelects       = resolved.surfaces.audience_selects;
+  const outAudienceDistributions = resolved.surfaces.audience_distributions;
+  const outCards                 = resolved.surfaces.cards;
+  const outHomeTopic             = resolved.home_topic;
 
-  // Cards: drop specific failed cards when card_index is known, otherwise
-  // (global card failure) drop the whole list.
-  let outCards = retryStructured.cards;
-  if (failedSurfaces.has('cards')) {
-    const globalCardFail = secondPass.failures.some(f =>
-      f.surface === 'cards' && (!f.claim || typeof f.claim.card_index !== 'number')
-    );
-    if (globalCardFail) {
-      outCards = [];
-    } else {
-      const failedCardIndices = new Set(
-        secondPass.failures
-          .filter(f => f.surface === 'cards' && f.claim && typeof f.claim.card_index === 'number')
-          .map(f => f.claim.card_index)
-      );
-      outCards = retryStructured.cards.filter((_, i) => !failedCardIndices.has(i));
-    }
+  if (recoveredSurfaces.length) {
+    console.warn('[guard] recovered from first pass rather than dropping: '
+      + recoveredSurfaces.join(', ')
+      + '. the retry broke these; the first pass had already verified them.');
   }
 
   // Preamble drops with the affinity surface — it's only meaningful when
@@ -1882,7 +2009,11 @@ async function runSynthesisWithGuard(triage, scratch, extraContext) {
     synth_warning_detail: secondPass.failures,
     guard_telemetry: synthTelemetry(Object.assign({}, baseTelemetry, {
       second_pass_ok: false,
+      // dropped_surfaces is what the retry failed; recovered_surfaces is the
+      // subset of those we served from the first pass instead of emptying.
+      // A surface in both was saved, not lost.
       dropped_surfaces: Array.from(failedSurfaces),
+      recovered_surfaces: recoveredSurfaces.length ? recoveredSurfaces.slice() : null,
     })),
   };
 }
@@ -1891,6 +2022,7 @@ async function runSynthesisWithGuard(triage, scratch, extraContext) {
 // Background handler — Netlify dispatches this with 15-min timeout
 // -------------------------------------------------------------------------
 // Exported for tests. Netlify only ever reads `handler`.
+exports.resolveSurfacesAfterRetry = resolveSurfacesAfterRetry;
 exports.buildFigureRows = buildFigureRows;
 exports.formatSessionFigures = formatSessionFigures;
 exports.dedupeFigureBindings = dedupeFigureBindings;
