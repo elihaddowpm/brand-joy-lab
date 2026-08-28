@@ -1155,15 +1155,21 @@ function runCrossDomainItemsGuard({ cross_domain_items, home_topic, scratch }) {
     return failures;
   }
 
-  for (const m of list) {
+  // entry_index rides on every failure raised INSIDE this loop, and
+  // deliberately not on the whole-surface failures above it. It is what lets
+  // a retry drop the offending rows instead of the offending surface: three
+  // bad items used to cost the reader all ten. A failure with no index is a
+  // statement about the list itself, so the list still goes.
+  for (let entry_index = 0; entry_index < list.length; entry_index++) {
+    const m = list[entry_index];
     if (!m || typeof m !== 'object' || typeof m.item_name !== 'string') {
-      failures.push({ claim: m, reason: 'malformed_cross_domain_item' });
+      failures.push({ entry_index, claim: m, reason: 'malformed_cross_domain_item' });
       continue;
     }
     const key = normalizeItemName(m.item_name);
     const bucket = itemIndex.get(key);
     if (!bucket || bucket.length === 0) {
-      failures.push({ claim: { item_name: m.item_name, tag: m.tag }, reason: 'cross_domain_item_not_in_allowlist' });
+      failures.push({ entry_index, claim: { item_name: m.item_name, tag: m.tag }, reason: 'cross_domain_item_not_in_allowlist' });
       continue;
     }
     // Tag check, but only for items whose authorizing row actually carried
@@ -1173,7 +1179,7 @@ function runCrossDomainItemsGuard({ cross_domain_items, home_topic, scratch }) {
     // authority on its own return shape; the guard follows it.
     if (bucket.some(row => row.tagged)) {
       if (typeof m.tag !== 'string' || !threadTags.has(m.tag)) {
-        failures.push({ claim: { item_name: m.item_name, tag: m.tag }, reason: 'cross_domain_tag_not_in_allowlist' });
+        failures.push({ entry_index, claim: { item_name: m.item_name, tag: m.tag }, reason: 'cross_domain_tag_not_in_allowlist' });
       }
     }
     // v2 claims use `score`; v1 claims use `joy_index`. Accept either.
@@ -1193,12 +1199,13 @@ function runCrossDomainItemsGuard({ cross_domain_items, home_topic, scratch }) {
       if (!topicOk && closest.topic === null) closest.topic = { claim: claimTopic, allowlist: row.primary_topic };
     }
     if (!matched) {
-      if (closest.joy)   failures.push({ claim: { item_name: m.item_name, score: claimScoreRaw }, reason: 'cross_domain_score_mismatch', detail: closest.joy });
-      else if (closest.n)   failures.push({ claim: { item_name: m.item_name, n: m.n }, reason: 'cross_domain_n_mismatch', detail: closest.n });
-      else if (closest.topic) failures.push({ claim: { item_name: m.item_name, primary_topic: m.primary_topic }, reason: 'cross_domain_topic_mismatch', detail: closest.topic });
+      if (closest.joy)   failures.push({ entry_index, claim: { item_name: m.item_name, score: claimScoreRaw }, reason: 'cross_domain_score_mismatch', detail: closest.joy });
+      else if (closest.n)   failures.push({ entry_index, claim: { item_name: m.item_name, n: m.n }, reason: 'cross_domain_n_mismatch', detail: closest.n });
+      else if (closest.topic) failures.push({ entry_index, claim: { item_name: m.item_name, primary_topic: m.primary_topic }, reason: 'cross_domain_topic_mismatch', detail: closest.topic });
     }
     if (claimTopic && homeTopics.has(claimTopic)) {
       failures.push({
+        entry_index,
         claim: { item_name: m.item_name, primary_topic: m.primary_topic },
         reason: 'cross_domain_home_topic_bleed',
         detail: { home_topics: Array.from(homeTopics) },
@@ -1228,15 +1235,16 @@ function runAudienceAffinityGuard({ audience_affinity, scratch }) {
     return failures;
   }
 
-  for (const m of list) {
+  for (let entry_index = 0; entry_index < list.length; entry_index++) {
+    const m = list[entry_index];
     if (!m || typeof m !== 'object' || typeof m.item_name !== 'string') {
-      failures.push({ claim: m, reason: 'malformed_audience_affinity_entry' });
+      failures.push({ entry_index, claim: m, reason: 'malformed_audience_affinity_entry' });
       continue;
     }
     const key = normalizeItemName(m.item_name);
     const bucket = byItem.get(key);
     if (!bucket || bucket.length === 0) {
-      failures.push({ claim: { item_name: m.item_name }, reason: 'audience_item_not_in_allowlist' });
+      failures.push({ entry_index, claim: { item_name: m.item_name }, reason: 'audience_item_not_in_allowlist' });
       continue;
     }
     // v2 claims use `audience_score`; v1 claims use `audience_ji`. Accept either.
@@ -1266,10 +1274,10 @@ function runAudienceAffinityGuard({ audience_affinity, scratch }) {
       if (!nOk    && closest.n    === null) closest.n    = { claim: claimN, allowlist: row.aud_n };
     }
     if (!matched) {
-      if (closest.lift) failures.push({ claim: { item_name: m.item_name, rel_lift: m.rel_lift }, reason: 'audience_rel_lift_mismatch', detail: closest.lift });
-      else if (closest.ji) failures.push({ claim: { item_name: m.item_name, audience_score: claimScoreRaw }, reason: 'audience_score_mismatch', detail: closest.ji });
-      else if (closest.gen) failures.push({ claim: { item_name: m.item_name, general_score: claimGenScoreRaw }, reason: 'audience_general_score_mismatch', detail: closest.gen });
-      else if (closest.n) failures.push({ claim: { item_name: m.item_name, aud_n: m.aud_n }, reason: 'audience_n_mismatch', detail: closest.n });
+      if (closest.lift) failures.push({ entry_index, claim: { item_name: m.item_name, rel_lift: m.rel_lift }, reason: 'audience_rel_lift_mismatch', detail: closest.lift });
+      else if (closest.ji) failures.push({ entry_index, claim: { item_name: m.item_name, audience_score: claimScoreRaw }, reason: 'audience_score_mismatch', detail: closest.ji });
+      else if (closest.gen) failures.push({ entry_index, claim: { item_name: m.item_name, general_score: claimGenScoreRaw }, reason: 'audience_general_score_mismatch', detail: closest.gen });
+      else if (closest.n) failures.push({ entry_index, claim: { item_name: m.item_name, aud_n: m.aud_n }, reason: 'audience_n_mismatch', detail: closest.n });
       continue;
     }
     // Structural reportability check: every audience-affinity entry MUST
@@ -1277,9 +1285,10 @@ function runAudienceAffinityGuard({ audience_affinity, scratch }) {
     // scratch. This prevents the synth from silently upgrading a
     // sub-threshold row into a distinctive-preference finding.
     if (claimReportable === null) {
-      failures.push({ claim: { item_name: m.item_name }, reason: 'audience_reportable_missing', detail: 'audience_affinity entry omitted the reportable boolean; every entry must carry it (source of truth is the scratch row).' });
+      failures.push({ entry_index, claim: { item_name: m.item_name }, reason: 'audience_reportable_missing', detail: 'audience_affinity entry omitted the reportable boolean; every entry must carry it (source of truth is the scratch row).' });
     } else if (matchedRow && typeof matchedRow.reportable === 'boolean' && claimReportable !== matchedRow.reportable) {
       failures.push({
+        entry_index,
         claim: { item_name: m.item_name, reportable: claimReportable },
         reason: 'audience_reportable_mismatch',
         detail: { claim: claimReportable, allowlist: matchedRow.reportable, rel_lift: matchedRow.rel_lift },
@@ -1296,6 +1305,7 @@ function runAudienceAffinityGuard({ audience_affinity, scratch }) {
     // dangerous direction is required.
     if (matchedRow && matchedRow.audience_thin === true && claimThin !== true) {
       failures.push({
+        entry_index,
         claim: { item_name: m.item_name, audience_thin: claimThin },
         reason: 'audience_thin_undeclared',
         detail: 'this row comes from an audience below min_aud_n and survived only because the per-item floor was relaxed; the entry must carry audience_thin: true so the reader is told the base is thin.',
@@ -1304,6 +1314,7 @@ function runAudienceAffinityGuard({ audience_affinity, scratch }) {
                && typeof matchedRow.audience_thin === 'boolean'
                && claimThin !== matchedRow.audience_thin) {
       failures.push({
+        entry_index,
         claim: { item_name: m.item_name, audience_thin: claimThin },
         reason: 'audience_thin_mismatch',
         detail: { claim: claimThin, allowlist: matchedRow.audience_thin },
@@ -1314,13 +1325,13 @@ function runAudienceAffinityGuard({ audience_affinity, scratch }) {
     // numbers alongside rel_lift so a raw gap cannot be inferred as the
     // effect size.
     if (claimScoreRaw == null) {
-      failures.push({ claim: { item_name: m.item_name }, reason: 'audience_score_missing' });
+      failures.push({ entry_index, claim: { item_name: m.item_name }, reason: 'audience_score_missing' });
     }
     if (claimGenScoreRaw == null) {
-      failures.push({ claim: { item_name: m.item_name }, reason: 'audience_general_score_missing', detail: 'audience_affinity entry must include general_score alongside audience_score; the reader must see both numbers, not just one side of the comparison.' });
+      failures.push({ entry_index, claim: { item_name: m.item_name }, reason: 'audience_general_score_missing', detail: 'audience_affinity entry must include general_score alongside audience_score; the reader must see both numbers, not just one side of the comparison.' });
     }
     if (claimLift === null) {
-      failures.push({ claim: { item_name: m.item_name }, reason: 'audience_rel_lift_missing', detail: 'audience_affinity entry must include rel_lift; it is the centered effect size and the honest finding.' });
+      failures.push({ entry_index, claim: { item_name: m.item_name }, reason: 'audience_rel_lift_missing', detail: 'audience_affinity entry must include rel_lift; it is the centered effect size and the honest finding.' });
     }
   }
   return failures;

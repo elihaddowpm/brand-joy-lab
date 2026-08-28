@@ -1676,6 +1676,7 @@ function synthTelemetry(fields) {
     second_pass_ok: null,
     dropped_surfaces: null,
     recovered_surfaces: null,
+    partial_surfaces: null,
     synth_ms: null,
     retry_ms: null,
   }, fields || {});
@@ -1696,11 +1697,16 @@ function countReasons(failures) {
 
 // Decide what ships after a retry that also failed the guard.
 //
-// Resolution is per surface, and each surface has three cases:
+// Resolution is per surface, and each surface has four cases, tried in order:
 //
-//   retry verified          -> the retry's version
-//   retry failed, pass 1 ok -> the FIRST PASS's version   (recovery)
-//   both failed             -> empty                      (strip)
+//   retry verified            -> the retry's version
+//   retry failed, pass 1 ok   -> the FIRST PASS's version    (recovery)
+//   both failed, rows located -> the retry's version MINUS
+//                                the rows that failed        (partial)
+//   both failed, no row named -> empty                       (strip)
+//
+// Recovery is tried before partial on purpose: a recovered surface is whole
+// and verified, where a partial one is missing whatever the retry got wrong.
 //
 // Before this existed the middle case emptied the surface, which threw away
 // verified output because a LATER attempt was worse. Job 729a0be3 on
@@ -1721,6 +1727,20 @@ const GUARDED_SURFACES = [
   'threads', 'cards', 'signature', 'cross_domain_items',
   'audience_affinity', 'audience_profile', 'audience_selects', 'audience_distributions',
 ];
+
+// Which row a failure is about, or null if it is about the whole surface.
+//
+// Two spellings, both live. Per-entry guards set `entry_index` on the
+// failure. Cards predate that and carry `card_index` inside `claim`, which
+// is also the shape persisted in synth_warning_detail on every historical
+// job -- renaming it would rewrite the meaning of rows already in the
+// database, so both are read here.
+function entryIndexOf(f) {
+  if (!f) return null;
+  if (typeof f.entry_index === 'number') return f.entry_index;
+  if (f.claim && typeof f.claim.card_index === 'number') return f.claim.card_index;
+  return null;
+}
 
 function resolveSurfacesAfterRetry({ first, second }) {
   const firstStructured  = (first && first.structured) || {};
@@ -1755,6 +1775,7 @@ function resolveSurfacesAfterRetry({ first, second }) {
   }
 
   const recovered = [];
+  const partial = [];
   const surfaces = {};
   for (const name of GUARDED_SURFACES) {
     if (!secondFailed.has(name)) { surfaces[name] = arr(secondStructured, name); continue; }
@@ -1765,23 +1786,34 @@ function resolveSurfacesAfterRetry({ first, second }) {
       surfaces[name] = arr(firstStructured, name);
       continue;
     }
-    if (name === 'cards') {
-      // Cards fail per entry when the guard reports a card_index. Keep the
-      // ones that verified. A failure without an index is a whole-list
-      // problem, so the list goes.
-      const globalCardFail = secondFailures.some(f =>
-        f && f.surface === 'cards' && (!f.claim || typeof f.claim.card_index !== 'number')
-      );
-      if (globalCardFail) { surfaces.cards = []; continue; }
-      const failedIdx = new Set(
-        secondFailures
-          .filter(f => f && f.surface === 'cards' && f.claim && typeof f.claim.card_index === 'number')
-          .map(f => f.claim.card_index)
-      );
-      surfaces.cards = arr(secondStructured, 'cards').filter((_, i) => !failedIdx.has(i));
-      continue;
-    }
-    surfaces[name] = [];
+    // Per-entry refusal. Every failure the guard raises from inside a
+    // per-entry loop names the row it came from, so a surface the retry
+    // broke gets FILTERED rather than emptied: the bad rows go, the ones
+    // that verified ship.
+    //
+    // This is not a loosening. Exactly the same rows are refused, by the
+    // same guard, byte-for-byte. It only stops the refusal from taking the
+    // survivors with it.
+    //
+    // The all-or-nothing strip was expensive in precisely the thing this
+    // tool exists to produce. Four of the nine retried jobs on 2026-08-26/27
+    // shipped with NO cross_domain_items at all -- c6061f5f on 7 bad rows,
+    // ad5a42e6 on 5, 561a9e6e on 4, b6514d6a on 15. The reader lost the
+    // entire around-the-corner surface because a handful of entries in it
+    // were wrong.
+    //
+    // A failure carrying no index is a statement about the LIST, not a row
+    // in it (no_bridges_rows_in_scratch, no_audience_affinity_rows_in_scratch,
+    // and every whole-surface check). No subset survives that, so it still
+    // strips whole. That fallback is what keeps this safe: when the guard
+    // cannot say which row is at fault, all of them go.
+    const surfaceFailures = secondFailures.filter(f => f && f.surface === name);
+    const anyUnlocated = surfaceFailures.some(f => entryIndexOf(f) === null);
+    if (anyUnlocated) { surfaces[name] = []; continue; }
+    const failedIdx = new Set(surfaceFailures.map(entryIndexOf));
+    const kept = arr(secondStructured, name).filter((_, i) => !failedIdx.has(i));
+    surfaces[name] = kept;
+    if (kept.length > 0) partial.push({ surface: name, kept: kept.length, dropped: failedIdx.size });
   }
 
   // Drop home_topic only when everything that referenced it came back empty.
@@ -1791,7 +1823,7 @@ function resolveSurfacesAfterRetry({ first, second }) {
     ? null
     : secondHome;
 
-  return { surfaces, home_topic, recovered };
+  return { surfaces, home_topic, recovered, partial };
 }
 
 async function runSynthesisWithGuard(triage, scratch, extraContext) {
@@ -1980,6 +2012,11 @@ async function runSynthesisWithGuard(triage, scratch, extraContext) {
       + recoveredSurfaces.join(', ')
       + '. the retry broke these; the first pass had already verified them.');
   }
+  if (resolved.partial.length) {
+    console.warn('[guard] shipped partial rather than dropping: '
+      + resolved.partial.map(p => p.surface + ' (kept ' + p.kept + ', dropped ' + p.dropped + ')').join(', ')
+      + '. the dropped rows failed the guard; the kept ones passed it.');
+  }
 
   // Preamble drops with the affinity surface — it's only meaningful when
   // affinity has entries. If affinity survived but the preamble itself was
@@ -2014,6 +2051,11 @@ async function runSynthesisWithGuard(triage, scratch, extraContext) {
       // A surface in both was saved, not lost.
       dropped_surfaces: Array.from(failedSurfaces),
       recovered_surfaces: recoveredSurfaces.length ? recoveredSurfaces.slice() : null,
+      // A surface can appear in dropped_surfaces AND here. That is not a
+      // contradiction: the retry failed it, and it shipped anyway minus the
+      // rows that failed. Without this the telemetry would keep reporting
+      // total losses that no longer happen.
+      partial_surfaces: resolved.partial.length ? resolved.partial.slice() : null,
     })),
   };
 }
