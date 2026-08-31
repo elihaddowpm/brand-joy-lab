@@ -533,11 +533,25 @@ FROM bjl_corpus_search(
   question_type_filter  := ARRAY['joy_scale'],           -- default; pass NULL to allow all constructs
   min_score             := 60,
   min_n                 := 100,
-  limit_n               := 20
+  limit_n               := 20,
+  exclude_topics        := ARRAY['food_beverage']        -- optional, see below
 );
 ```
 
 At least one of `target_topic`, `joy_mode_filter`, `functional_job_filter`, or `tension_filter` must be supplied — an all-NULL call is inert and returns nothing. This is deliberate; the function is never a whole-corpus scan.
+
+**`exclude_topics` — pass the home topic on every cross-category call.** When you are running this search to find a connection *away* from the home category — which is what feeds `cross_domain_items` — pass `exclude_topics := ARRAY['<home_topic>']`. A row whose `primary_topic` equals the home topic is not a cross-domain finding by definition, the synthesizer's guard refuses it, and the refusal costs the reader the entire cross-domain block, not just the offending row.
+
+This is not a style preference. `food_beverage` is the largest topic in the corpus, so a food question searching on a joy_mode gets food back. Across 107 real property-filter calls replayed from logged jobs, 486 of 1,926 returned rows — 25% — were home-topic and unusable to the arm that asked for them. Two of those calls came back 100% home-topic (15 of 15, and 20 of 20): the arm paid for a query and received nothing it was allowed to use.
+
+The filter runs before the limit, so excluded slots refill from candidates that were ranked out underneath. On the same 107 calls that recovers 1,674 usable rows against 1,440 today, +16%. It is not free everywhere: 68 of the 107 refill to the full limit, and the other 39 come back shorter than they do now. A shorter result of usable rows is the better trade — the home-topic rows in a longer one were never spendable — but do not expect the row count to hold.
+
+Two cases where you do **not** pass it:
+
+- **A deliberate within-category call.** `bjl_corpus_search(target_topic := 'food_beverage', functional_job_filter := ARRAY['create_memory'])` on a food brand is a within-category search feeding the deep dive, not `cross_domain_items`. Leave `exclude_topics` NULL.
+- **Never combine `target_topic := X` with `exclude_topics := ARRAY[X]`.** That asks for rows that are both in and not in a topic and returns nothing, every time. If you catch yourself writing it, the call you wanted was one or the other.
+
+Leaving `exclude_topics` out entirely reproduces the old behaviour exactly, so it is safe to omit — it is just usually wrong to omit on a cross-category call.
 
 The return columns are `item_name`, `primary_topic`, `question_type`, `score`, `n`, `item_id`, `resolution`. Note what is NOT returned: **no tag column, no distinctiveness, no bridge_score, no linking rationale.** That is the whole point of the redesign — the filter never appears in the output, so it cannot be cited as a finding.
 
@@ -564,12 +578,16 @@ The return columns are `item_name`, `primary_topic`, `question_type`, `score`, `
 
 **How to write the call.** Translate the territory or the follow-up into filters:
 
-- Territory `{ type: "topic_center", value: "health_wellness" }` → `bjl_corpus_search(target_topic := 'health_wellness')`
-- Territory `{ type: "joy_mode", value: "self_actualization" }` → `bjl_corpus_search(joy_mode_filter := ARRAY['self_actualization'])`
-- Territory `{ type: "functional_job", value: "create_memory" }` → `bjl_corpus_search(functional_job_filter := ARRAY['create_memory'])`
-- Territory `{ type: "tension", value: "moderation_vs_indulgence" }` → `bjl_corpus_search(tension_filter := ARRAY['moderation_vs_indulgence'])`
+Assume the home topic is `food_beverage` in these examples:
 
-Combine filters when both apply: "high-joy memory-making items in food_beverage" → `bjl_corpus_search(target_topic := 'food_beverage', functional_job_filter := ARRAY['create_memory'])`.
+- Territory `{ type: "topic_center", value: "health_wellness" }` → `bjl_corpus_search(target_topic := 'health_wellness')` — no exclusion needed; naming a different topic already excludes the home one.
+- Territory `{ type: "joy_mode", value: "self_actualization" }` → `bjl_corpus_search(joy_mode_filter := ARRAY['self_actualization'], exclude_topics := ARRAY['food_beverage'])`
+- Territory `{ type: "functional_job", value: "create_memory" }` → `bjl_corpus_search(functional_job_filter := ARRAY['create_memory'], exclude_topics := ARRAY['food_beverage'])`
+- Territory `{ type: "tension", value: "moderation_vs_indulgence" }` → `bjl_corpus_search(tension_filter := ARRAY['moderation_vs_indulgence'], exclude_topics := ARRAY['food_beverage'])`
+
+The pattern: a `topic_center` territory already names where to look, so it needs no exclusion. A `joy_mode`, `functional_job`, or `tension` territory names a *property* and searches the whole corpus for it — those are the calls that hand back the home topic, and those are the ones that need `exclude_topics`.
+
+Combine filters when both apply: "high-joy memory-making items in food_beverage" → `bjl_corpus_search(target_topic := 'food_beverage', functional_job_filter := ARRAY['create_memory'])`. That one is within-category by intent, so no exclusion.
 
 Adjust `min_score` and `min_n` when the question calls for a wider or tighter net, but never below `min_n = 100` for a claim that will surface in a card (thin cuts flag as thin, per the numeric integrity rules).
 
