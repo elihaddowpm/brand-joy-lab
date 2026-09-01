@@ -502,6 +502,19 @@ function buildAllowlist(scratch) {
         // check. Recorded per row so mixed scratch, legacy bridges rows
         // alongside search rows, is judged row by row rather than in bulk.
         tagged:        !!(row.thread_tag || row.tag),
+        // The stem this row was measured under. 792 item names in bjl_items
+        // repeat, and all 792 repeat ACROSS question stems — they are grid
+        // answer-labels ("A BEER", "Other - Write In") that appear once per
+        // stem in the grid. Keying the bucket on the name alone puts two
+        // different questions' "A BEER" in one place, and a claim matches if
+        // any row in the bucket matches. Recording the stem is what lets a
+        // number be bound to the question it was actually asked under.
+        //
+        // null on scratch produced before the search returned question_id.
+        // That is a whole-job property, not a per-row one: the allowlist and
+        // the claims come from the same job, so an older job simply has no
+        // stems anywhere and is judged exactly as it was before.
+        question_id:   toInt(row.question_id),
       });
       itemIndex.set(key, bucket);
       // bjl_corpus_bridges(_v2) emits `tag`; bjl_corpus_threads emitted
@@ -1187,9 +1200,42 @@ function runCrossDomainItemsGuard({ cross_domain_items, home_topic, scratch }) {
     const claimJoy   = roundJoy(claimScoreRaw);
     const claimN     = toInt(m.n);
     const claimTopic = typeof m.primary_topic === 'string' ? m.primary_topic.toLowerCase() : null;
+    const claimStem  = toInt(m.question_id);
+
+    const stems = new Set(bucket.map(r => r.question_id).filter(v => v != null));
+
+    // NOT ENFORCED YET, AND THE REASON IS A MEASUREMENT.
+    //
+    // The unverifiable shape here is a claim that names no stem for an item
+    // whose name spans several stems with DIFFERENT scores -- "Visiting a
+    // ZOO" carries four, from 54.1 to 70.0. Nothing in that claim says which
+    // number is meant, and the reader is shown a label meaning several
+    // things. By the usual rule this should be refused rather than guessed.
+    //
+    // It is not refused today because the synthesizer has never emitted
+    // question_id: bjl_session_figures has 23 rows and the column is NULL on
+    // every one, and that column is already read from stat_items, so it
+    // would be populated if it were ever set. Refusing stemless claims
+    // against a model that emits no stems would reject 38.5% of returned
+    // rows across 241 replayed calls, on 77% of calls -- a larger hole than
+    // it closes, pointed the other way, and a direct reversal of 8fba327 and
+    // 22f73cf.
+    //
+    // Sequence: the prompt now requires question_id on every cross_domain
+    // item and stat_item. When the ledger shows it populated at a high rate,
+    // promote this to a hard refusal in a follow-up, citing that rate. The
+    // stems set is computed above and left in place so the mismatch check
+    // below can report what was available.
+
     let matched = false;
+    let consideredAny = false;
     let closest = { joy: null, n: null, topic: null };
     for (const row of bucket) {
+      // When both sides name a stem they must agree. A claim carrying the
+      // wrong stem is the relabel stated outright, and no amount of matching
+      // score and n redeems it.
+      if (claimStem !== null && row.question_id !== null && claimStem !== row.question_id) continue;
+      consideredAny = true;
       const joyOk   = claimJoy === row.joy_index;
       const nOk     = claimN === row.n;
       const topicOk = claimTopic === (row.primary_topic ? row.primary_topic.toLowerCase() : null);
@@ -1197,6 +1243,19 @@ function runCrossDomainItemsGuard({ cross_domain_items, home_topic, scratch }) {
       if (!joyOk   && closest.joy   === null) closest.joy   = { claim: claimJoy, allowlist: row.joy_index };
       if (!nOk     && closest.n     === null) closest.n     = { claim: claimN, allowlist: row.n };
       if (!topicOk && closest.topic === null) closest.topic = { claim: claimTopic, allowlist: row.primary_topic };
+    }
+    // The stem filter can empty the bucket. When it does, `closest` was never
+    // populated and the mismatch branches below would all be skipped, so the
+    // claim would pass by falling through every check. It is raised here
+    // instead: the item exists under some stem, just not the one claimed.
+    if (!matched && !consideredAny) {
+      failures.push({
+        entry_index,
+        claim: { item_name: m.item_name, question_id: m.question_id },
+        reason: 'cross_domain_item_stem_mismatch',
+        detail: { claim: claimStem, allowlist: Array.from(stems) },
+      });
+      continue;
     }
     if (!matched) {
       if (closest.joy)   failures.push({ entry_index, claim: { item_name: m.item_name, score: claimScoreRaw }, reason: 'cross_domain_score_mismatch', detail: closest.joy });

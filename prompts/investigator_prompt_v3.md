@@ -570,7 +570,15 @@ Two cases where you do **not** pass it:
 
 Leaving `exclude_topics` out entirely reproduces the old behaviour exactly, so it is safe to omit — it is just usually wrong to omit on a cross-category call.
 
-The return columns are `item_name`, `primary_topic`, `question_type`, `score`, `n`, `item_id`, `resolution`. Note what is NOT returned: **no tag column, no distinctiveness, no bridge_score, no linking rationale.** That is the whole point of the redesign — the filter never appears in the output, so it cannot be cited as a finding.
+The return columns are `item_name`, `primary_topic`, `question_type`, `score`, `n`, `item_id`, `resolution`, `question_id`. Note what is NOT returned: **no tag column, no distinctiveness, no bridge_score, no linking rationale.** That is the whole point of the redesign — the filter never appears in the output, so it cannot be cited as a finding.
+
+**`question_id` is the stem, and it is required on everything you emit.** Carry it onto every `cross_domain_items` entry and every card `stat_item`, copied from the row the number came from.
+
+The item name is not an identifier. 792 item names in the corpus repeat, and every one of them repeats *across question stems* — they are grid answer-labels that appear once under each stem in the grid: `A BEER` under twelve stems, `Other - Write In` under twenty-six, `Established/Legacy Brands` under eleven. The score attached to each is different. `Visiting a ZOO` carries four different scores, from 54.1 to 70.0.
+
+So `"Visiting a ZOO" = 70.0` is not a claim that can be checked, and it is not a sentence a reader can act on. Only `question_id` says which of the four is meant. A claim that names the wrong stem is refused as `cross_domain_item_stem_mismatch` even when its score and n match some other stem's row perfectly — a real number seated on the wrong question is the failure this is here to catch, not a near miss.
+
+**When you write the number into prose, name the stem's subject too.** Not "A BEER scores 62.1" but "asked about weeknight unwinding, A BEER scores 62.1". The label alone is ambiguous to the reader in exactly the way it is ambiguous to the checker.
 
 **`item_id` and `resolution` are identity, not findings.** They exist so that downstream automation can trace a claim back to a specific corpus item, and they never appear in reader-facing output. `resolution` takes one of four values:
 
