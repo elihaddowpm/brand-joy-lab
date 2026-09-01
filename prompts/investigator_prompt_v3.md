@@ -534,11 +534,28 @@ FROM bjl_corpus_search(
   min_score             := 60,
   min_n                 := 100,
   limit_n               := 20,
-  exclude_topics        := ARRAY['food_beverage']        -- optional, see below
+  exclude_topics        := ARRAY['food_beverage'],       -- optional, see below
+  occasion_filter       := ARRAY['live_event']           -- optional, see below
 );
 ```
 
-At least one of `target_topic`, `joy_mode_filter`, `functional_job_filter`, or `tension_filter` must be supplied — an all-NULL call is inert and returns nothing. This is deliberate; the function is never a whole-corpus scan.
+At least one of `target_topic`, `joy_mode_filter`, `functional_job_filter`, `tension_filter`, or `occasion_filter` must be supplied — an all-NULL call is inert and returns nothing. This is deliberate; the function is never a whole-corpus scan.
+
+**`occasion_filter` — the fourth tag dimension, and often the most legible one.** It filters on `bjl_scores.occasions` by `@>` containment, exactly like the other three. It is populated on 95% of reachable rows, level with `functional_jobs` and ahead of `joy_modes`.
+
+Reach for it when the question is about *when* joy happens rather than what kind it is. `live_event`, `gathering`, `evening`, `morning`, `weekend`, `alone_time` are how people describe their own lives; `self_actualization` is how a researcher describes it. An occasion finding usually reads better in a card for that reason.
+
+The usable vocabulary: `alone_time`, `anticipation`, `birthday`, `celebration`, `evening`, `everyday`, `gathering`, `gift_giving`, `holiday`, `hosting`, `in_moment`, `live_event`, `mealtime`, `memory`, `morning`, `post_purchase`, `purchase_moment`, `shopping`, `special_occasion`, `sports_viewing`, `transition`, `travel_journey`, `vacation`, `weekend`, `work`.
+
+`bjl_occasions` also defines `service`, which is deliberately omitted above: no scored item with `n >= 100` carries it, so a call filtering on it returns nothing. That is an empty tag, not an empty finding — do not report it as a null result.
+
+**Some occasions are near-synonyms for a single topic. Do not build a cross-domain finding on those alone.** Measured over reachable rows, these barely leave their home category — `mealtime` is 98% food_beverage, `vacation` 95% travel, `anticipation` 82% travel, `morning` 78% food_beverage, and `hosting`, `memory`, `post_purchase` are 100% one topic each. Filtering on `mealtime` is a slow way of asking for food.
+
+These spread genuinely across categories and are the ones worth reaching for on a cross-domain call: `everyday` (14 topics), `purchase_moment`, `evening`, `weekend` (8 each), `shopping`, `gathering` (7), `alone_time` (6).
+
+You can still use a proxy occasion — pair it with `exclude_topics` and the home-topic rows are gone before the limit applies. Expect a thin result rather than a wrong one: `mealtime` excluding `food_beverage` returns 2 rows. Two real cross-category rows beat 127 you are not allowed to file, but do not promise the reader a pattern built on two.
+
+Several occasions are too thin to carry a claim at all: `memory` (2 rows), `in_moment` (2), `hosting` (5), `post_purchase` (8), `transition` (9), `birthday` (13). If one of these is the only support you have, say the smaller honest thing instead.
 
 **`exclude_topics` — pass the home topic on every cross-category call.** When you are running this search to find a connection *away* from the home category — which is what feeds `cross_domain_items` — pass `exclude_topics := ARRAY['<home_topic>']`. A row whose `primary_topic` equals the home topic is not a cross-domain finding by definition, the synthesizer's guard refuses it, and the refusal costs the reader the entire cross-domain block, not just the offending row.
 
