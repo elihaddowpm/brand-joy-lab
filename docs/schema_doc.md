@@ -8,7 +8,7 @@ This is the canonical schema reference for the BJL Intelligence Engine investiga
 
 ## Tables
 
-### `bjl_responses` — long-form respondent answers (~2.12M rows)
+### `bjl_responses` — long-form respondent answers (~2.35M rows)
 
 One row per (respondent, question, item, answer).
 
@@ -22,11 +22,64 @@ One row per (respondent, question, item, answer).
 | raw_value | text | the literal answer text |
 | numeric_value | numeric | parsed numeric (joy scale, momentum, ordinal numerics) |
 | joy_index | numeric | 0-100 scale, ONLY populated for joy-scale items where respondent gave a numeric answer |
-| is_selected | boolean | for select_all items, true if checked |
+| is_selected | boolean | populated on 120 stems. **NULL on 247 stems**, where selection is encoded as row presence instead — see "Two ways a selection is recorded" below |
 | fielding_id | text | 'm_YYYY_MM' format |
-| year_month | text | 'YYYY-MM' format, 29 unique months from 2023-08 to 2026-03 |
+| year_month | text | 'YYYY-MM' format, 32 unique months from 2023-08 to 2026-09 |
 
 **Critical:** `joy_index` is ONLY for items where respondents gave numeric ratings. For label-scale questions (agreement, frequency, importance, familiarity, likelihood-text), `joy_index` and `numeric_value` are NULL by design. Report those as distributions of `raw_value`, not averages. See `bjl_scale_labels` for canonical ordering.
+
+#### Two ways a selection is recorded — and one of them makes `is_selected` a trap
+
+A "pick all that apply" answer is stored one of two ways, and the instrument does not tell you which:
+
+1. **Flagged** — `is_selected` is true/false. 120 stems.
+2. **Presence-encoded** — `is_selected` is NULL on every row. A row exists only if the respondent picked that option; not picking it leaves no row at all. 247 stems, back to the first wave in 2023-08.
+
+`COUNT(*) FILTER (WHERE is_selected)` on a presence-encoded stem returns **0 for every option**. Not an error, not an empty result — a confident zero that looks like a real finding. Never write that filter without first confirming the stem is flagged.
+
+Check the shape before you count:
+
+```sql
+SELECT COUNT(*)                                          AS rows_,
+       COUNT(*) FILTER (WHERE is_selected IS NOT NULL)   AS flagged,
+       COUNT(numeric_value)                              AS numeric_
+FROM   bjl_responses
+WHERE  question_id = <id>
+```
+
+`flagged = 0 AND numeric_ = 0` means presence-encoded. Count it by respondent, never by row:
+
+```sql
+WITH base AS (                       -- who answered this stem in this wave
+  SELECT COUNT(DISTINCT respondent_id) AS n
+  FROM   bjl_responses
+  WHERE  question_id = <id> AND year_month = '<YYYY-MM>'
+)
+SELECT r.item_name,
+       COUNT(DISTINCT r.respondent_id)                          AS picked,
+       (SELECT n FROM base)                                     AS base_n,
+       ROUND(100.0 * COUNT(DISTINCT r.respondent_id) / (SELECT n FROM base), 1) AS pct
+FROM   bjl_responses r
+WHERE  r.question_id = <id> AND r.year_month = '<YYYY-MM>'
+GROUP  BY 1
+ORDER  BY picked DESC
+```
+
+**The denominator is the whole risk here, and it is not always recoverable.** Because a non-selection leaves no row, `COUNT(DISTINCT respondent_id)` on the stem counts only people who picked *something*. If some respondents were never shown the stem, or were shown it and picked nothing, they are invisible and every percentage above comes out too high.
+
+Only 22 of the 247 presence-encoded stems carry an explicit "None of these" escape option. For the rest, the check is whether the stem's respondents account for the full wave base:
+
+```sql
+SELECT COUNT(DISTINCT respondent_id) FILTER (WHERE question_id = <id>) AS on_stem,
+       COUNT(DISTINCT respondent_id)                                   AS wave_base
+FROM   bjl_responses
+WHERE  year_month = '<YYYY-MM>'
+```
+
+- **`on_stem` = `wave_base`** — everyone who took the wave answered. The denominator is exact. Report the percentage.
+- **`on_stem` < `wave_base`** — you cannot tell "never shown" from "shown and declined." Report the **raw respondent counts only**, state the base you have, and say the rate is not computable. Do not divide by `wave_base` and do not divide by `on_stem`; the first understates and the second overstates, and neither is knowable from this table.
+
+Coverage varies by stem *and by wave* — the same stem can be full-base in one wave and routed in another, so run the check for the specific wave you are reporting.
 
 ### `bjl_respondents` — full demographic profile (~12,663 rows)
 

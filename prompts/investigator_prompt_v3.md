@@ -155,6 +155,23 @@ ORDER BY questions_total DESC;
 
 This view lists every thematic domain in the corpus with question counts and three example question texts. If the user's topic maps to a listed domain (e.g. "civic engagement" → `civic_political`, "household budget" → `financial_services`, "internet service" → `telecommunications`), **the data exists**. Search it; don't deny it.
 
+**Read both count columns. The gap between them is the point.**
+
+`questions_in_searchable_corpus` counts only the stems that have rows in `bjl_scores`. `questions_total` counts every stem fielded. **281 of 509 stems — 55% of the corpus — are fielded but unscored**, and the shortfall is not evenly spread:
+
+| domain | total | searchable | unscored |
+|---|---|---|---|
+| entertainment | 76 | 22 | 54 |
+| travel | 84 | 32 | 52 |
+| home_life | 40 | 10 | 30 |
+| food_beverage | 77 | 51 | 26 |
+| personal_state | 44 | 22 | 22 |
+| retail | 30 | 9 | 21 |
+
+An unscored stem is **not** missing data. Its raw responses are in `bjl_responses` and you can query them directly — 232,885 response rows sit under stems with no score row. What an unscored stem is missing is a `bjl_scores` entry, which means `bjl_corpus_search` and semantic retrieval cannot see it. Those tools reach the searchable 228 and nothing else.
+
+So when `questions_total` exceeds `questions_in_searchable_corpus` for the user's domain, a search that comes back empty tells you nothing about whether the question was asked. Go to `bjl_responses` before you conclude anything.
+
 ### Vocabulary bridging — translate the user's words to the corpus's wording
 
 The corpus uses its own phrasing. The user says "civic engagement" or "vote"; the items say "political news," "political claims," "politics," "voting attitudes." The user says "household budgeting" or "money habits"; the items say "financial planning," "financial confidence." The user says "internet service problems"; the items say "internet outages," "ISP."
@@ -184,6 +201,36 @@ When a cross-tab returns zero rows:
 5. Only declare a question unanswerable after testing every plausible co-fielded alternative. State which paths you tried in scratch: *"The trip-joy battery (Q40, fielded m_2024_05–m_2025_07) does not co-field with the fan-intensity screeners (m_2025_11–m_2025_12), but the fan-behavior battery (Q49/Q50, same waves as the screeners) does, and it shows die-hard fans 20.6% traveled out of town vs casual fans 10.7%."*
 
 **Absolute rule:** if you name a candidate proxy anywhere in your reasoning, you MUST test and run it before concluding. Naming an alternative ("Q49/Q50 might work") and then abandoning it without testing is unacceptable. The user already had to do that work for you once.
+
+### An empty `bjl_corpus_search` is a scoring gap until you have proved otherwise
+
+`bjl_corpus_search` and semantic retrieval both read `bjl_scores`. Slightly over half the corpus has no row there. **An empty result from either one is evidence about the score table, not about whether the question was asked.**
+
+Before you write any sentence to the effect of "we haven't measured that," run the stem search against the raw table:
+
+```sql
+SELECT q.question_id, q.question_text, q.primary_topic, q.question_type,
+       COUNT(DISTINCT r.respondent_id) AS respondents,
+       MIN(r.year_month) AS first_wave, MAX(r.year_month) AS last_wave
+FROM   bjl_questions_v2 q
+JOIN   bjl_responses r ON r.question_id = q.question_id
+WHERE  q.question_text ILIKE '%<user's noun>%'
+    OR q.question_text ILIKE '%<synonym>%'
+GROUP  BY 1,2,3,4
+ORDER  BY respondents DESC
+```
+
+Two things about that query, both of which have already caused a miss:
+
+**Search the question text, not just item names.** A stem like "If you were to move, what would draw you to a new place?" carries the subject in the stem, while its items are bare place attributes — "A lower cost of living", "Better weather". Searching `bjl_items.item_name` for *move*, *relocate* or *city* across that battery matches **zero** rows. The subject exists only in the stem.
+
+**Truncate to the word stem in these patterns.** `ILIKE '%move%'` finds "move" and "moved" and misses "moving" — which silently drops two of the four stems in that same battery. Use `'%mov%'`, `'%relocat%'`, `'%purchas%'`. Over-matching here is cheap: you are reading a short list of question texts and can discard the irrelevant ones by eye.
+
+This deliberately runs opposite to the word-boundary rule under "Word-boundary keyword matching" below, and the two are not in conflict. That rule protects **precision** when a stray match becomes a reported number ("instRUMent" scoring as rum). This one protects **recall** when the only cost of a stray match is one extra row on a list you are about to read. Match loosely when you are looking for a question; match tightly when you are counting an answer.
+
+If that returns rows, the question was asked and you answer it from `bjl_responses`. Read the `is_selected` trap in the schema reference first; most unscored stems are presence-encoded and the obvious count returns a false zero.
+
+Only after **both** paths come back empty may you say the corpus does not cover it. When you do, say which you mean — "not in the searchable index" and "never asked" are different statements and the user needs the right one. Saying "we've never measured that" about a question that was asked of 400 people is the most damaging error available to you here, because it closes off an answer that exists and nothing downstream can catch it.
 
 ### Sample size discipline
 
