@@ -425,7 +425,8 @@ def _looks_joy_question(question_text: Optional[str]) -> bool:
 
 def detect_scale(distinct_raws: set, has_numeric: bool, has_is_selected: bool,
                  declared_type: Optional[str], declared_scale: Optional[str],
-                 question_text: Optional[str] = None) -> tuple:
+                 question_text: Optional[str] = None,
+                 presence_encoded: bool = False) -> tuple:
     """
     Returns (question_type, scale_type, label_to_numeric_map_or_None).
 
@@ -593,6 +594,18 @@ def detect_scale(distinct_raws: set, has_numeric: bool, has_is_selected: bool,
         if real_labels.issubset(SELECTION_MARKERS):
             return ('select_all', None, None)
 
+    # 5b. select_all with the selection encoded as row presence. is_selected is
+    # NULL throughout and raw_value simply repeats the option text, so a stored
+    # row IS a tick and an unticked option has no row at all. The caller proves
+    # raw_value == item_name on every row before setting this, which is what
+    # separates the shape from a single-answer question (item_name is the
+    # question, raw_value the chosen option) and from a rated grid (raw_value is
+    # a scale label). Must precede the open-ended check below, or any battery
+    # with more than 20 options would be read as verbatim text.
+    if presence_encoded and not has_is_selected and not has_numeric:
+        if len(real_labels) >= 2:
+            return ('select_all', 'presence_encoded', None)
+
     # 6. Open-ended text — many distinct values, no structure. We also
     # treat declared single_select / joy_scale (without scale_type) as
     # verbatim when the data doesn't match any known vocab — these are
@@ -723,7 +736,12 @@ def aggregate_item(qtype: str, stype: Optional[str], label_map: Optional[dict],
     if qtype == 'select_all':
         # pct = selections / base_n × 100. base_n = total respondents who saw
         # the question (distinct respondents in this group).
-        selections = sum(1 for r in real_rows if r.get('is_selected') is True)
+        if stype == 'presence_encoded':
+            # Every stored row is a tick, so the row count is the selection
+            # count. Reading is_selected here would score every option zero.
+            selections = len(real_rows)
+        else:
+            selections = sum(1 for r in real_rows if r.get('is_selected') is True)
         if selections < 30:                              # select_all threshold
             return None
         # base_n must be everyone who SAW the question, which cannot be derived
@@ -837,10 +855,19 @@ def score_question(conn, question_id: int, dry_run: bool = False,
     all_raws = {r['raw_value'] for r in rows if r['raw_value']}
     has_numeric = any(r['numeric_value'] is not None for r in rows)
     has_is_selected = any(r['is_selected'] is True for r in rows)
+    # Selection encoded as row presence — raw_value repeats the option text.
+    # Checked across every row rather than sampled: one mismatch means
+    # raw_value carries something other than the item and the shape is not this.
+    presence_encoded = (
+        len({r['item_name'] for r in rows}) >= 2
+        and all((r['raw_value'] or '').strip().lower()
+                == (r['item_name'] or '').strip().lower() for r in rows)
+    )
     qtype, stype, label_map = detect_scale(
         all_raws, has_numeric, has_is_selected,
         meta.get('question_type'), meta.get('scale_type'),
         question_text=meta.get('question_text'),
+        presence_encoded=presence_encoded,
     )
 
     if qtype == 'SKIP':
